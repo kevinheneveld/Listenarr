@@ -59,7 +59,6 @@ namespace Listenarr.Api.Services
             _autoInstall = Environment.GetEnvironmentVariable("LISTENARR_AUTO_INSTALL_FFPROBE")?.ToLower() != "false"; // default true
             _startupConfigService = startupConfigService;
             _processRunner = processRunner;
-
             _baseDir = appPathService?.FfmpegRootPath ?? Path.Join(AppContext.BaseDirectory, "config", "ffmpeg");
             _ffprobeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffprobe.exe" : "ffprobe";
             _ffprobePath = Path.Join(_baseDir, _ffprobeName);
@@ -902,4 +901,3 @@ namespace Listenarr.Api.Services
         }
     }
 }
-
