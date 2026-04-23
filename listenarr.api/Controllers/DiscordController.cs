@@ -30,7 +30,7 @@ namespace Listenarr.Api.Controllers
         private readonly ILogger<DiscordController> _logger;
         private readonly IDiscordBotService _botService;
         private readonly IProcessRunner _processRunner;
-        private readonly IWebHostEnvironment? _appPathService;
+        private readonly IAppPathService? _appPathService;
 
         public DiscordController(
             IConfigurationService configurationService,
@@ -38,7 +38,7 @@ namespace Listenarr.Api.Controllers
             ILogger<DiscordController> logger,
             IDiscordBotService botService,
             IProcessRunner processRunner,
-            IWebHostEnvironment? appPathService = null)
+            IAppPathService? appPathService = null)
         {
             _configurationService = configurationService;
             _httpClientFactory = httpClientFactory;
@@ -413,7 +413,8 @@ namespace Listenarr.Api.Controllers
             {
                 var contentRoot = _appPathService?.ContentRootPath
                     ?? Path.GetFullPath(Directory.GetCurrentDirectory());
-                var botDirectory = System.IO.Path.Join(contentRoot, "tools", "discord-bot");
+                var botDirectory = _appPathService?.ResolveFromContentRoot("tools", "discord-bot")
+                    ?? System.IO.Path.Join(contentRoot, "tools", "discord-bot");
                 var indexJsPath = System.IO.Path.Join(botDirectory, "index.js");
 
                 var botDirExists = System.IO.Directory.Exists(botDirectory);
