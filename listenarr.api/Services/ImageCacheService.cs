@@ -589,7 +589,7 @@ namespace Listenarr.Api.Services
             // Special-case for built-in unavailable cover asset
             if (string.Equals(identifier, "cover-unavailable", StringComparison.OrdinalIgnoreCase))
             {
-                var staticPath = Path.Join(Directory.GetCurrentDirectory(), "wwwroot", "images", "cover-unavailable.svg");
+                var staticPath = Path.Join(_contentRootPath, "wwwroot", "images", "cover-unavailable.svg");
                 if (File.Exists(staticPath))
                     return Task.FromResult<string?>(GetRelativePath(staticPath));
             }

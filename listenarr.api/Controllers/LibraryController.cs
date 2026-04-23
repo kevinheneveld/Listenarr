@@ -62,6 +62,7 @@ namespace Listenarr.Api.Controllers
         private readonly IRootFolderService? _rootFolderService;
         private readonly ILibraryAddService? _libraryAddService;
         private readonly IRenameService? _renameService;
+        private readonly string _contentRootPath;
         /// <summary>Initializes a new instance of <see cref="LibraryController"/>.</summary>
         /// <param name="repo">Repository for audiobook persistence and queries.</param>
         /// <param name="imageCacheService">Service for caching and moving cover images.</param>
@@ -79,6 +80,7 @@ namespace Listenarr.Api.Controllers
         /// <param name="rootFolderService">Optional root folder service for managing and enumerating configured root folders used for validating explicit scan paths.</param>
         /// <param name="libraryAddService">Optional shared add-to-library service used by runtime requests and background syncs.</param>
         /// <param name="renameService">Optional organize/rename service used for previewing and executing library file organization.</param>
+        /// <param name="appPathService">Optional host environment used to resolve content-root-relative cache files.</param>
         public LibraryController(
             IAudiobookRepository repo,
             IImageCacheService imageCacheService,
@@ -95,7 +97,8 @@ namespace Listenarr.Api.Controllers
             NotificationService? notificationService = null,
             IRootFolderService? rootFolderService = null,
             ILibraryAddService? libraryAddService = null,
-            IRenameService? renameService = null)
+            IRenameService? renameService = null,
+            IWebHostEnvironment? appPathService = null)
         {
             _repo = repo;
             _imageCacheService = imageCacheService;
@@ -113,6 +116,8 @@ namespace Listenarr.Api.Controllers
             _rootFolderService = rootFolderService;
             _libraryAddService = libraryAddService;
             _renameService = renameService;
+            _contentRootPath = appPathService?.ContentRootPath
+                ?? Path.GetFullPath(Directory.GetCurrentDirectory());
         }
 
         private static bool ComputeWantedFlag(Audiobook audiobook)
@@ -1444,7 +1449,7 @@ namespace Listenarr.Api.Controllers
                     var imagePath = await _imageCacheService.GetCachedImagePathAsync(audiobook.Asin);
                     if (imagePath != null)
                     {
-                        var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                        var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                         if (System.IO.File.Exists(fullPath))
                         {
                             System.IO.File.Delete(fullPath);
@@ -1474,7 +1479,7 @@ namespace Listenarr.Api.Controllers
                                 var imagePath = await _imageCacheService.GetCachedImagePathAsync(identifier);
                                 if (!string.IsNullOrEmpty(imagePath))
                                 {
-                                    var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                                    var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                                     if (System.IO.File.Exists(fullPath))
                                     {
                                         System.IO.File.Delete(fullPath);
@@ -2132,7 +2137,7 @@ namespace Listenarr.Api.Controllers
                             var imagePath = await _imageCacheService.GetCachedImagePathAsync(audiobook.Asin);
                             if (imagePath != null)
                             {
-                                var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                                var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                                 if (System.IO.File.Exists(fullPath))
                                 {
                                     System.IO.File.Delete(fullPath);
@@ -2160,7 +2165,7 @@ namespace Listenarr.Api.Controllers
                                         var imagePath = await _imageCacheService.GetCachedImagePathAsync(identifier);
                                         if (!string.IsNullOrEmpty(imagePath))
                                         {
-                                            var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                                            var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                                             if (System.IO.File.Exists(fullPath))
                                             {
                                                 System.IO.File.Delete(fullPath);
@@ -4451,6 +4456,3 @@ namespace Listenarr.Api.Controllers
 
     }
 }
-
-
-
