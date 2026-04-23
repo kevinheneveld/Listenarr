@@ -35,8 +35,7 @@ namespace Listenarr.Api.Controllers
                 var cfg = _startupConfigService.GetConfig();
                 if (cfg != null) return cfg;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                 _logger?.LogDebug(ex, "ProwlarrCompat: Failed to load startup config from IStartupConfigService; falling back");
             }
 
@@ -48,26 +47,28 @@ namespace Listenarr.Api.Controllers
                 {
                     return configService.GetStartupConfigAsync().GetAwaiter().GetResult();
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                {
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                     _logger?.LogDebug(ex, "ProwlarrCompat: Failed to load startup config from IConfigurationService; falling back to default");
                 }
             }
             return new StartupConfig();
         }
 
-        private IActionResult? RequireAuthenticatedIfEnabled()
+        private IActionResult? RequireApiKeyIfEnabled()
         {
-            var cfg = GetStartupConfig();
-            var authEnabled = cfg.AuthenticationRequired != null &&
-                (bool.TryParse(cfg.AuthenticationRequired, out var parsed)
-                    ? parsed
-                    : cfg.AuthenticationRequired.ToLowerInvariant() is "true" or "yes" or "1" or "enabled");
-            if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
+            if (!SecurityRequestUtils.IsAuthenticationRequired(HttpContext))
+            {
+                return null;
+            }
+
+            if (!(User?.Identity?.IsAuthenticated ?? false))
             {
                 return Unauthorized();
             }
-            return null;
+
+            return SecurityRequestUtils.IsApiKeyAuthenticated(HttpContext)
+                ? null
+                : StatusCode(StatusCodes.Status403Forbidden);
         }
 
         private readonly ILogger<ProwlarrCompatController> _logger;
@@ -99,8 +100,7 @@ namespace Listenarr.Api.Controllers
                 _lastToastTimes[indexerId] = now;
                 return true;
             }
-            catch (Exception caughtEx_1) when (caughtEx_1 is not OperationCanceledException && caughtEx_1 is not OutOfMemoryException && caughtEx_1 is not StackOverflowException)
-            {
+            catch (Exception caughtEx_1) when (caughtEx_1 is not OperationCanceledException && caughtEx_1 is not OutOfMemoryException && caughtEx_1 is not StackOverflowException) {
                 // Fallback to sending toast if anything goes wrong with suppression logic
                 return true;
             }
@@ -120,8 +120,7 @@ namespace Listenarr.Api.Controllers
                 _lastToastMessages[key] = now;
                 return true;
             }
-            catch (Exception caughtEx_2) when (caughtEx_2 is not OperationCanceledException && caughtEx_2 is not OutOfMemoryException && caughtEx_2 is not StackOverflowException)
-            {
+            catch (Exception caughtEx_2) when (caughtEx_2 is not OperationCanceledException && caughtEx_2 is not OutOfMemoryException && caughtEx_2 is not StackOverflowException) {
                 return true;
             }
         }
@@ -147,8 +146,7 @@ namespace Listenarr.Api.Controllers
                 var fi = FileVersionInfo.GetVersionInfo(asm?.Location ?? string.Empty);
                 return fi?.ProductVersion ?? fi?.FileVersion ?? "unknown";
             }
-            catch (Exception caughtEx_3) when (caughtEx_3 is not OperationCanceledException && caughtEx_3 is not OutOfMemoryException && caughtEx_3 is not StackOverflowException)
-            {
+            catch (Exception caughtEx_3) when (caughtEx_3 is not OperationCanceledException && caughtEx_3 is not OutOfMemoryException && caughtEx_3 is not StackOverflowException) {
                 return "unknown";
             }
         }
@@ -162,7 +160,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult GetSystemStatus()
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             var dto = new SystemStatusDto
@@ -184,7 +182,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult PostIndexerTest()
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             _logger?.LogInformation("Prowlarr indexer test invoked (POST)");
             Response.ContentType = "application/json";
@@ -204,7 +202,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult GetIndexerTest()
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             _logger?.LogInformation("Prowlarr indexer test invoked (GET)");
             Response.ContentType = "application/json";
@@ -228,7 +226,7 @@ namespace Listenarr.Api.Controllers
         {
             var debugGate = SensitiveEndpointAccessGuard.RequireLocalOrAdmin(HttpContext, _logger, "prowlarr/debug/test");
             if (debugGate != null) return debugGate;
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             return Ok(new { ok = true });
@@ -244,7 +242,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> GetIndexers()
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             var cfg = GetStartupConfig();
             var authEnabled = cfg.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1" or "enabled";
@@ -289,7 +287,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> GetIndexerById(int id)
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             var cfg = GetStartupConfig();
             var authEnabled = cfg.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1" or "enabled";
@@ -359,7 +357,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult GetIndexersInfo()
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             var payload = new
@@ -379,7 +377,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> GetIndexersList()
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             // Frontend and compatibility clients both call this endpoint. Return persisted
@@ -409,7 +407,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> DeleteIndexer(int id)
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             try
@@ -467,7 +465,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> PutIndexer(int id, [FromBody] System.Text.Json.JsonElement payload)
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
 
             if (HttpContext?.Response != null) HttpContext.Response.ContentType = "application/json";
@@ -480,8 +478,7 @@ namespace Listenarr.Api.Controllers
                     var redacted = LogRedaction.RedactText(raw, LogRedaction.GetSensitiveValuesFromEnvironment());
                     _logger?.LogInformation("Prowlarr indexer update payload body: {Payload}", redacted);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                {
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                     System.Diagnostics.Debug.WriteLine($"ProwlarrCompatController payload logging failed (PUT indexer): {ex.Message}");
                 }
 
@@ -689,8 +686,7 @@ namespace Listenarr.Api.Controllers
                     var apiKeyCompare = indexer.ApiKey ?? string.Empty;
                     await CleanupDuplicateIndexersAsync(normalizedUrl, apiKeyCompare);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                {
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                     _logger?.LogWarning(ex, "Failed to dedupe indexers after update for {Id}", indexer.Id);
                 }
 
@@ -713,8 +709,7 @@ namespace Listenarr.Api.Controllers
                             _logger?.LogDebug("Suppressing update toast for indexer {Id} since it was created recently", indexer.Id);
                         }
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                    {
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                         _logger?.LogDebug(ex, "Failed to evaluate recent-create toast suppression for Prowlarr indexer {Id}", indexer.Id);
                     }
 
@@ -813,8 +808,7 @@ namespace Listenarr.Api.Controllers
                 foreach (var r in remove)
                     await _indexerRepository.DeleteAsync(r.Id);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                 _logger?.LogWarning(ex, "Failed to cleanup duplicate indexers for {Url}", normalizedUrl);
             }
         }
@@ -829,23 +823,22 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> PostIndexers([FromBody] System.Text.Json.JsonElement payload)
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
-            if (authGuard != null) return authGuard;
+                var authGuard = RequireApiKeyIfEnabled();
+                if (authGuard != null) return authGuard;
 
-            _logger?.LogInformation("Prowlarr indexers payload received: {Kind}", payload.ValueKind.ToString());
-            // Log raw request body (redacted) to aid debugging; truncate/sanitize sensitive values
-            try
-            {
-                var raw = payload.GetRawText();
-                var redacted = LogRedaction.RedactText(raw, LogRedaction.GetSensitiveValuesFromEnvironment());
-                _logger?.LogInformation("Prowlarr indexers payload body: {Payload}", redacted);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
-                System.Diagnostics.Debug.WriteLine($"ProwlarrCompatController payload logging failed (POST indexers): {ex.Message}");
-            }
+                _logger?.LogInformation("Prowlarr indexers payload received: {Kind}", payload.ValueKind.ToString());
+                // Log raw request body (redacted) to aid debugging; truncate/sanitize sensitive values
+                try
+                {
+                    var raw = payload.GetRawText();
+                    var redacted = LogRedaction.RedactText(raw, LogRedaction.GetSensitiveValuesFromEnvironment());
+                    _logger?.LogInformation("Prowlarr indexers payload body: {Payload}", redacted);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
+                    System.Diagnostics.Debug.WriteLine($"ProwlarrCompatController payload logging failed (POST indexers): {ex.Message}");
+                }
 
-            if (HttpContext?.Response != null) HttpContext.Response.ContentType = "application/json";
+                if (HttpContext?.Response != null) HttpContext.Response.ContentType = "application/json";
 
             // Accept a single object payload as well as arrays. This keeps the endpoint
             // tolerant when callers post one indexer at a time.
@@ -1009,36 +1002,35 @@ namespace Listenarr.Api.Controllers
             if (created > 0)
             {
 
-                // Cleanup any duplicates caused by concurrent upserts (dedupe by normalized URL + ApiKey)
-                foreach (var ci in createdIndexers.ToList())
-                {
+                    // Cleanup any duplicates caused by concurrent upserts (dedupe by normalized URL + ApiKey)
+                    foreach (var ci in createdIndexers.ToList())
+                    {
+                        try
+                        {
+                            var normalizedUrl = NormalizeIndexerUrl(ci.Url);
+                            var apiKey = ci.ApiKey ?? string.Empty;
+                            await CleanupDuplicateIndexersAsync(normalizedUrl, apiKey);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
+                            _logger?.LogWarning(ex, "Failed to dedupe indexers for {Name}", ci.Name);
+                        }
+                    }
+
+                    // Notify connected clients that indexers changed so the UI can refresh
                     try
                     {
-                        var normalizedUrl = NormalizeIndexerUrl(ci.Url);
-                        var apiKey = ci.ApiKey ?? string.Empty;
-                        await CleanupDuplicateIndexersAsync(normalizedUrl, apiKey);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                    {
-                        _logger?.LogWarning(ex, "Failed to dedupe indexers for {Name}", ci.Name);
-                    }
-                }
+                        var createdInfo = createdIndexers.Select(i => new { id = i.Id, name = i.Name, baseUrl = i.Url }).ToArray();
 
-                // Notify connected clients that indexers changed so the UI can refresh
-                try
-                {
-                    var createdInfo = createdIndexers.Select(i => new { id = i.Id, name = i.Name, baseUrl = i.Url }).ToArray();
+                        _logger?.LogInformation("Broadcasting IndexersUpdated to clients: created={Created}, skipped={Skipped}, indexerCount={Count}", created, skipped, createdInfo.Length);
 
-                    _logger?.LogInformation("Broadcasting IndexersUpdated to clients: created={Created}, skipped={Skipped}, indexerCount={Count}", created, skipped, createdInfo.Length);
+                        await _settingsHub.Clients.All.SendAsync("IndexersUpdated", new { created, skipped, indexers = createdInfo });
 
-                    await _settingsHub.Clients.All.SendAsync("IndexersUpdated", new { created, skipped, indexers = createdInfo });
+                        _logger?.LogInformation("IndexersUpdated broadcast complete");
 
-                    _logger?.LogInformation("IndexersUpdated broadcast complete");
-
-                    // Publish a toast + dropdown notification so the activity bell receives the update
-                    try
-                    {
-                        var names = createdIndexers.Select(i => i.Name).ToArray();
+                        // Publish a toast + dropdown notification so the activity bell receives the update
+                        try
+                        {
+                            var names = createdIndexers.Select(i => i.Name).ToArray();
                         var message = names.Length > 0 ? $"Imported {created} indexer(s): {string.Join(", ", names)}" : $"Imported {created} indexer(s) successfully";
                         if (ShouldSendToastForMessage(message))
                         {
@@ -1048,17 +1040,16 @@ namespace Listenarr.Api.Controllers
                         {
                             _logger?.LogDebug("Suppressing batch import toast due to recent identical message");
                         }
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
+                            _logger?.LogWarning(ex, "Failed to publish indexer import notification");
+                        }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                     {
-                        _logger?.LogWarning(ex, "Failed to publish indexer import notification");
+                        _logger?.LogWarning(ex, "Failed to broadcast IndexersUpdated via SignalR");
                     }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                {
-                    _logger?.LogWarning(ex, "Failed to broadcast IndexersUpdated via SignalR");
-                }
-            }
 
             // Log a summary for diagnostics
             _logger?.LogInformation("Prowlarr: Indexers processed - created={Created}, skipped={Skipped}", created, skipped);
@@ -1127,8 +1118,7 @@ namespace Listenarr.Api.Controllers
                         created = indexers.Count;
                     }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                {
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                     _logger?.LogDebug(ex, "Failed parsing debug indexers publish payload");
                 }
             }
@@ -1152,8 +1142,7 @@ namespace Listenarr.Api.Controllers
                 var message = names.Length > 0 ? $"Imported {created} indexer(s): {string.Join(", ", names)}" : $"Imported {created} indexer(s) successfully";
                 await _toastService.PublishNotificationAsync("Indexers", message, icon: null, timeoutMs: 8000);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                 _logger?.LogWarning(ex, "Failed to publish debug indexer notification");
             }
 
@@ -1177,8 +1166,7 @@ namespace Listenarr.Api.Controllers
                 var clients = SettingsHub.ConnectedClientIds.ToArray();
                 return Ok(new { connected = clients.Length, clients });
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                 _logger?.LogWarning(ex, "Failed to retrieve SettingsHub clients");
                 return StatusCode(500, new { error = "Failed to retrieve clients" });
             }
@@ -1195,7 +1183,7 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> PostIndexer([FromBody] System.Text.Json.JsonElement payload)
         {
-            var authGuard = RequireAuthenticatedIfEnabled();
+            var authGuard = RequireApiKeyIfEnabled();
             if (authGuard != null) return authGuard;
 
             _logger?.LogInformation("Prowlarr indexer payload (single) received: {Kind}", payload.ValueKind.ToString());
@@ -1205,8 +1193,7 @@ namespace Listenarr.Api.Controllers
                 var redacted = LogRedaction.RedactText(raw, LogRedaction.GetSensitiveValuesFromEnvironment());
                 _logger?.LogInformation("Prowlarr indexer payload body: {Payload}", redacted);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
                 System.Diagnostics.Debug.WriteLine($"ProwlarrCompatController payload logging failed (single indexer POST): {ex.Message}");
             }
 
@@ -1293,8 +1280,7 @@ namespace Listenarr.Api.Controllers
                 var normalized = $"{uri.Scheme}://{uri.Host}{port}{path}";
                 return normalized.TrimEnd('/');
             }
-            catch (Exception caughtEx_6) when (caughtEx_6 is not OperationCanceledException && caughtEx_6 is not OutOfMemoryException && caughtEx_6 is not StackOverflowException)
-            {
+            catch (Exception caughtEx_6) when (caughtEx_6 is not OperationCanceledException && caughtEx_6 is not OutOfMemoryException && caughtEx_6 is not StackOverflowException) {
                 return url.TrimEnd('/');
             }
         }
