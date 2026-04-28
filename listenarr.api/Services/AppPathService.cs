@@ -74,7 +74,7 @@ namespace Listenarr.Api.Services
                     throw new ArgumentException("Path segments must be relative.", nameof(segments));
                 }
 
-                current = Path.Combine(current, segment);
+                current = Path.Join(current, segment);
             }
 
             return Path.GetFullPath(current);
