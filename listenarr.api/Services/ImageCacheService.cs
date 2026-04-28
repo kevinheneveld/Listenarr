@@ -816,7 +816,7 @@ namespace Listenarr.Api.Services
                     return Path.GetExtension(uri.AbsolutePath) ?? string.Empty;
                 }
             }
-            catch
+            catch (ArgumentException)
             {
                 // Fall back to path parsing below.
             }
