@@ -108,7 +108,11 @@ public static class SecurityRequestUtils
 
             return rawValue.Trim().ToLowerInvariant() is "enabled" or "true" or "yes" or "1";
         }
-        catch
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
         {
             return false;
         }
