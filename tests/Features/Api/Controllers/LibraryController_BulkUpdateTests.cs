@@ -25,6 +25,7 @@ using Moq;
 using Xunit;
 using Listenarr.Api.Controllers;
 using Listenarr.Domain.Models;
+using Listenarr.Domain.Utils;
 using Listenarr.Api.Services;
 using Listenarr.Infrastructure.Models;
 using Listenarr.Infrastructure.Repositories;
@@ -137,7 +138,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             // Build request: update monitored + qualityProfileId + rootFolder (include a non-existent id)
             var request = new LibraryController.BulkUpdateRequest
@@ -182,7 +184,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.True(storedA1.Monitored);
             Assert.Equal(42, storedA1.QualityProfileId);
             Assert.False(string.IsNullOrWhiteSpace(storedA1.BasePath));
-            Assert.StartsWith(tempRoot, storedA1.BasePath);
+            Assert.StartsWith(FileUtils.NormalizeStoredPath(tempRoot), storedA1.BasePath);
             Assert.Contains("Author A", storedA1.BasePath);
             Assert.Contains("Book A", storedA1.BasePath);
 

@@ -35,6 +35,13 @@ namespace Listenarr.Api.Filters
 
     public sealed class RequireAdminOrApiKeyWhenAuthenticationEnabledFilter : IAsyncActionFilter
     {
+        private readonly IAuthenticationRequirementService _authenticationRequirementService;
+
+        public RequireAdminOrApiKeyWhenAuthenticationEnabledFilter(IAuthenticationRequirementService authenticationRequirementService)
+        {
+            _authenticationRequirementService = authenticationRequirementService;
+        }
+
         public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
         {
             var endpoint = context.HttpContext.GetEndpoint();
@@ -44,7 +51,7 @@ namespace Listenarr.Api.Filters
                 return;
             }
 
-            if (!SecurityRequestUtils.IsAuthenticationRequired(context.HttpContext) ||
+            if (!_authenticationRequirementService.IsAuthenticationRequired() ||
                 SecurityRequestUtils.IsAuthenticatedAdminOrApiKey(context.HttpContext))
             {
                 await next();

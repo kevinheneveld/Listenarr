@@ -19,6 +19,12 @@ using System.Diagnostics;
 using System.Reflection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using System.Linq;
+using Listenarr.Application.Repositories;
+using Listenarr.Api.Filters;
+using Microsoft.AspNetCore.SignalR;
+using Listenarr.Api.Hubs;
+using Listenarr.Api.Services;
 
 namespace Listenarr.Api.Controllers
 {
@@ -26,6 +32,7 @@ namespace Listenarr.Api.Controllers
     [Route("api/v1/prowlarr")]
     [Tags("Prowlarr Compatibility")]
     [ApiExplorerSettings(IgnoreApi = true)]
+    [RequireApiKeyWhenAuthenticationEnabled]
     public class ProwlarrCompatController : ControllerBase
     {
         private StartupConfig GetStartupConfig()
@@ -39,36 +46,7 @@ namespace Listenarr.Api.Controllers
                 _logger?.LogDebug(ex, "ProwlarrCompat: Failed to load startup config from IStartupConfigService; falling back");
             }
 
-            // Use the DB context to get config service, or inject if available
-            var configService = HttpContext?.RequestServices.GetService(typeof(IConfigurationService)) as IConfigurationService;
-            if (configService != null)
-            {
-                try
-                {
-                    return configService.GetStartupConfigAsync().GetAwaiter().GetResult();
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException) {
-                    _logger?.LogDebug(ex, "ProwlarrCompat: Failed to load startup config from IConfigurationService; falling back to default");
-                }
-            }
             return new StartupConfig();
-        }
-
-        private IActionResult? RequireApiKeyIfEnabled()
-        {
-            if (!SecurityRequestUtils.IsAuthenticationRequired(HttpContext))
-            {
-                return null;
-            }
-
-            if (!(User?.Identity?.IsAuthenticated ?? false))
-            {
-                return Unauthorized();
-            }
-
-            return SecurityRequestUtils.IsApiKeyAuthenticated(HttpContext)
-                ? null
-                : StatusCode(StatusCodes.Status403Forbidden);
         }
 
         private readonly ILogger<ProwlarrCompatController> _logger;
@@ -160,8 +138,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult GetSystemStatus()
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             var dto = new SystemStatusDto
             {
@@ -182,8 +158,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult PostIndexerTest()
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             _logger?.LogInformation("Prowlarr indexer test invoked (POST)");
             Response.ContentType = "application/json";
             var version = GetApplicationVersion();
@@ -202,8 +176,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult GetIndexerTest()
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             _logger?.LogInformation("Prowlarr indexer test invoked (GET)");
             Response.ContentType = "application/json";
             var version = GetApplicationVersion();
@@ -226,8 +198,6 @@ namespace Listenarr.Api.Controllers
         {
             var debugGate = SensitiveEndpointAccessGuard.RequireLocalOrAdmin(HttpContext, _logger, "prowlarr/debug/test");
             if (debugGate != null) return debugGate;
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             return Ok(new { ok = true });
         }
@@ -242,10 +212,8 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> GetIndexers()
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             var cfg = GetStartupConfig();
-            var authEnabled = cfg.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1" or "enabled";
+            var authEnabled = cfg.IsAuthenticationEnabled();
             if (HttpContext?.Response != null) HttpContext.Response.ContentType = "application/json";
             var indexers = (await _indexerRepository.GetAllAsync())
                 .OrderBy(i => i.Priority)
@@ -287,10 +255,8 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> GetIndexerById(int id)
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             var cfg = GetStartupConfig();
-            var authEnabled = cfg.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1" or "enabled";
+            var authEnabled = cfg.IsAuthenticationEnabled();
             Response.ContentType = "application/json";
             var i = await _indexerRepository.GetByIdAsync(id);
             if (i == null)
@@ -357,8 +323,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public IActionResult GetIndexersInfo()
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             var payload = new
             {
@@ -377,8 +341,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> GetIndexersList()
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             // Frontend and compatibility clients both call this endpoint. Return persisted
             // indexers in the standard shape used by the UI so versioned routing does not
@@ -407,8 +369,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> DeleteIndexer(int id)
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
             Response.ContentType = "application/json";
             try
             {
@@ -465,9 +425,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> PutIndexer(int id, [FromBody] System.Text.Json.JsonElement payload)
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
-
             if (HttpContext?.Response != null) HttpContext.Response.ContentType = "application/json";
 
             try
@@ -823,9 +780,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> PostIndexers([FromBody] System.Text.Json.JsonElement payload)
         {
-                var authGuard = RequireApiKeyIfEnabled();
-                if (authGuard != null) return authGuard;
-
                 _logger?.LogInformation("Prowlarr indexers payload received: {Kind}", payload.ValueKind.ToString());
                 // Log raw request body (redacted) to aid debugging; truncate/sanitize sensitive values
                 try
@@ -1183,9 +1137,6 @@ namespace Listenarr.Api.Controllers
         [Produces("application/json")]
         public async Task<IActionResult> PostIndexer([FromBody] System.Text.Json.JsonElement payload)
         {
-            var authGuard = RequireApiKeyIfEnabled();
-            if (authGuard != null) return authGuard;
-
             _logger?.LogInformation("Prowlarr indexer payload (single) received: {Kind}", payload.ValueKind.ToString());
             try
             {
@@ -1352,4 +1303,3 @@ namespace Listenarr.Api.Controllers
         private record FieldDto(string Name, object? Value);
     }
 }
-

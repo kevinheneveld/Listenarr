@@ -112,7 +112,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             var request = new LibraryController.AddToLibraryRequest
             {
@@ -195,7 +196,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             var request = new LibraryController.AddToLibraryRequest
             {
@@ -314,7 +316,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             var request = new LibraryController.AddToLibraryRequest
             {
@@ -400,7 +403,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             var request = new LibraryController.AddToLibraryRequest
             {
@@ -474,7 +478,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             var customPath = "/custom/audiobooks/Author/Series/Title";
             var request = new LibraryController.AddToLibraryRequest

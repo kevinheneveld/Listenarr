@@ -70,9 +70,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
                 fileNaming,
-                scanQueueService: null,
-                moveQueueService: null,
-                notificationService: null);
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             // Act
             var result = await controller.DeleteAudiobook(audiobook.Id);

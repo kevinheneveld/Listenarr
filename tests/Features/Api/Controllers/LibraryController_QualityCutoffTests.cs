@@ -71,7 +71,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 Mock.Of<IQualityProfileRepository>(),
                 downloadRepo.Object,
                 Mock.Of<IRootFolderRepository>(),
-                Mock.Of<IFileNamingService>());
+                Mock.Of<IFileNamingService>(),
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
 
             var method = typeof(LibraryController).GetMethod(
                 "IsQualityCutoffMetAsync",

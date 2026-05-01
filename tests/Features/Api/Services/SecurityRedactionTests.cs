@@ -21,6 +21,7 @@ using Moq;
 using Moq.Protected;
 using Xunit;
 using Listenarr.Api.Services;
+using Listenarr.Domain.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Listenarr.Domain.Models;
@@ -177,7 +178,7 @@ namespace Listenarr.Tests.Features.Api.Services
                     }
                 }));
 
-            var controller = new DiscordController(mockConfig.Object, mockFactory.Object, mockLogger.Object, Mock.Of<IDiscordBotService>(), Mock.Of<IProcessRunner>());
+            var controller = new DiscordController(mockConfig.Object, mockFactory.Object, mockLogger.Object, Mock.Of<IDiscordBotService>(), Mock.Of<IProcessRunner>(), Mock.Of<IApplicationPathService>());
 
             // Act
             await controller.GetStatus();

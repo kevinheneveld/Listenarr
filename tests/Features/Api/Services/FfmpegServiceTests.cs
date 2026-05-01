@@ -1,4 +1,5 @@
 using Listenarr.Api.Services;
+using Listenarr.Domain.Services;
 using Listenarr.Tests.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -32,7 +33,8 @@ namespace Listenarr.Tests.Features.Api.Services
             var ffmpegService = new FfmpegService(
                 new Mock<ILogger<FfmpegService>>().Object,
                 _provider.GetRequiredService<IStartupConfigService>(),
-                _provider.GetRequiredService<IProcessRunner>());
+                _provider.GetRequiredService<IProcessRunner>(),
+                Mock.Of<IApplicationPathService>(service => service.FfmpegRootPath == ffmpegDirectory));
 
             var ffprobePath = await ffmpegService.EnsureFfprobeInstalledAsync();
 

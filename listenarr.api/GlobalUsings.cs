@@ -12,8 +12,6 @@ global using Listenarr.Api.Services.Search.Providers;
 global using Listenarr.Api.Services.Adapters;
 global using Listenarr.Application.Repositories;
 global using Listenarr.Application.Services;
-global using Listenarr.Infrastructure.Repositories;
-global using Listenarr.Infrastructure.Services;
 global using Microsoft.AspNetCore.SignalR;
 
 // Common system usings used across services/controllers

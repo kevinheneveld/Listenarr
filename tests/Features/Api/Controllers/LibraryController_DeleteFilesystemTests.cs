@@ -394,10 +394,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IDownloadRepository>().Object,
                 CreateRootFolderRepo(dbContext),
                 fileNaming.Object,
-                scanQueueService: null,
-                moveQueueService: null,
-                notificationService: null,
-                rootFolderService: null);
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()));
         }
 
         private static IRootFolderRepository CreateRootFolderRepo(ListenArrDbContext dbContext)

@@ -38,7 +38,7 @@ namespace Listenarr.Api.Services
         private bool IsAuthenticationEnabled()
         {
             var config = _startupConfigService.GetConfig();
-            return config?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+            return config?.IsAuthenticationEnabled() == true;
         }
 
         public Task<string> CreateSessionAsync(string username, bool isAdmin, bool rememberMe = false)

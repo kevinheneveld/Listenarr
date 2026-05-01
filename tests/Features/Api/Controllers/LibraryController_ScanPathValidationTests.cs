@@ -88,10 +88,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
                 mockFileNaming.Object,
-                null,
-                null,
-                null,
-                mockRootFolderSvc.Object);
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()),
+                rootFolderService: mockRootFolderSvc.Object);
 
             var request = new LibraryController.ScanRequest { Path = tempRoot };
 
@@ -160,10 +158,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
                 mockFileNaming.Object,
-                null,
-                null,
-                null,
-                mockRootFolderSvc.Object);
+                applicationPathService: Mock.Of<IApplicationPathService>(service => service.ContentRootPath == System.IO.Directory.GetCurrentDirectory()),
+                rootFolderService: mockRootFolderSvc.Object);
 
             var request = new LibraryController.ScanRequest { Path = other };
 

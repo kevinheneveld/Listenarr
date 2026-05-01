@@ -56,7 +56,7 @@ namespace Listenarr.Api.Controllers
             try
             {
                 var cfg = _systemService.GetStartupConfig();
-                var authEnabled = cfg?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+                var authEnabled = cfg?.IsAuthenticationEnabled() == true;
                 if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
                 {
                     return Unauthorized();
@@ -81,7 +81,7 @@ namespace Listenarr.Api.Controllers
             try
             {
                 var cfg = _systemService.GetStartupConfig();
-                var authEnabled = cfg?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+                var authEnabled = cfg?.IsAuthenticationEnabled() == true;
                 if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
                 {
                     return Unauthorized();
@@ -105,7 +105,7 @@ namespace Listenarr.Api.Controllers
             try
             {
                 var cfg = _systemService.GetStartupConfig();
-                var authEnabled = cfg?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+                var authEnabled = cfg?.IsAuthenticationEnabled() == true;
                 if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
                 {
                     return Unauthorized();
@@ -130,7 +130,7 @@ namespace Listenarr.Api.Controllers
             try
             {
                 var cfg = _systemService.GetStartupConfig();
-                var authEnabled = cfg?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+                var authEnabled = cfg?.IsAuthenticationEnabled() == true;
                 if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
                 {
                     return Unauthorized();
@@ -155,7 +155,7 @@ namespace Listenarr.Api.Controllers
             try
             {
                 var cfg = _systemService.GetStartupConfig();
-                var authEnabled = cfg?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+                var authEnabled = cfg?.IsAuthenticationEnabled() == true;
                 if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
                 {
                     return Unauthorized();
@@ -181,7 +181,7 @@ namespace Listenarr.Api.Controllers
             try
             {
                 var cfg = _systemService.GetStartupConfig();
-                var authEnabled = cfg?.AuthenticationRequired?.ToLowerInvariant() is "true" or "yes" or "1";
+                var authEnabled = cfg?.IsAuthenticationEnabled() == true;
                 if (authEnabled && !(User?.Identity?.IsAuthenticated ?? false))
                 {
                     return Unauthorized();
@@ -232,4 +232,3 @@ namespace Listenarr.Api.Controllers
         }
     }
 }
-
