@@ -229,7 +229,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
 
             var nextWasCalled = false;
             var authenticationRequirementService = Mock.Of<IAuthenticationRequirementService>(service =>
-                service.IsAuthenticationRequired() == false);
+                !service.IsAuthenticationRequired());
 
             await new RequireApiKeyManagementAccessFilter(authenticationRequirementService).OnActionExecutionAsync(
                 filterContext,
