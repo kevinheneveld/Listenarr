@@ -39,6 +39,15 @@ namespace Listenarr.Infrastructure.Repositories
                 .ToListAsync();
         }
 
+        public async Task<List<Audiobook>> GetAllNoFilesAsync()
+        {
+            // Omits Include(Files) — use when file data is fetched separately
+            return await _db.Audiobooks
+                .AsNoTracking()
+                .OrderBy(a => a.Title)
+                .ToListAsync();
+        }
+
         public async Task<Audiobook?> GetByAsinAsync(string asin)
         {
             var normalizedAsin = NormalizeAsin(asin);
