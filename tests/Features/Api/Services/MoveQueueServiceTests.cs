@@ -20,9 +20,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

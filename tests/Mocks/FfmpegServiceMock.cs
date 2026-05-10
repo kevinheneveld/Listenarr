@@ -1,7 +1,5 @@
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Listenarr.Tests.Builders;
-using Listenarr.Tests.Common;
 
 namespace Listenarr.Tests.Mocks
 {

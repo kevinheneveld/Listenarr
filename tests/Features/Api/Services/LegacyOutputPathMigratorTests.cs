@@ -20,7 +20,6 @@ using Moq;
 using Xunit;
 using Listenarr.Api.Services;
 using Listenarr.Domain.Utils;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

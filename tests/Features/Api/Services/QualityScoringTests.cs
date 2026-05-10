@@ -16,13 +16,10 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Reflection;
-using Listenarr.Domain.Models;
 using Listenarr.Api.Services;
-using Listenarr.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
-using Listenarr.Infrastructure.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

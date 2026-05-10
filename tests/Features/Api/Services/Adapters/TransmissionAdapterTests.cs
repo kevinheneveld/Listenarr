@@ -17,10 +17,8 @@
  */
 using System.Runtime.InteropServices;
 using Listenarr.Api.Services.Adapters;
-using Listenarr.Domain.Models;
 using Listenarr.Domain.Utils;
 using Listenarr.Tests.Builders;
-using Listenarr.Tests.Common;
 using Listenarr.Tests.Mocks.Api;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;

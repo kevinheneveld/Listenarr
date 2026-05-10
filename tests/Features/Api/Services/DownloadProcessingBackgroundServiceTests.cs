@@ -1,10 +1,8 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Listenarr.Domain.Utils;
 using Listenarr.Tests.Builders;
-using Listenarr.Tests.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;

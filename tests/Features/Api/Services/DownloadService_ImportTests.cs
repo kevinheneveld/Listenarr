@@ -20,8 +20,6 @@ using Xunit;
 using Moq;
 using Listenarr.Api.Services;
 using Listenarr.Api.Services.Metadata;
-using Listenarr.Tests.Common;
-using Listenarr.Domain.Models;
 using Listenarr.Tests.Builders;
 
 namespace Listenarr.Tests.Features.Api.Services

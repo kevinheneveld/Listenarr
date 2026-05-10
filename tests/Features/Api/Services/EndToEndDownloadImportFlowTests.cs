@@ -16,11 +16,9 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Moq;
 using Xunit;
 using Listenarr.Api.Services.Metadata;
-using Listenarr.Tests.Common;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Listenarr.Tests.Features.Api.Services

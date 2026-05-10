@@ -17,7 +17,6 @@
  */
 
 using Listenarr.Api.Filters;
-using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 

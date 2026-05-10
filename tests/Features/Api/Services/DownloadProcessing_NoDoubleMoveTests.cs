@@ -18,8 +18,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
-using Listenarr.Tests.Common;
 using Listenarr.Tests.Builders;
 
 namespace Listenarr.Tests.Features.Api.Services

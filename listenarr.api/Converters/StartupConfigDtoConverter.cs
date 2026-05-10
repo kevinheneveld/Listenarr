@@ -16,9 +16,6 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-using Listenarr.Api.Models;
-using Listenarr.Domain.Models;
-
 namespace Listenarr.Api.Converters
 {
     public static class StartupConfigDtoConverter

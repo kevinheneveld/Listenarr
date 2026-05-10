@@ -16,9 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Text.Json;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Moq;

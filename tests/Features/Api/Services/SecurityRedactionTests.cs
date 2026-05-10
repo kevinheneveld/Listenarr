@@ -21,11 +21,8 @@ using Moq;
 using Moq.Protected;
 using Xunit;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using Listenarr.Domain.Models;
-using Listenarr.Api.Controllers;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

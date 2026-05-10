@@ -21,9 +21,6 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
 using Listenarr.Domain.Utils;
 
 namespace Listenarr.Tests.Features.Api.Services

@@ -17,12 +17,8 @@
  */
 using System.Net;
 using System.Text;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Models;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;

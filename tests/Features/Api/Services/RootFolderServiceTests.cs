@@ -20,10 +20,7 @@ using Xunit;
 using Xunit.Abstractions;
 using Microsoft.Extensions.Logging;
 using Moq;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Listenarr.Domain.Utils;
 
 namespace Listenarr.Tests.Features.Api.Services

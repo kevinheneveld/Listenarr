@@ -24,7 +24,6 @@ using System.Net;
 using Moq;
 using Moq.Protected;
 using Microsoft.Extensions.Logging;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Api.Tests
 {

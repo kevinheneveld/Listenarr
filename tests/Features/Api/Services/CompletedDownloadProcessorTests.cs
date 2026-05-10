@@ -21,11 +21,8 @@ using Moq;
 using Xunit;
 using System.IO.Compression;
 using System.Reflection;
-using Listenarr.Tests.Common;
 using Listenarr.Domain.Utils;
 using Listenarr.Tests.Builders;
-using Listenarr.Application.Services;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

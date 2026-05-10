@@ -16,9 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Text.Json;
-using Listenarr.Application.Repositories;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;

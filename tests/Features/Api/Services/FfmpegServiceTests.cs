@@ -1,6 +1,4 @@
 using Listenarr.Api.Services;
-using Listenarr.Domain.Services;
-using Listenarr.Tests.Common;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;

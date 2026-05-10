@@ -16,11 +16,9 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Net;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Filters;
 using Listenarr.Api.Hubs;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.Filters;

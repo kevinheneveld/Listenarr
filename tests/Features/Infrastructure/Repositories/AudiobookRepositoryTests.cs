@@ -17,8 +17,6 @@
  */
 using Microsoft.EntityFrameworkCore;
 using Xunit;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
 
 namespace Listenarr.Tests.Features.Infrastructure.Repositories
 {

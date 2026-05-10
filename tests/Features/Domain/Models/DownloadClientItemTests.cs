@@ -17,7 +17,6 @@
  */
 
 using Xunit;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Domain.Models
 {

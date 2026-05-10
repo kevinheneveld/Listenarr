@@ -22,13 +22,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Listenarr.Domain.Models;
 using Listenarr.Api.Services;
 using Microsoft.AspNetCore.SignalR;
 using Listenarr.Api.Hubs;
 using Listenarr.Api.Services.Metadata;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Tests.Common;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

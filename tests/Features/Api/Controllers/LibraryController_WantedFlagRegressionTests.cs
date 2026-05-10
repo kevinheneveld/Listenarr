@@ -16,11 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Text.Json;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;

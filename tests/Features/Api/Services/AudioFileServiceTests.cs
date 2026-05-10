@@ -19,12 +19,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Moq;
-using Listenarr.Domain.Models;
 using Listenarr.Api.Services;
 using Listenarr.Api.Services.Metadata;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Application.Repositories;
-using Listenarr.Infrastructure.Repositories;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

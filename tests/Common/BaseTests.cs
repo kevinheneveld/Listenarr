@@ -1,6 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using Listenarr.Application.Repositories;
-using Listenarr.Domain.Models;
 using Listenarr.Tests.Builders;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;

@@ -17,9 +17,6 @@
  */
 using System.Text;
 using System.Text.Json;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Tests.Mocks;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 

@@ -20,7 +20,6 @@ using Moq;
 using Listenarr.Api.Services;
 using Microsoft.Extensions.Logging;
 using Listenarr.Domain.Utils;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

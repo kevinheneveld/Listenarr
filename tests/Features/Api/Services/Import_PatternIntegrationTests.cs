@@ -18,7 +18,6 @@
 using Xunit;
 using Moq;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Tests.Features.Api.Services

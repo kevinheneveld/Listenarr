@@ -16,17 +16,14 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
 using Listenarr.Api.Services.Search;
 using Listenarr.Api.Services.Search.Filters;
 using Listenarr.Api.Services.Search.Strategies;
 using Listenarr.Api.Hubs;
-using Listenarr.Domain.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.AspNetCore.SignalR;
 using Moq;
 using Xunit;
-using Listenarr.Api.Services.Search.Providers;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

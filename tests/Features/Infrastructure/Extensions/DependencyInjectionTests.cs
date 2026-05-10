@@ -20,7 +20,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 using Listenarr.Infrastructure.Extensions;
-using Listenarr.Application.Repositories;
 
 namespace Listenarr.Tests.Features.Infrastructure.Extensions
 {

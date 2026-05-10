@@ -1,5 +1,3 @@
-using Listenarr.Tests.Common;
-
 namespace Listenarr.Tests.Mocks.Api
 {
     public class NzbgetApiMock : BaseApiMock

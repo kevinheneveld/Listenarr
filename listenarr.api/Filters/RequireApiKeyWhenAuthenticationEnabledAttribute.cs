@@ -16,8 +16,6 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-using Listenarr.Api.Services;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 

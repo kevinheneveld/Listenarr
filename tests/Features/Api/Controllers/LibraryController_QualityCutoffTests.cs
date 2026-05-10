@@ -16,10 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Reflection;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
-using Listenarr.Domain.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;

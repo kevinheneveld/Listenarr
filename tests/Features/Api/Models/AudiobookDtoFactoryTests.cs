@@ -17,9 +17,7 @@
  */
 using Microsoft.EntityFrameworkCore;
 using Xunit;
-using Listenarr.Domain.Models;
 using Listenarr.Api.Services;
-using Listenarr.Infrastructure.Models;
 
 namespace Listenarr.Tests.Features.Api.Models
 {

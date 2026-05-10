@@ -20,9 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
 using Listenarr.Api.Services;
-using Listenarr.Tests.Common;
 using Listenarr.Tests.Builders;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

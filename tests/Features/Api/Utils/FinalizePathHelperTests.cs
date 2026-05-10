@@ -16,7 +16,6 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using Listenarr.Api.Utils;
-using Listenarr.Domain.Models;
 using Listenarr.Domain.Utils;
 using Xunit;
 

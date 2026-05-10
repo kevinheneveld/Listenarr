@@ -19,14 +19,10 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Listenarr.Api.Controllers;
-using Listenarr.Domain.Models;
 using Listenarr.Api.Services;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
 using System.Reflection;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
 
 namespace Listenarr.Tests.Features.Api.Controllers
 {

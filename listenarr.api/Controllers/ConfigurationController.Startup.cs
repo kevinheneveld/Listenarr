@@ -17,9 +17,6 @@
  */
 
 using Listenarr.Api.Converters;
-using Listenarr.Api.Models;
-using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 

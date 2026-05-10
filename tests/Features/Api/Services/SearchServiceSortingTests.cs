@@ -17,7 +17,6 @@
  */
 using System.Reflection;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Xunit;
 
 namespace Listenarr.Tests.Features.Api.Services

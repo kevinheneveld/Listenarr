@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
-using Listenarr.Tests.Common;
 
 namespace Listenarr.Tests.Mocks.Api
 {

@@ -1,5 +1,4 @@
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Mocks
 {

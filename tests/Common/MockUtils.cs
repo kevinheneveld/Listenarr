@@ -1,13 +1,8 @@
 using System.Net;
 using System.Text;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Hubs;
 using Listenarr.Api.Services;
 using Listenarr.Api.Services.Adapters;
-using Listenarr.Api.Services.Search.Providers;
-using Listenarr.Application.Repositories;
-using Listenarr.Application.Services;
-using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;

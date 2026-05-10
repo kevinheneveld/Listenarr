@@ -1,15 +1,10 @@
-using Listenarr.Api.Controllers;
-using Listenarr.Api.Extensions;
 using Listenarr.Api.Hubs;
 using Listenarr.Api.Services;
 using Listenarr.Api.Services.Adapters;
 using Listenarr.Api.Services.Search;
 using Listenarr.Api.Services.Search.Filters;
 using Listenarr.Api.Services.Search.Strategies;
-using Listenarr.Application.Services;
-using Listenarr.Domain.Models;
 using Listenarr.Infrastructure.Extensions;
-using Listenarr.Tests.Mocks;
 using Listenarr.Tests.Mocks.Api;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.SignalR;

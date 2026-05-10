@@ -17,12 +17,9 @@
  */
 using Xunit;
 using Moq;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Listenarr.Api.Services.Metadata;
-using Listenarr.Application.Repositories;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Controllers
 {

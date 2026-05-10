@@ -18,12 +18,8 @@
 using Xunit;
 using Moq;
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Repositories;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.EntityFrameworkCore;
-using Listenarr.Infrastructure.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

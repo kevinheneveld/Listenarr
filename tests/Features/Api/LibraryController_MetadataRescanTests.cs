@@ -18,9 +18,6 @@
 using System.Net;
 using System.Text.Json;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Tests.Mocks;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;

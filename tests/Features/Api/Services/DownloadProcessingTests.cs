@@ -5,10 +5,7 @@ using Listenarr.Api.Services;
 using System.Reflection;
 using Listenarr.Api.Services.Metadata;
 using System.Runtime.InteropServices;
-using Listenarr.Tests.Common;
 using Listenarr.Tests.Builders;
-using Listenarr.Tests.Mocks;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

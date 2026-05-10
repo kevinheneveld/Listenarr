@@ -19,11 +19,8 @@ using Xunit;
 using Moq;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
-using Listenarr.Api.Controllers;
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
 using Microsoft.AspNetCore.Mvc;
-using Listenarr.Domain.Models;
 
 namespace Listenarr.Tests.Features.Api.Controllers
 {

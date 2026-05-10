@@ -18,10 +18,6 @@
 using System.Reflection;
 using Listenarr.Api.Hubs;
 using Listenarr.Api.Services;
-using Listenarr.Application.Repositories;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Tests.Common;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;

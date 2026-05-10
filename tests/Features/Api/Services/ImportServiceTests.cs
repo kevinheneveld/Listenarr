@@ -22,10 +22,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
 using Listenarr.Api.Services.Metadata;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Tests.Common;
 
 namespace Listenarr.Tests.Features.Api.Services
 {

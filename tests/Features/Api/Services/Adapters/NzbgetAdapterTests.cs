@@ -18,8 +18,6 @@
 using System.Net;
 using Listenarr.Api.Services;
 using Listenarr.Api.Services.Adapters;
-using Listenarr.Domain.Models;
-using Listenarr.Tests.Common;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;

@@ -23,13 +23,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
-using Listenarr.Api.Controllers;
-using Listenarr.Domain.Models;
 using Listenarr.Domain.Utils;
 using Listenarr.Api.Services;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
-using Listenarr.Application.Repositories;
 
 namespace Listenarr.Tests.Features.Api.Controllers
 {

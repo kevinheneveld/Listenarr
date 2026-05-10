@@ -17,9 +17,6 @@
  */
 using Listenarr.Api.Models;
 using Listenarr.Api.Services;
-using Listenarr.Domain.Models;
-using Listenarr.Infrastructure.Models;
-using Listenarr.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;

@@ -20,8 +20,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Listenarr.Api.Services;
 using System.Reflection;
 using System.Text;
-using Listenarr.Tests.Common;
-using Listenarr.Domain.Models;
 using Listenarr.Tests.Builders;
 using Listenarr.Tests.Mocks.Api;
 
