@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Net;
+using System.Text;
 using Listenarr.Application.Interfaces;
 using Listenarr.Domain.Models;
 using Listenarr.Infrastructure.Adapters;
@@ -158,6 +159,108 @@ namespace Listenarr.Tests.Features.Api.Services.Adapters
             Assert.Equal("192.168.50.111", capturedUri.Host);
             Assert.Equal(6789, capturedUri.Port);
             Assert.Equal("/xmlrpc", capturedUri.AbsolutePath);
+        }
+
+        // Regression: NZBGet's XML-RPC endpoint authenticates via credentials embedded in the URL
+        // (http://user:pass@host/xmlrpc). Prior to the fix, BuildUri was called without
+        // includeCredentials, so the URL UserInfo was empty and NZBGet returned 401 Unauthorized
+        // — even though credentials were configured — whenever the server's auth path required
+        // URL-embedded creds (or the Authorization header was lost across a redirect).
+        [Fact]
+        public async Task TestConnectionAsync_EmbedsCredentialsInXmlRpcUrl()
+        {
+            HttpRequestMessage? capturedRequest = null;
+            using var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "<?xml version=\"1.0\"?><methodResponse><params><param><value><string>26.1</string></value></param></params></methodResponse>")
+            };
+            var handler = new DelegatingHandlerMock((req, _) =>
+            {
+                capturedRequest = req;
+                return Task.FromResult(response);
+            });
+
+            using var http = new HttpClient(handler);
+            var adapter = new NzbgetAdapter(
+                new TestHttpClientFactory(http),
+                Mock.Of<INzbUrlResolver>(),
+                NullLogger<NzbgetAdapter>.Instance);
+
+            var client = new DownloadClientConfiguration
+            {
+                Host = "http://192.168.50.111",
+                Port = 6789,
+                UseSSL = false,
+                Username = "nzbuser",
+                Password = "n!zbP@ss"
+            };
+
+            var (success, _) = await adapter.TestConnectionAsync(client);
+
+            Assert.True(success);
+            Assert.NotNull(capturedRequest);
+
+            var uri = capturedRequest!.RequestUri!;
+            Assert.Equal("/xmlrpc", uri.AbsolutePath);
+            Assert.False(string.IsNullOrEmpty(uri.UserInfo), "Expected XML-RPC URL to carry user:pass in UserInfo");
+            // UriBuilder URL-encodes username/password — decode before comparing
+            var parts = uri.UserInfo.Split(':', 2);
+            Assert.Equal(2, parts.Length);
+            Assert.Equal("nzbuser", Uri.UnescapeDataString(parts[0]));
+            Assert.Equal("n!zbP@ss", Uri.UnescapeDataString(parts[1]));
+        }
+
+        [Fact]
+        public async Task TestConnectionAsync_SendsBasicAuthorizationHeader()
+        {
+            HttpRequestMessage? capturedRequest = null;
+            string? capturedBody = null;
+            using var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "<?xml version=\"1.0\"?><methodResponse><params><param><value><string>26.1</string></value></param></params></methodResponse>")
+            };
+            var handler = new DelegatingHandlerMock(async (req, ct) =>
+            {
+                capturedRequest = req;
+                if (req.Content != null)
+                {
+                    capturedBody = await req.Content.ReadAsStringAsync(ct);
+                }
+                return response;
+            });
+
+            using var http = new HttpClient(handler);
+            var adapter = new NzbgetAdapter(
+                new TestHttpClientFactory(http),
+                Mock.Of<INzbUrlResolver>(),
+                NullLogger<NzbgetAdapter>.Instance);
+
+            var client = new DownloadClientConfiguration
+            {
+                Host = "http://192.168.50.111",
+                Port = 6789,
+                UseSSL = false,
+                Username = "nzbuser",
+                Password = "nzbpass"
+            };
+
+            var (success, _) = await adapter.TestConnectionAsync(client);
+
+            Assert.True(success);
+            Assert.NotNull(capturedRequest);
+
+            var auth = capturedRequest!.Headers.Authorization;
+            Assert.NotNull(auth);
+            Assert.Equal("Basic", auth!.Scheme);
+            Assert.False(string.IsNullOrEmpty(auth.Parameter));
+            var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(auth.Parameter!));
+            Assert.Equal("nzbuser:nzbpass", decoded);
+
+            Assert.Equal("text/xml", capturedRequest.Content?.Headers.ContentType?.MediaType);
+            Assert.NotNull(capturedBody);
+            Assert.Contains("<methodName>version</methodName>", capturedBody!);
         }
     }
 }

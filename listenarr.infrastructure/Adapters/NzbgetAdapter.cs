@@ -861,10 +861,15 @@ namespace Listenarr.Infrastructure.Adapters
 
         private async Task<XElement> CallXmlRpcAsync(DownloadClientConfiguration client, string methodName, params object[] parameters)
         {
-            var baseUrl = DownloadClientUriBuilder.BuildUri(client, "/xmlrpc").ToString();
+            // NZBGet's XML-RPC endpoint expects credentials embedded in the URL
+            // (http://user:pass@host/xmlrpc) — that's its traditional auth path and the
+            // only one that survives a server-side redirect (e.g. /xmlrpc → /xmlrpc/),
+            // since .NET's HttpClientHandler strips Authorization headers across redirects.
+            // We also keep the Authorization: Basic header as a belt-and-braces fallback
+            // for setups that proxy the request without preserving the URL userinfo.
+            var baseUrl = DownloadClientUriBuilder.BuildUri(client, "/xmlrpc", includeCredentials: true).ToString();
             var httpClient = _httpClientFactory.CreateClient(ClientType);
 
-            // Build XML-RPC request
             var methodCall = new XElement("methodCall",
                 new XElement("methodName", methodName),
                 new XElement("params",
