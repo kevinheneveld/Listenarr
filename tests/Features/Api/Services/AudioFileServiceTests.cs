@@ -20,10 +20,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Moq;
 using Listenarr.Domain.Models;
+using Listenarr.Application.Audiobooks;
+using Listenarr.Application.Common;
 using Listenarr.Application.Interfaces;
+using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Tests.Common;
 using Listenarr.Tests.Builders;
 using Listenarr.Infrastructure.Persistence;
+using Listenarr.Infrastructure.Persistence.Repositories;
 
 namespace Listenarr.Tests.Features.Api.Services
 {
@@ -185,6 +189,13 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.Equal(32000, file.SampleRate);
             Assert.Equal(1, file.Channels);
         }
+
+        // TODO(rebase): integration tests EnsureAudiobookFileAsync_PromotesBlankFieldsAndCover_OnFirstFileOnly
+        // and EnsureAudiobookFileAsync_DoesNotOverwriteExistingAudiobookFields were dropped during
+        // the rebase onto refactored canary. Unit coverage for PromoteBlankFieldsFromMetadata is in
+        // AudioFileService_PromotionTests.cs. Re-port integration coverage in a follow-up against the
+        // new AudiobookFileService primary-constructor DI shape.
+
 
         // Test helper DbContext that throws on SaveChangesAsync
         private class ThrowingSaveChangesDbContext : ListenArrDbContext
