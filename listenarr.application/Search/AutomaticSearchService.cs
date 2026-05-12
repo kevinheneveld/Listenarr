@@ -165,9 +165,22 @@ namespace Listenarr.Application.Search
             IAudiobookFileRepository fileRepository,
             CancellationToken stoppingToken)
         {
-            if (audiobook.QualityProfile == null)
+            var qualityProfile = audiobook.QualityProfile;
+            if (qualityProfile == null)
             {
-                _logger.LogWarning("Audiobook '{Title}' has no quality profile assigned", audiobook.Title);
+                qualityProfile = await qualityProfileService.GetDefaultAsync();
+                if (qualityProfile != null)
+                {
+                    _logger.LogWarning(
+                        "Audiobook '{Title}' has no quality profile assigned; falling back to default profile '{ProfileName}'",
+                        audiobook.Title,
+                        qualityProfile.Name);
+                }
+            }
+
+            if (qualityProfile == null)
+            {
+                _logger.LogWarning("Audiobook '{Title}' has no quality profile assigned and no default profile is configured", audiobook.Title);
                 return 0;
             }
 
@@ -189,7 +202,7 @@ namespace Listenarr.Application.Search
             }
 
             // Check existing quality and decide whether to search
-            var (cutoffMet, bestExistingQuality) = await GetExistingQualityAsync(audiobook, qualityProfileService, downloadRepository, fileRepository, stoppingToken);
+            var (cutoffMet, bestExistingQuality) = await GetExistingQualityAsync(audiobook, qualityProfile, qualityProfileService, downloadRepository, fileRepository, stoppingToken);
             _logger.LogInformation("Audiobook '{Title}': cutoff met={CutoffMet}, best existing quality={BestQuality}",
                 audiobook.Title, cutoffMet, bestExistingQuality ?? "none");
 
@@ -240,7 +253,7 @@ namespace Listenarr.Application.Search
             }
 
             // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile);
+            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, qualityProfile);
 
             // Log all scored results for debugging
             _logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, audiobook.Title);
@@ -299,7 +312,7 @@ namespace Listenarr.Application.Search
             // Check if the found result is better quality than what we already have
             if (!string.IsNullOrEmpty(bestExistingQuality))
             {
-                var resultIsBetter = IsQualityBetter(topResult.SearchResult.Quality, bestExistingQuality, audiobook.QualityProfile);
+                var resultIsBetter = IsQualityBetter(topResult.SearchResult.Quality, bestExistingQuality, qualityProfile);
                 if (!resultIsBetter)
                 {
                     _logger.LogInformation("Top result quality '{ResultQuality}' is not better than existing quality '{ExistingQuality}' for audiobook '{Title}', skipping download",
@@ -348,12 +361,13 @@ namespace Listenarr.Application.Search
 
         private async Task<bool> IsQualityCutoffMetAsync(
             Audiobook audiobook,
+            QualityProfile? qualityProfile,
             IQualityProfileService qualityProfileService,
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
             CancellationToken ct = default)
         {
-            if (audiobook.QualityProfile == null)
+            if (qualityProfile == null)
                 return false;
 
             // Get existing downloads for this audiobook
@@ -370,8 +384,8 @@ namespace Listenarr.Application.Search
                 return false;
 
             // Check if any existing download meets or exceeds the cutoff quality
-            var cutoffQuality = audiobook.QualityProfile.Qualities
-                .FirstOrDefault(q => q.Quality == audiobook.QualityProfile.CutoffQuality);
+            var cutoffQuality = qualityProfile.Qualities
+                .FirstOrDefault(q => q.Quality == qualityProfile.CutoffQuality);
 
             if (cutoffQuality == null)
                 return false;
@@ -383,7 +397,7 @@ namespace Listenarr.Application.Search
                 if (download.Status == DownloadStatus.Completed && !string.IsNullOrEmpty(download.Metadata?.GetValueOrDefault("Quality")?.ToString()))
                 {
                     var downloadQuality = download.Metadata["Quality"].ToString();
-                    var downloadQualityDefinition = audiobook.QualityProfile.Qualities
+                    var downloadQualityDefinition = qualityProfile.Qualities
                         .FirstOrDefault(q => q.Quality == downloadQuality);
 
                     if (downloadQualityDefinition != null && downloadQualityDefinition.Priority >= cutoffQuality.Priority)
@@ -407,7 +421,7 @@ namespace Listenarr.Application.Search
                 var fileQuality = DetermineFileQuality(file);
                 if (!string.IsNullOrEmpty(fileQuality))
                 {
-                    var fileQualityDefinition = audiobook.QualityProfile.Qualities
+                    var fileQualityDefinition = qualityProfile.Qualities
                         .FirstOrDefault(q => q.Quality == fileQuality);
 
                     if (fileQualityDefinition != null && fileQualityDefinition.Priority >= cutoffQuality.Priority)
@@ -557,13 +571,14 @@ namespace Listenarr.Application.Search
         /// </summary>
         private async Task<(bool cutoffMet, string? bestExistingQuality)> GetExistingQualityAsync(
             Audiobook audiobook,
+            QualityProfile? qualityProfile,
             IQualityProfileService qualityProfileService,
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
             CancellationToken ct = default)
         {
             // Reuse existing cutoff logic
-            var cutoffMet = await IsQualityCutoffMetAsync(audiobook, qualityProfileService, downloadRepository, fileRepository, ct);
+            var cutoffMet = await IsQualityCutoffMetAsync(audiobook, qualityProfile ?? audiobook.QualityProfile, qualityProfileService, downloadRepository, fileRepository, ct);
 
             // Find the best quality among existing files and completed downloads (if any)
             string? bestQuality = null;
@@ -579,7 +594,7 @@ namespace Listenarr.Application.Search
                     if (!string.IsNullOrEmpty(q))
                     {
                         if (bestQuality == null) bestQuality = q;
-                        else if (IsQualityBetter(q, bestQuality, audiobook.QualityProfile)) bestQuality = q;
+                        else if (IsQualityBetter(q, bestQuality, qualityProfile)) bestQuality = q;
                     }
                 }
             }
@@ -589,7 +604,7 @@ namespace Listenarr.Application.Search
             foreach (var fq in existingFiles.Select(DetermineFileQuality).Where(fq => !string.IsNullOrEmpty(fq)))
             {
                 if (bestQuality == null) bestQuality = fq;
-                else if (IsQualityBetter(fq, bestQuality, audiobook.QualityProfile)) bestQuality = fq;
+                else if (IsQualityBetter(fq, bestQuality, qualityProfile)) bestQuality = fq;
             }
 
             return (cutoffMet, bestQuality);
@@ -672,4 +687,3 @@ namespace Listenarr.Application.Search
         }
     }
 }
-

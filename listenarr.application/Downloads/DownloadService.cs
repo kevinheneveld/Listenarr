@@ -178,9 +178,22 @@ namespace Listenarr.Application.Downloads
                 };
             }
 
-            if (audiobook.QualityProfile == null)
+            var qualityProfile = audiobook.QualityProfile;
+            if (qualityProfile == null)
             {
-                logger.LogWarning("Audiobook '{Title}' has no quality profile assigned", audiobook.Title);
+                qualityProfile = await qualityProfileService.GetDefaultAsync();
+                if (qualityProfile != null)
+                {
+                    logger.LogWarning(
+                        "Audiobook '{Title}' has no quality profile assigned; falling back to default profile '{ProfileName}'",
+                        audiobook.Title,
+                        qualityProfile.Name);
+                }
+            }
+
+            if (qualityProfile == null)
+            {
+                logger.LogWarning("Audiobook '{Title}' has no quality profile assigned and no default profile is configured", audiobook.Title);
                 return new SearchAndDownloadResult
                 {
                     Success = false,
@@ -207,7 +220,7 @@ namespace Listenarr.Application.Downloads
             }
 
             // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile);
+            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, qualityProfile);
 
             // Log all scored results for debugging
             logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, LogRedaction.SanitizeText(audiobook.Title));
