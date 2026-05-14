@@ -179,6 +179,24 @@ namespace Listenarr.Api.Services.Scoring
             return null;
         }
 
+        /// <summary>
+        /// Maps an explicit language tag — an ISO code ("eng", "spa", "ger") or a
+        /// language name ("English", "deutsch") — to a canonical language name.
+        /// Returns null when the tag is empty or unrecognised, so callers can
+        /// fail open. Unlike <see cref="DetectLanguage"/> this is for trusted
+        /// tag fields (e.g. an ffprobe language tag), not free-text titles.
+        /// </summary>
+        public static string? MapLanguageTag(string? tag)
+        {
+            if (string.IsNullOrWhiteSpace(tag)) return null;
+            var t = tag.Trim().ToLowerInvariant();
+            if (EnglishMarkers.Contains(t)) return "English";
+            if (LanguageCodes.TryGetValue(t, out var byCode)) return byCode;
+            if (LanguageNames.TryGetValue(t, out var byName)) return byName;
+            if (BareForeignWords.TryGetValue(t, out var byWord)) return byWord;
+            return null;
+        }
+
         private static bool EnglishMarkerPresent(string title)
         {
             var words = WordRe.Matches(title.ToLowerInvariant()).Select(m => m.Value);

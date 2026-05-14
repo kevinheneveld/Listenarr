@@ -819,6 +819,12 @@ namespace Listenarr.Api.Services
             metadata.TrackNumber ??= ParseNumericTag(tags, "track", "TRACK", "tracknumber", "TRACKNUMBER");
             metadata.DiscNumber ??= ParseNumericTag(tags, "disc", "DISC", "discnumber", "DISCNUMBER");
             metadata.Year ??= ParseNumericTag(tags, "date", "DATE", "year", "YEAR");
+
+            var langTag = GetTag(tags, "language", "LANGUAGE");
+            if (!string.IsNullOrWhiteSpace(langTag))
+            {
+                metadata.Language ??= langTag;
+            }
         }
 
         private static string FirstNonEmpty(params string?[] candidates)

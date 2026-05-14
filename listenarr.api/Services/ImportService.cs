@@ -477,6 +477,54 @@ namespace Listenarr.Api.Services
                     }
                 }
 
+                // ── Pre-ingest verification ──────────────────────────────────
+                // Extract metadata for every audio file up front so the whole
+                // release shape can be inspected before anything is committed.
+                // The dictionary doubles as the cache the per-file loop reuses,
+                // so this costs no extra ffprobe calls.
+                var audioFilePaths = orderedFiles.Where(FileUtils.IsAudioFile).ToList();
+                var metadataByPath = new Dictionary<string, AudioMetadata?>(StringComparer.OrdinalIgnoreCase);
+                if (_metadataService != null)
+                {
+                    foreach (var audioFile in audioFilePaths)
+                    {
+                        try
+                        {
+                            metadataByPath[audioFile] = await _metadataService.ExtractFileMetadataAsync(audioFile);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                        {
+                            metadataByPath[audioFile] = null;
+                            _logger.LogDebug(ex, "ImportFilesFromDirectory: pre-ingest metadata extraction failed for {File}", audioFile);
+                        }
+                    }
+                }
+
+                var preIngestMetadata = audioFilePaths
+                    .Select(p => metadataByPath.TryGetValue(p, out var m) ? m : null)
+                    .Where(m => m != null)
+                    .Select(m => m!)
+                    .ToList();
+
+                var verification = PreIngestVerification.Inspect(preIngestMetadata, abProfile?.PreferredLanguages);
+                if (verification.Rejected)
+                {
+                    _logger.LogWarning(
+                        "ImportFilesFromDirectory: rejecting completed download {DownloadId} at pre-ingest verification — {Reason}",
+                        downloadId, verification.Reason);
+                    foreach (var file in orderedFiles)
+                    {
+                        results.Add(new ImportResult
+                        {
+                            SourcePath = file,
+                            Success = false,
+                            SkippedReason = verification.Reason,
+                            Message = $"Pre-ingest verification rejected this download: {verification.Reason}",
+                        });
+                    }
+                    return results;
+                }
+
                 foreach (var file in orderedFiles)
                 {
                     var res = new ImportResult { SourcePath = file };
@@ -573,11 +621,8 @@ namespace Listenarr.Api.Services
                         planByPath.TryGetValue(file, out var plan);
                         diskNumbersForNaming.TryGetValue(file, out var namingDiskNumber);
                         chapterNumbersForNaming.TryGetValue(file, out var namingChapterNumber);
-                        var candidateMetadata = (AudioMetadata?)null;
-                        if (_metadataService != null)
-                        {
-                            try { candidateMetadata = await _metadataService.ExtractFileMetadataAsync(file); } catch (Exception caughtEx_5) when (caughtEx_5 is not OperationCanceledException && caughtEx_5 is not OutOfMemoryException && caughtEx_5 is not StackOverflowException) { candidateMetadata = null; }
-                        }
+                        // Reuse the metadata extracted up front for pre-ingest verification.
+                        metadataByPath.TryGetValue(file, out var candidateMetadata);
 
                         var candidateQuality = DetermineQualityFromMetadata(candidateMetadata, file);
 

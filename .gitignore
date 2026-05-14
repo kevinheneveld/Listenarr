@@ -281,3 +281,6 @@ listenarr.api/wwwroot/*.map
 listenarr.api/wwwroot/assets/**
 listenarr.api/config/appsettings/appsettings.json
 /listenarr.api/config
+
+# Host-specific deploy values — never commit
+.deploy-local.env
