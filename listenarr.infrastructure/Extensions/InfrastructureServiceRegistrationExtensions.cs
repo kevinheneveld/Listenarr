@@ -68,6 +68,7 @@ namespace Listenarr.Infrastructure.Extensions
             services.AddScoped<IDownloadProcessingJobRepository, EfDownloadProcessingJobRepository>();
             services.AddScoped<IRootFolderRepository, EfRootFolderRepository>();
             services.AddScoped<IDownloadHistoryRepository, DownloadHistoryRepository>();
+            services.AddScoped<ILibraryStatsRepository, LibraryStatsRepository>();
 
             return services;
         }
