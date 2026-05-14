@@ -280,3 +280,7 @@ listenarr.api/wwwroot/*.map
 listenarr.api/wwwroot/assets/**
 listenarr.api/config/appsettings/appsettings.json
 /listenarr.api/config
+
+# Personal deploy config — host-specific values (private IPs, SSH aliases) that
+# don't belong in version control. See .deploy-local.env.example for the shape.
+.deploy-local.env

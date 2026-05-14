@@ -5,28 +5,42 @@
 # that stacks all of Kevin's fixes and features on top of upstream canary.
 # See CLAUDE.md "Branch Strategy" for the full explanation.
 #
-# This script is [personal] infrastructure — it reflects Kevin's specific setup:
-#   - Clyde (this Mac) has no `docker` binary, so the image is built on media.
-#   - SSH to media uses the `media` alias in ~/.ssh/config (root@192.168.1.35).
-#   - Media runs the standalone `docker-compose` v2.x binary, not the `docker compose` plugin.
+# This script is [personal] infrastructure — it reflects a build-on-remote
+# setup (the local machine has no Docker; the image is built on the live host
+# via SSH). Host-specific values (SSH alias, IP) are loaded from a gitignored
+# `.deploy-local.env` at the repo root — see `.deploy-local.env.example`.
+#
+# Other assumptions baked in:
+#   - The remote host runs the standalone `docker-compose` v2.x binary,
+#     not the `docker compose` plugin.
+#   - The compose file lives at /srv/listenarr/docker-compose.yml on the host.
 #
 # Usage:
-#   ./scripts/deploy-local.sh                      # Full deploy from kevin/live (sync source → build on media → swap compose → health → smoke)
+#   ./scripts/deploy-local.sh                      # Full deploy from kevin/live (sync source → build on host → swap compose → health → smoke)
 #   ./scripts/deploy-local.sh --skip-tests         # Skip backend test run (hotfixes only)
 #   ./scripts/deploy-local.sh --tag listenarr:abc  # Use an explicit image tag
 #   ./scripts/deploy-local.sh --dry-run            # Show what would happen, don't actually deploy
 #
 # Requirements:
-#   - SSH access to `media` (alias for root@192.168.1.35); Docker on media
+#   - .deploy-local.env populated (copy from .deploy-local.env.example)
+#   - SSH access to the configured MEDIA_SSH host; Docker on that host
 #   - rsync installed locally
 #   - dotnet installed locally if running tests (--skip-tests bypasses)
-#   - media has the compose file at /srv/listenarr/docker-compose.yml
 
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
-MEDIA_SSH="${MEDIA_SSH:-media}"            # SSH alias from ~/.ssh/config → root@192.168.1.35
-MEDIA_IP="${MEDIA_IP:-192.168.1.35}"       # Used for HTTP health checks from Clyde
+# Load host-specific values from gitignored env file if present. Otherwise
+# expect MEDIA_SSH / MEDIA_IP to be set in the calling environment.
+SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REPO_ROOT="$( cd -- "${SCRIPT_DIR}/.." &> /dev/null && pwd )"
+if [[ -f "${REPO_ROOT}/.deploy-local.env" ]]; then
+  # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.deploy-local.env"
+fi
+
+: "${MEDIA_SSH:?MEDIA_SSH not set — copy .deploy-local.env.example to .deploy-local.env and fill it in}"
+: "${MEDIA_IP:?MEDIA_IP not set — copy .deploy-local.env.example to .deploy-local.env and fill it in}"
 BUILD_DIR_REMOTE="${BUILD_DIR_REMOTE:-/root/listenarr-build/listenarr-src}"
 COMPOSE_DIR="/srv/listenarr"
 CONFIG_DIR="${COMPOSE_DIR}/config"
