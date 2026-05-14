@@ -60,6 +60,8 @@ import type {
   RenamePreview,
   RenameOperation,
   RenameResult,
+  LibraryStats,
+  ActivityGranularity,
 } from '@/types'
 import {
   getStartupConfigCached,
@@ -1831,6 +1833,18 @@ class ApiService {
     })
   }
 
+  // Dashboard endpoints
+  async getDashboardStats(
+    activityGranularity: ActivityGranularity = 'Month',
+    activityPeriods = 12,
+  ): Promise<LibraryStats> {
+    const params = new URLSearchParams({
+      activityGranularity,
+      activityPeriods: String(activityPeriods),
+    })
+    return this.request<LibraryStats>(`/dashboard/stats?${params}`)
+  }
+
   // System endpoints
   async getSystemInfo(): Promise<SystemInfo> {
     return this.request<SystemInfo>('/system/info')
@@ -2206,6 +2220,10 @@ export const updateRemotePathMapping = (id: number, mapping: Partial<RemotePathM
 export const deleteRemotePathMapping = (id: number) => apiService.deleteRemotePathMapping(id)
 export const translatePath = (request: TranslatePathRequest) => apiService.translatePath(request)
 // Export individual system functions for convenience
+export const getDashboardStats = (
+  activityGranularity?: ActivityGranularity,
+  activityPeriods?: number,
+) => apiService.getDashboardStats(activityGranularity, activityPeriods)
 export const getSystemInfo = () => apiService.getSystemInfo()
 export const getStorageInfo = () => apiService.getStorageInfo()
 export const getServiceHealth = () => apiService.getServiceHealth()

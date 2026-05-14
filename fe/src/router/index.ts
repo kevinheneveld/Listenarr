@@ -39,6 +39,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/dashboard',
+    name: 'dashboard',
+    component: () => import('../views/dashboard/DashboardView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/audiobooks/:id',
     name: 'audiobook-detail',
     component: () => import('../views/library/AudiobookDetailView.vue'),
