@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Automatic search no longer grabs music albums when looking for audiobooks:** The search-result scorer didn't compare result titles against the audiobook being searched, so any title sharing a single token (e.g., an author's surname) could be queued as a download. A Patterson Hood concert recording could be matched to a James Patterson audiobook. Two defensive layers added: (a) the scorer now receives the audiobook and rejects results whose title shares less than 30% of the audiobook's significant title/author tokens, with a stop-word-filtered token-overlap comparison, and (b) automatic searches now restrict the indexer query to the Newznab `Books > Audiobook` category (3030) so music-only indexers configured without category filtering in Prowlarr no longer return concert/album torrents for audiobook queries.
 
+### Added
+- **Language filtering for search results:** The scorer now rejects foreign-language editions when the quality profile's preferred languages don't include the detected language. Detection is conservative — it acts only on explicit markers (native-language words like `deutsch`/`español`, foreign words for "audiobook" like `hörbuch`/`audiolibro`, bracketed/dashed country codes like `[PL]`/`-DK-`, and language names in bracketed or "X Edition" constructions), and an explicit English marker anywhere (including foreign words for "English", e.g. a release tagged `[Английский]`) always wins. Language names appearing bare in legitimate English titles ("The Russian", "French Kiss", "Ancient Greek Literature") are deliberately not flagged.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added

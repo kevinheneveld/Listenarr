@@ -72,6 +72,19 @@ namespace Listenarr.Api.Services.Scoring
                 score.ScoreBreakdown["RelevancePercent"] = (int)Math.Round(relevance * 100);
             }
 
+            // Language check — reject foreign-language editions when the profile's
+            // preferred languages don't include the detected language. Only fires
+            // on explicit markers in the title (language names, [DE]/-FR- codes,
+            // foreign words for "audiobook"), so a release tagged "[Английский]"
+            // (Russian for "English") is correctly kept.
+            if (LanguageFilter.ShouldReject(searchResult.Title, profile.PreferredLanguages, out var foreignLang))
+            {
+                score.RejectionReasons.Add(
+                    $"Detected {foreignLang} edition; profile prefers {string.Join("/", profile.PreferredLanguages)}");
+                score.TotalScore = -1;
+                return score;
+            }
+
             // Helper normalizers
             static string? NormalizeToken(string? s)
             {
