@@ -236,6 +236,17 @@
         <nav class="sidebar-nav">
           <div class="nav-section">
             <RouterLink
+              to="/dashboard"
+              class="nav-item"
+              @mouseenter="preload('dashboard')"
+              @focus="preload('dashboard')"
+              @touchstart.passive="preload('dashboard')"
+              @click="closeMobileMenu"
+            >
+              <PhChartLineUp />
+              <span>Dashboard</span>
+            </RouterLink>
+            <RouterLink
               :to="{ path: '/audiobooks', query: { group: 'books' } }"
               class="nav-item"
               :class="{
@@ -569,6 +580,7 @@ import {
   PhCheckCircle,
   PhList,
   PhFolderOpen,
+  PhChartLineUp,
 } from '@phosphor-icons/vue'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'

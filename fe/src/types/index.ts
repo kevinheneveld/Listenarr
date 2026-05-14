@@ -1085,3 +1085,123 @@ export interface RenameResult {
   error?: string
   renamedFiles: FileRenameResultItem[]
 }
+
+// ── Dashboard / library stats ──────────────────────────────────────────────
+
+export type ActivityGranularity = 'Day' | 'Week' | 'Month'
+
+export interface LibraryOverviewStats {
+  totalBooks: number
+  monitoredBooks: number
+  unmonitoredBooks: number
+  booksWithFiles: number
+  booksWithoutFiles: number
+  totalFiles: number
+  totalSizeBytes: number
+  totalDurationHours: number
+  averageDurationHours: number
+}
+
+export interface MetadataCompletenessStats {
+  totalBooks: number
+  missingCoverArt: number
+  missingAsin: number
+  missingIsbn: number
+  missingGenres: number
+  missingNarrators: number
+  missingDescription: number
+  missingPublisher: number
+  missingLanguage: number
+  missingPublishDate: number
+  missingRuntime: number
+  missingSeriesPosition: number
+  overallCompletenessPercent: number
+}
+
+export interface SeriesStats {
+  totalSeries: number
+  completeSeries: number
+  incompleteSeries: number
+  unknownCompletenessSeries: number
+  booksInSeries: number
+  standaloneBooks: number
+  missingBooksAcrossSeries: number
+}
+
+export interface AuthorBookCount {
+  author: string
+  count: number
+}
+
+export interface AuthorStats {
+  totalAuthors: number
+  topAuthors: AuthorBookCount[]
+}
+
+export interface NarratorBookCount {
+  narrator: string
+  count: number
+}
+
+export interface NarratorStats {
+  totalNarrators: number
+  topNarrators: NarratorBookCount[]
+}
+
+export interface CodecCount {
+  codec: string
+  count: number
+}
+
+export interface BitrateBucket {
+  label: string
+  count: number
+}
+
+export interface QualityStats {
+  byCodec: CodecCount[]
+  byBitrate: BitrateBucket[]
+}
+
+export interface ActivityBucket {
+  label: string
+  periodStart: string
+  count: number
+}
+
+export interface ActivityStats {
+  granularity: ActivityGranularity
+  booksAddedByPeriod: ActivityBucket[]
+  totalImports: number
+  failedImports: number
+  importSuccessRate: number
+}
+
+export interface GenreCount {
+  genre: string
+  count: number
+}
+
+export interface DurationBucket {
+  label: string
+  count: number
+}
+
+export interface LanguageCount {
+  language: string
+  count: number
+}
+
+export interface LibraryStats {
+  overview: LibraryOverviewStats
+  metadataCompleteness: MetadataCompletenessStats
+  series: SeriesStats
+  authors: AuthorStats
+  narrators: NarratorStats
+  quality: QualityStats
+  activity: ActivityStats
+  topGenres: GenreCount[]
+  durationDistribution: DurationBucket[]
+  languages: LanguageCount[]
+  generatedAt: string
+}
