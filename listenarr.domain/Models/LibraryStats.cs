@@ -28,6 +28,7 @@ namespace Listenarr.Domain.Models
         public MetadataCompletenessStats MetadataCompleteness { get; set; } = new();
         public SeriesStats Series { get; set; } = new();
         public AuthorStats Authors { get; set; } = new();
+        public NarratorStats Narrators { get; set; } = new();
         public QualityStats Quality { get; set; } = new();
         public ActivityStats Activity { get; set; } = new();
         public List<GenreCount> TopGenres { get; set; } = new();
@@ -103,6 +104,18 @@ namespace Listenarr.Domain.Models
     public class AuthorBookCount
     {
         public string Author { get; set; } = string.Empty;
+        public int Count { get; set; }
+    }
+
+    public class NarratorStats
+    {
+        public int TotalNarrators { get; set; }
+        public List<NarratorBookCount> TopNarrators { get; set; } = new();
+    }
+
+    public class NarratorBookCount
+    {
+        public string Narrator { get; set; } = string.Empty;
         public int Count { get; set; }
     }
 
