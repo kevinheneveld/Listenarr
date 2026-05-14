@@ -38,7 +38,7 @@ namespace Listenarr.Api.Services.Scoring
             _logger = logger;
         }
 
-        public async Task<QualityScore> Score(SearchResult searchResult, QualityProfile profile)
+        public async Task<QualityScore> Score(SearchResult searchResult, QualityProfile profile, Audiobook? audiobook = null)
         {
             // Mirror existing QualityProfileService semantics, but organized and configurable
             var score = new QualityScore
@@ -48,6 +48,29 @@ namespace Listenarr.Api.Services.Scoring
                 ScoreBreakdown = new Dictionary<string, int>(),
                 RejectionReasons = new List<string>()
             };
+
+            // Relevance check — only applied when an audiobook context is provided
+            // (i.e., automatic search). Rejects results whose title doesn't share
+            // enough significant tokens with the audiobook's title + authors.
+            // Prevents indexer results like a Patterson Hood concert recording
+            // matching a James Patterson audiobook on the single shared surname.
+            if (audiobook != null)
+            {
+                var relevance = RelevanceFilter.ComputeRelevance(
+                    searchResult.Title,
+                    audiobook.Title,
+                    audiobook.Authors);
+                if (relevance < RelevanceFilter.DefaultMinRelevance)
+                {
+                    var pct = (int)Math.Round(relevance * 100);
+                    var minPct = (int)Math.Round(RelevanceFilter.DefaultMinRelevance * 100);
+                    score.RejectionReasons.Add(
+                        $"Title not relevant to '{audiobook.Title}' (overlap {pct}% < {minPct}% threshold)");
+                    score.TotalScore = -1;
+                    return score;
+                }
+                score.ScoreBreakdown["RelevancePercent"] = (int)Math.Round(relevance * 100);
+            }
 
             // Helper normalizers
             static string? NormalizeToken(string? s)

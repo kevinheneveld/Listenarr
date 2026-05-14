@@ -195,8 +195,10 @@ namespace Listenarr.Api.Services
             var searchQuery = BuildSearchQuery(audiobook);
             _logger.LogInformation("Searching for audiobook '{Title}' with query: {Query}", audiobook.Title, searchQuery);
 
-            // Search for results
-            var searchResults = await searchService.SearchAsync(searchQuery, isAutomaticSearch: true);
+            // Search for results. Restrict to the Newznab "Books > Audiobook" category
+            // (3030) so music-only indexers configured in Prowlarr without a category
+            // restriction don't return concert/album torrents for audiobook queries.
+            var searchResults = await searchService.SearchAsync(searchQuery, category: "3030", isAutomaticSearch: true);
             _logger.LogInformation("Found {Count} raw search results for audiobook '{Title}'", searchResults.Count, audiobook.Title);
 
             // Broadcast detailed debug info about the raw search results to help diagnose automatic search failures
@@ -230,8 +232,9 @@ namespace Listenarr.Api.Services
                 return 0;
             }
 
-            // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile);
+            // Score results against quality profile. Pass the audiobook so the
+            // scorer can apply the title/author relevance check.
+            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile, audiobook);
 
             // Log all scored results for debugging
             _logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, audiobook.Title);

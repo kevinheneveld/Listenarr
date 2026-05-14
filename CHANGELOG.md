@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.72]
+
+### Fixed
+- **Automatic search no longer grabs music albums when looking for audiobooks:** The search-result scorer didn't compare result titles against the audiobook being searched, so any title sharing a single token (e.g., an author's surname) could be queued as a download. A Patterson Hood concert recording could be matched to a James Patterson audiobook. Two defensive layers added: (a) the scorer now receives the audiobook and rejects results whose title shares less than 30% of the audiobook's significant title/author tokens, with a stop-word-filtered token-overlap comparison, and (b) automatic searches now restrict the indexer query to the Newznab `Books > Audiobook` category (3030) so music-only indexers configured without category filtering in Prowlarr no longer return concert/album torrents for audiobook queries.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
