@@ -27,6 +27,13 @@ namespace Listenarr.Application.Interfaces.Repositories
     /// </summary>
     public interface ILibraryStatsRepository
     {
-        Task<LibraryStats> GetLibraryStatsAsync(CancellationToken ct = default);
+        /// <param name="activityGranularity">Bucket size for the activity time-series.</param>
+        /// <param name="activityPeriods">
+        /// Number of buckets in the activity window (clamped to a sane range).
+        /// </param>
+        Task<LibraryStats> GetLibraryStatsAsync(
+            ActivityGranularity activityGranularity = ActivityGranularity.Month,
+            int activityPeriods = 12,
+            CancellationToken ct = default);
     }
 }

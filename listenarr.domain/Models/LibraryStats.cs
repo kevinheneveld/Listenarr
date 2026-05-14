@@ -124,9 +124,25 @@ namespace Listenarr.Domain.Models
         public int Count { get; set; }
     }
 
+    /// <summary>Time granularity for the activity time-series.</summary>
+    public enum ActivityGranularity
+    {
+        Day,
+        Week,
+        Month,
+    }
+
     public class ActivityStats
     {
-        public List<MonthlyCount> BooksAddedByMonth { get; set; } = new();
+        /// <summary>Granularity the time-series buckets were computed at.</summary>
+        public ActivityGranularity Granularity { get; set; } = ActivityGranularity.Month;
+
+        /// <summary>
+        /// Books added per period, oldest bucket first, one entry per period in
+        /// the requested window (zero-filled).
+        /// </summary>
+        public List<ActivityBucket> BooksAddedByPeriod { get; set; } = new();
+
         public int TotalImports { get; set; }
         public int FailedImports { get; set; }
 
@@ -134,10 +150,17 @@ namespace Listenarr.Domain.Models
         public double ImportSuccessRate { get; set; }
     }
 
-    public class MonthlyCount
+    public class ActivityBucket
     {
-        /// <summary>Month bucket as "yyyy-MM".</summary>
-        public string Month { get; set; } = string.Empty;
+        /// <summary>
+        /// Human-readable bucket label: "yyyy-MM-dd" for day/week (week = start
+        /// date), "yyyy-MM" for month.
+        /// </summary>
+        public string Label { get; set; } = string.Empty;
+
+        /// <summary>UTC start of the bucket, inclusive.</summary>
+        public DateTime PeriodStart { get; set; }
+
         public int Count { get; set; }
     }
 
