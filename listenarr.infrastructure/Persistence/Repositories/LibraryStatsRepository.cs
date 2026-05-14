@@ -34,6 +34,7 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
     {
         private const int TopGenreCount = 15;
         private const int TopAuthorCount = 15;
+        private const int TopNarratorCount = 15;
         private const int MinActivityPeriods = 1;
         private const int MaxActivityPeriods = 365;
 
@@ -83,6 +84,7 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                     .GroupBy(s => s.SeriesNameNormalized)
                     .ToDictionary(g => g.Key, g => g.Max(x => x.CatalogCount))),
                 Authors = BuildAuthorStats(books),
+                Narrators = BuildNarratorStats(books),
                 Quality = BuildQualityStats(books),
                 Activity = BuildActivityStats(addedHistory, importEvents, activityGranularity, periods),
                 TopGenres = BuildTopGenres(books),
@@ -281,6 +283,28 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             {
                 TotalAuthors = byAuthor.Count,
                 TopAuthors = byAuthor.Take(TopAuthorCount).ToList(),
+            };
+        }
+
+        // ── Narrators ────────────────────────────────────────────────────────
+
+        private static NarratorStats BuildNarratorStats(List<Audiobook> books)
+        {
+            var byNarrator = books
+                .Where(b => b.Narrators != null)
+                .SelectMany(b => b.Narrators!)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Select(n => n.Trim())
+                .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new NarratorBookCount { Narrator = g.First(), Count = g.Count() })
+                .OrderByDescending(n => n.Count)
+                .ThenBy(n => n.Narrator, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            return new NarratorStats
+            {
+                TotalNarrators = byNarrator.Count,
+                TopNarrators = byNarrator.Take(TopNarratorCount).ToList(),
             };
         }
 

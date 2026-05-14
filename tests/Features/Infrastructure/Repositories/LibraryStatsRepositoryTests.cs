@@ -214,13 +214,14 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
         // ── Genres / authors / languages / quality ───────────────────────────
 
         [Fact]
-        public async Task GetLibraryStats_GenresAuthorsLanguages_AreGroupedAndCounted()
+        public async Task GetLibraryStats_GenresAuthorsNarratorsLanguages_AreGroupedAndCounted()
         {
             using var db = NewDb();
             db.Audiobooks.Add(new Audiobook
             {
                 Title = "A",
                 Authors = new List<string> { "Asimov" },
+                Narrators = new List<string> { "Scott Brick", "Grover Gardner" },
                 Genres = new List<string> { "Sci-Fi", "Classic" },
                 Language = "english",
             });
@@ -228,6 +229,7 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             {
                 Title = "B",
                 Authors = new List<string> { "Asimov" },
+                Narrators = new List<string> { "scott brick" },
                 Genres = new List<string> { "Sci-Fi" },
                 Language = "English",
             });
@@ -240,6 +242,10 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             Assert.Equal(1, stats.TopGenres.First(g => g.Genre == "Classic").Count);
             Assert.Equal(1, stats.Authors.TotalAuthors);
             Assert.Equal(2, stats.Authors.TopAuthors.Single().Count);
+            // Narrators are grouped case-insensitively, same as authors.
+            Assert.Equal(2, stats.Narrators.TotalNarrators);
+            Assert.Equal(2, stats.Narrators.TopNarrators.First(n => n.Narrator == "Scott Brick").Count);
+            Assert.Equal(1, stats.Narrators.TopNarrators.First(n => n.Narrator == "Grover Gardner").Count);
             // "english"/"English" collapse to one bucket; missing → "Unknown".
             Assert.Equal(2, stats.Languages.First(l => l.Language == "English").Count);
             Assert.Equal(1, stats.Languages.First(l => l.Language == "Unknown").Count);
