@@ -17,6 +17,7 @@
  */
 using Microsoft.AspNetCore.Mvc;
 using Listenarr.Application.Repositories;
+using Listenarr.Domain.Models;
 
 namespace Listenarr.Api.Controllers
 {
@@ -41,13 +42,23 @@ namespace Listenarr.Api.Controllers
         /// metadata completeness, series completeness, genre/duration/language
         /// distributions, quality breakdown, author coverage, and recent activity.
         /// </summary>
+        /// <param name="activityGranularity">
+        /// Bucket size for the activity time-series: Day, Week, or Month (default Month).
+        /// </param>
+        /// <param name="activityPeriods">
+        /// Number of buckets in the activity window (default 12, clamped to 1-365).
+        /// </param>
+        /// <param name="ct">Cancellation token.</param>
         [HttpGet("stats")]
-        public async Task<IActionResult> GetStats(CancellationToken ct)
+        public async Task<IActionResult> GetStats(
+            [FromQuery] ActivityGranularity activityGranularity = ActivityGranularity.Month,
+            [FromQuery] int activityPeriods = 12,
+            CancellationToken ct = default)
         {
-            var stats = await _libraryStats.GetLibraryStatsAsync(ct);
+            var stats = await _libraryStats.GetLibraryStatsAsync(activityGranularity, activityPeriods, ct);
             _logger.LogDebug(
-                "Dashboard stats computed: {TotalBooks} books, {TotalSeries} series",
-                stats.Overview.TotalBooks, stats.Series.TotalSeries);
+                "Dashboard stats computed: {TotalBooks} books, {TotalSeries} series, activity {Granularity}x{Periods}",
+                stats.Overview.TotalBooks, stats.Series.TotalSeries, activityGranularity, activityPeriods);
             return Ok(stats);
         }
     }

@@ -290,13 +290,69 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             db.DownloadHistories.Add(new DownloadHistory { DownloadId = "3", EventType = DownloadHistoryEventType.ImportFailed });
             await db.SaveChangesAsync();
 
+            // Default granularity is monthly, 12 periods.
             var activity = (await new LibraryStatsRepository(db).GetLibraryStatsAsync()).Activity;
 
-            Assert.Equal(12, activity.BooksAddedByMonth.Count);
-            Assert.Equal(2, activity.BooksAddedByMonth.Last().Count); // current month
+            Assert.Equal(ActivityGranularity.Month, activity.Granularity);
+            Assert.Equal(12, activity.BooksAddedByPeriod.Count);
+            Assert.Equal(2, activity.BooksAddedByPeriod.Last().Count); // current month
             Assert.Equal(2, activity.TotalImports);
             Assert.Equal(1, activity.FailedImports);
             Assert.Equal(66.7, activity.ImportSuccessRate);
+        }
+
+        [Fact]
+        public async Task GetLibraryStats_Activity_SupportsDailyGranularityAndWindowSize()
+        {
+            using var db = NewDb();
+            var now = DateTime.UtcNow;
+            db.History.Add(new History { EventType = "Added", Timestamp = now });
+            db.History.Add(new History { EventType = "Added", Timestamp = now.AddDays(-3) });
+            db.History.Add(new History { EventType = "Added", Timestamp = now.AddDays(-40) }); // outside 30-day window
+            await db.SaveChangesAsync();
+
+            var activity = (await new LibraryStatsRepository(db)
+                .GetLibraryStatsAsync(ActivityGranularity.Day, 30)).Activity;
+
+            Assert.Equal(ActivityGranularity.Day, activity.Granularity);
+            Assert.Equal(30, activity.BooksAddedByPeriod.Count);
+            Assert.Equal(1, activity.BooksAddedByPeriod.Last().Count);                 // today
+            Assert.Equal(1, activity.BooksAddedByPeriod[^4].Count);                    // 3 days ago
+            Assert.Equal(2, activity.BooksAddedByPeriod.Sum(b => b.Count));            // 40-days-ago excluded
+        }
+
+        [Fact]
+        public async Task GetLibraryStats_Activity_SupportsWeeklyGranularity()
+        {
+            using var db = NewDb();
+            var now = DateTime.UtcNow;
+            db.History.Add(new History { EventType = "Added", Timestamp = now });
+            db.History.Add(new History { EventType = "Added", Timestamp = now.AddDays(-8) }); // a previous week
+            await db.SaveChangesAsync();
+
+            var activity = (await new LibraryStatsRepository(db)
+                .GetLibraryStatsAsync(ActivityGranularity.Week, 8)).Activity;
+
+            Assert.Equal(ActivityGranularity.Week, activity.Granularity);
+            Assert.Equal(8, activity.BooksAddedByPeriod.Count);
+            Assert.Equal(2, activity.BooksAddedByPeriod.Sum(b => b.Count));
+            // Weeks start on Monday — bucket starts are 7 days apart and ascending.
+            for (var i = 1; i < activity.BooksAddedByPeriod.Count; i++)
+            {
+                Assert.Equal(
+                    activity.BooksAddedByPeriod[i - 1].PeriodStart.AddDays(7),
+                    activity.BooksAddedByPeriod[i].PeriodStart);
+            }
+        }
+
+        [Fact]
+        public async Task GetLibraryStats_Activity_ClampsAbsurdPeriodCounts()
+        {
+            using var db = NewDb();
+            var activity = (await new LibraryStatsRepository(db)
+                .GetLibraryStatsAsync(ActivityGranularity.Day, 100_000)).Activity;
+
+            Assert.Equal(365, activity.BooksAddedByPeriod.Count);
         }
 
         // ── Empty library ────────────────────────────────────────────────────
@@ -312,7 +368,7 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             Assert.Equal(0, stats.Series.TotalSeries);
             Assert.Equal(0, stats.Activity.ImportSuccessRate);
             Assert.Empty(stats.TopGenres);
-            Assert.Equal(12, stats.Activity.BooksAddedByMonth.Count);
+            Assert.Equal(12, stats.Activity.BooksAddedByPeriod.Count);
         }
     }
 }

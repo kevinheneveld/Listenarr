@@ -34,7 +34,8 @@ namespace Listenarr.Infrastructure.Repositories
     {
         private const int TopGenreCount = 15;
         private const int TopAuthorCount = 15;
-        private const int ActivityMonths = 12;
+        private const int MinActivityPeriods = 1;
+        private const int MaxActivityPeriods = 365;
 
         private readonly ListenArrDbContext _db;
 
@@ -43,8 +44,13 @@ namespace Listenarr.Infrastructure.Repositories
             _db = db;
         }
 
-        public async Task<LibraryStats> GetLibraryStatsAsync(CancellationToken ct = default)
+        public async Task<LibraryStats> GetLibraryStatsAsync(
+            ActivityGranularity activityGranularity = ActivityGranularity.Month,
+            int activityPeriods = 12,
+            CancellationToken ct = default)
         {
+            var periods = Math.Clamp(activityPeriods, MinActivityPeriods, MaxActivityPeriods);
+
             var books = await _db.Audiobooks
                 .AsNoTracking()
                 .Include(a => a.Files)
@@ -78,7 +84,7 @@ namespace Listenarr.Infrastructure.Repositories
                     .ToDictionary(g => g.Key, g => g.Max(x => x.CatalogCount))),
                 Authors = BuildAuthorStats(books),
                 Quality = BuildQualityStats(books),
-                Activity = BuildActivityStats(addedHistory, importEvents),
+                Activity = BuildActivityStats(addedHistory, importEvents, activityGranularity, periods),
                 TopGenres = BuildTopGenres(books),
                 DurationDistribution = BuildDurationDistribution(books),
                 Languages = BuildLanguages(books),
@@ -321,18 +327,11 @@ namespace Listenarr.Infrastructure.Repositories
 
         private static ActivityStats BuildActivityStats(
             List<DateTime> addedTimestamps,
-            List<DownloadHistoryEventType> importEvents)
+            List<DownloadHistoryEventType> importEvents,
+            ActivityGranularity granularity,
+            int periods)
         {
-            var now = DateTime.UtcNow;
-            var months = new List<MonthlyCount>();
-            for (var i = ActivityMonths - 1; i >= 0; i--)
-            {
-                var month = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(-i);
-                var label = month.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-                var count = addedTimestamps.Count(t =>
-                    t.Year == month.Year && t.Month == month.Month);
-                months.Add(new MonthlyCount { Month = label, Count = count });
-            }
+            var buckets = BuildActivityBuckets(addedTimestamps, granularity, periods);
 
             var imported = importEvents.Count(e => e == DownloadHistoryEventType.Imported);
             var failed = importEvents.Count(e => e == DownloadHistoryEventType.ImportFailed);
@@ -340,10 +339,85 @@ namespace Listenarr.Infrastructure.Repositories
 
             return new ActivityStats
             {
-                BooksAddedByMonth = months,
+                Granularity = granularity,
+                BooksAddedByPeriod = buckets,
                 TotalImports = imported,
                 FailedImports = failed,
                 ImportSuccessRate = total == 0 ? 0 : Math.Round(100.0 * imported / total, 1),
+            };
+        }
+
+        /// <summary>
+        /// Produces a zero-filled, oldest-first series of <paramref name="periods"/>
+        /// buckets ending with the period containing "now", at the requested
+        /// granularity, and counts how many timestamps fall in each.
+        /// </summary>
+        private static List<ActivityBucket> BuildActivityBuckets(
+            List<DateTime> timestamps,
+            ActivityGranularity granularity,
+            int periods)
+        {
+            var currentStart = PeriodStart(DateTime.UtcNow, granularity);
+
+            // Bucket starts, oldest first.
+            var starts = new List<DateTime>(periods);
+            for (var i = periods - 1; i >= 0; i--)
+            {
+                starts.Add(AddPeriods(currentStart, granularity, -i));
+            }
+
+            var buckets = starts
+                .Select(start => new ActivityBucket
+                {
+                    PeriodStart = start,
+                    Label = start.ToString(
+                        granularity == ActivityGranularity.Month ? "yyyy-MM" : "yyyy-MM-dd",
+                        CultureInfo.InvariantCulture),
+                    Count = 0,
+                })
+                .ToList();
+
+            var windowStart = starts[0];
+            var windowEnd = AddPeriods(currentStart, granularity, 1);
+            foreach (var ts in timestamps)
+            {
+                var t = ts.Kind == DateTimeKind.Utc ? ts : ts.ToUniversalTime();
+                if (t < windowStart || t >= windowEnd)
+                {
+                    continue;
+                }
+
+                var start = PeriodStart(t, granularity);
+                var bucket = buckets.FirstOrDefault(b => b.PeriodStart == start);
+                if (bucket != null)
+                {
+                    bucket.Count++;
+                }
+            }
+
+            return buckets;
+        }
+
+        private static DateTime PeriodStart(DateTime utc, ActivityGranularity granularity)
+        {
+            var date = utc.Date;
+            return granularity switch
+            {
+                ActivityGranularity.Day => DateTime.SpecifyKind(date, DateTimeKind.Utc),
+                // Weeks start on Monday.
+                ActivityGranularity.Week => DateTime.SpecifyKind(
+                    date.AddDays(-((int)date.DayOfWeek + 6) % 7), DateTimeKind.Utc),
+                _ => new DateTime(date.Year, date.Month, 1, 0, 0, 0, DateTimeKind.Utc),
+            };
+        }
+
+        private static DateTime AddPeriods(DateTime start, ActivityGranularity granularity, int count)
+        {
+            return granularity switch
+            {
+                ActivityGranularity.Day => start.AddDays(count),
+                ActivityGranularity.Week => start.AddDays(7 * count),
+                _ => start.AddMonths(count),
             };
         }
 
