@@ -20,12 +20,14 @@ using System.Text.RegularExpressions;
 namespace Listenarr.Api.Services.Scoring
 {
     /// <summary>
-    /// Detects non-English release titles from explicit language markers, so the
-    /// scorer can reject foreign-language editions when the profile only wants
-    /// English. Conservative by design: it acts only on explicit markers
-    /// (language names, bracketed/dashed country codes, foreign words for
-    /// "audiobook"), never on a bare guess — a release tagged "[Английский]"
-    /// (Russian for "English") is correctly treated as English.
+    /// Detects the language of a release title from explicit language markers,
+    /// so the scorer can reject editions whose language is not among the
+    /// profile's preferred languages. Conservative by design: it acts only on
+    /// explicit markers (language names, bracketed/dashed country codes, foreign
+    /// words for "audiobook", foreign words for "English"), never on a bare
+    /// guess — a release tagged "[Английский]" (Russian for "English") is
+    /// correctly detected as English. A title with no marker at all returns
+    /// null (unknown) and is left alone.
     /// </summary>
     public static class LanguageFilter
     {
@@ -125,17 +127,19 @@ namespace Listenarr.Api.Services.Scoring
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
-        /// Returns the detected non-English language name if the title carries an
-        /// explicit non-English marker and no explicit English marker; else null.
+        /// Returns the detected language name if the title carries an explicit
+        /// language marker — "English" when an explicit English marker is
+        /// present, otherwise the detected foreign language. Returns null when
+        /// the title carries no confident marker at all.
         /// </summary>
-        public static string? DetectForeignLanguage(string? title)
+        public static string? DetectLanguage(string? title)
         {
             if (string.IsNullOrWhiteSpace(title)) return null;
             var lower = title.ToLowerInvariant();
 
-            // Explicit English marker anywhere → treat as English, full stop.
+            // Explicit English marker anywhere → it's English, full stop.
             if (EnglishMarkerPresent(title))
-                return null;
+                return "English";
 
             // Multi-word foreign phrases ("livre audio").
             foreach (var (phrase, lang) in BareForeignPhrases)
@@ -167,7 +171,7 @@ namespace Listenarr.Api.Services.Scoring
             foreach (Match m in CodeRe.Matches(title))
             {
                 var code = m.Groups[1].Value.ToLowerInvariant();
-                if (EnglishMarkers.Contains(code)) return null;
+                if (EnglishMarkers.Contains(code)) return "English";
                 if (LanguageCodes.TryGetValue(code, out var lang))
                     return lang;
             }
@@ -183,9 +187,9 @@ namespace Listenarr.Api.Services.Scoring
 
         /// <summary>
         /// Decide whether a result should be rejected for language. Rejects when a
-        /// foreign language is detected in the title and it is not among the
-        /// profile's preferred languages. Returns false (keep) when no preferred
-        /// languages are configured or no foreign marker is detected.
+        /// language is detected in the title and it is not among the profile's
+        /// preferred languages. Returns false (keep) when no preferred languages
+        /// are configured or no language marker is detected.
         /// </summary>
         public static bool ShouldReject(string? title, IEnumerable<string>? preferredLanguages, out string? detected)
         {
@@ -196,14 +200,14 @@ namespace Listenarr.Api.Services.Scoring
             if (prefs == null || prefs.Count == 0)
                 return false; // no language preference configured — don't filter
 
-            var foreign = DetectForeignLanguage(title);
-            if (foreign == null)
-                return false; // no confident foreign marker
+            var lang = DetectLanguage(title);
+            if (lang == null)
+                return false; // no confident language marker — leave it alone
 
-            if (prefs.Any(p => p.Equals(foreign, StringComparison.OrdinalIgnoreCase)))
+            if (prefs.Any(p => p.Equals(lang, StringComparison.OrdinalIgnoreCase)))
                 return false; // the detected language is explicitly wanted
 
-            detected = foreign;
+            detected = lang;
             return true;
         }
     }
