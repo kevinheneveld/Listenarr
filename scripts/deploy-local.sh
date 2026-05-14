@@ -1,33 +1,40 @@
 #!/usr/bin/env bash
-# deploy-local.sh — Build and deploy Listenarr to your-server.local
+# deploy-local.sh — Build and deploy Listenarr to the live Docker container on media
 #
 # Always deploys from the kevin/live branch — the personal integration branch
 # that stacks all of Kevin's fixes and features on top of upstream canary.
 # See CLAUDE.md "Branch Strategy" for the full explanation.
 #
+# This script is [personal] infrastructure — it reflects Kevin's specific setup:
+#   - Clyde (this Mac) has no `docker` binary, so the image is built on media.
+#   - SSH to media uses the `media` alias in ~/.ssh/config (root@192.168.1.35).
+#   - Media runs the standalone `docker-compose` v2.x binary, not the `docker compose` plugin.
+#
 # Usage:
-#   ./scripts/deploy-local.sh                      # Full deploy from kevin/live (tests → build → deploy → smoke)
-#   ./scripts/deploy-local.sh --skip-tests         # Skip test run (hotfixes only)
+#   ./scripts/deploy-local.sh                      # Full deploy from kevin/live (sync source → build on media → swap compose → health → smoke)
+#   ./scripts/deploy-local.sh --skip-tests         # Skip backend test run (hotfixes only)
 #   ./scripts/deploy-local.sh --tag listenarr:abc  # Use an explicit image tag
 #   ./scripts/deploy-local.sh --dry-run            # Show what would happen, don't actually deploy
 #
 # Requirements:
-#   - Docker installed and running locally
-#   - SSH access to your-server.local (key-based auth recommended)
-#   - your-server.local has Docker and the compose file at /srv/listenarr/docker-compose.yml
+#   - SSH access to `media` (alias for root@192.168.1.35); Docker on media
+#   - rsync installed locally
+#   - dotnet installed locally if running tests (--skip-tests bypasses)
+#   - media has the compose file at /srv/listenarr/docker-compose.yml
 
 set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
-MEDIA_HOST="${MEDIA_HOST:-your-server.local}"
-MEDIA_USER="${MEDIA_USER:-kevin}"
+MEDIA_SSH="${MEDIA_SSH:-media}"            # SSH alias from ~/.ssh/config → root@192.168.1.35
+MEDIA_IP="${MEDIA_IP:-192.168.1.35}"       # Used for HTTP health checks from Clyde
+BUILD_DIR_REMOTE="${BUILD_DIR_REMOTE:-/root/listenarr-build/listenarr-src}"
 COMPOSE_DIR="/srv/listenarr"
 CONFIG_DIR="${COMPOSE_DIR}/config"
 TIMESTAMP=$(date +%Y%m%d-%H%M)
-DEPLOY_BRANCH="kevin/live"          # always deploy from the integration branch
+DEPLOY_BRANCH="kevin/live"
 DEFAULT_TAG="listenarr:local-${TIMESTAMP}"
-HEALTH_URL="http://${MEDIA_HOST}:4545/"
-HEALTH_TIMEOUT=30   # seconds to wait for container to come up
+HEALTH_URL="http://${MEDIA_IP}:4545/"
+HEALTH_TIMEOUT=30
 
 # ── Flags ────────────────────────────────────────────────────────────────────
 SKIP_TESTS=false
@@ -48,7 +55,7 @@ done
 log()  { echo "[deploy] $*"; }
 warn() { echo "[deploy] WARNING: $*" >&2; }
 die()  { echo "[deploy] ERROR: $*" >&2; exit 1; }
-ssh_media() { ssh "${MEDIA_USER}@${MEDIA_HOST}" "$@"; }
+ssh_media() { ssh "${MEDIA_SSH}" "$@"; }
 
 if [[ "$DRY_RUN" == true ]]; then
   log "DRY RUN — showing steps only, not executing"
@@ -62,7 +69,9 @@ log "Starting deploy: tag=${TAG}, skip_tests=${SKIP_TESTS}"
 
 # Confirm kevin/live exists
 git rev-parse --verify "${DEPLOY_BRANCH}" > /dev/null 2>&1 \
-  || die "Branch '${DEPLOY_BRANCH}' does not exist. Create it first:\n  git checkout canary && git checkout -b kevin/live\n  Then merge your feature branches into it."
+  || die "Branch '${DEPLOY_BRANCH}' does not exist. Create it first:
+  git checkout canary && git checkout -b kevin/live
+  Then merge your feature branches into it."
 
 # Warn if not on kevin/live (we build from HEAD, so branch matters)
 CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached")
@@ -76,29 +85,30 @@ if [[ "$CURRENT_BRANCH" != "$DEPLOY_BRANCH" ]]; then
   fi
 fi
 
-# Confirm SSH access to your-server.local
+# Confirm SSH access to media
 if [[ "$DRY_RUN" == false ]]; then
-  ssh_media "echo 'SSH OK'" || die "Cannot SSH to ${MEDIA_HOST}. Check your SSH config."
+  ssh_media "echo SSH OK" > /dev/null || die "Cannot SSH to '${MEDIA_SSH}'. Check ~/.ssh/config."
 fi
 
-# Check for a config backup on your-server.local
-log "Checking for config backup on your-server.local..."
+# ── Config backup ────────────────────────────────────────────────────────────
+log "Checking for a recent config backup on media..."
 if [[ "$DRY_RUN" == false ]]; then
-  BACKUP_EXISTS=$(ssh_media "ls ${CONFIG_DIR}.bak 2>/dev/null && echo yes || echo no")
-  if [[ "$BACKUP_EXISTS" != "yes" ]]; then
-    warn "No config backup found at ${CONFIG_DIR}.bak"
-    warn "Creating a backup now before proceeding..."
+  # Real backups are timestamped: ${CONFIG_DIR}.bak.YYYYMMDD-HHMM
+  BACKUP_FOUND=$(ssh_media "ls -d ${CONFIG_DIR}.bak.* 2>/dev/null | tail -1 || true")
+  if [[ -z "$BACKUP_FOUND" ]]; then
+    warn "No timestamped backup found matching ${CONFIG_DIR}.bak.*"
+    warn "Creating one now before proceeding..."
     ssh_media "cp -r ${CONFIG_DIR} ${CONFIG_DIR}.bak.${TIMESTAMP}" \
       && log "Backup created: ${CONFIG_DIR}.bak.${TIMESTAMP}" \
       || die "Could not create config backup. Aborting for safety."
   else
-    log "Config backup exists — proceeding"
+    log "Existing backup found: ${BACKUP_FOUND}"
   fi
 fi
 
 # Note current image for rollback reference
 if [[ "$DRY_RUN" == false ]]; then
-  CURRENT_IMAGE=$(ssh_media "docker ps --filter name=listenarr --format '{{.Image}}' 2>/dev/null || echo unknown")
+  CURRENT_IMAGE=$(ssh_media "docker ps --filter name=listenarr --format '{{.Image}}'" 2>/dev/null || echo "unknown")
   log "Current live image: ${CURRENT_IMAGE} (rollback target if needed)"
 fi
 
@@ -106,50 +116,59 @@ fi
 if [[ "$SKIP_TESTS" == true ]]; then
   warn "Skipping tests (--skip-tests flag set)"
 else
-  log "Running tests..."
+  log "Running backend tests..."
   if [[ "$DRY_RUN" == false ]]; then
     (cd tests && dotnet test --logger "console;verbosity=minimal") \
       || die "Tests failed — aborting deploy. Use --skip-tests to override."
-    log "Tests passed"
+    log "Backend tests passed"
   else
     log "[dry-run] Would run: cd tests && dotnet test"
   fi
 fi
 
-# ── Build ────────────────────────────────────────────────────────────────────
-log "Building Docker image: ${TAG}"
+# ── Sync source to media ─────────────────────────────────────────────────────
+log "Syncing source to ${MEDIA_SSH}:${BUILD_DIR_REMOTE}..."
 if [[ "$DRY_RUN" == false ]]; then
-  docker build -t "${TAG}" . \
-    || die "Docker build failed"
-  log "Build complete"
+  ssh_media "mkdir -p '${BUILD_DIR_REMOTE}'"
+  rsync -a --delete \
+    --exclude='node_modules' \
+    --exclude='fe/node_modules' \
+    --exclude='fe/dist' \
+    --exclude='fe/cypress/screenshots' \
+    --exclude='fe/cypress/videos' \
+    --exclude='**/bin/' \
+    --exclude='**/obj/' \
+    --exclude='.git/objects/pack' \
+    ./ "${MEDIA_SSH}:${BUILD_DIR_REMOTE}/" \
+    || die "rsync to ${MEDIA_SSH} failed"
+  log "Source synced"
 else
-  log "[dry-run] Would run: docker build -t ${TAG} ."
+  log "[dry-run] Would rsync ./ to ${MEDIA_SSH}:${BUILD_DIR_REMOTE}/"
 fi
 
-# ── Transfer image to your-server.local ────────────────────────────────────────────
-log "Transferring image to ${MEDIA_HOST}..."
+# ── Build on media ───────────────────────────────────────────────────────────
+log "Building Docker image on ${MEDIA_SSH}: ${TAG}"
 if [[ "$DRY_RUN" == false ]]; then
-  docker save "${TAG}" | ssh "${MEDIA_USER}@${MEDIA_HOST}" "docker load" \
-    || die "Image transfer failed"
-  log "Image transferred"
+  ssh_media "cd '${BUILD_DIR_REMOTE}' && docker build -t '${TAG}' ." \
+    || die "Docker build on ${MEDIA_SSH} failed"
+  log "Build complete"
 else
-  log "[dry-run] Would run: docker save ${TAG} | ssh ${MEDIA_USER}@${MEDIA_HOST} docker load"
+  log "[dry-run] Would run: ssh ${MEDIA_SSH} 'cd ${BUILD_DIR_REMOTE} && docker build -t ${TAG} .'"
 fi
 
 # ── Update compose and restart ───────────────────────────────────────────────
-log "Updating compose file and restarting container on ${MEDIA_HOST}..."
+log "Updating compose file and restarting container on ${MEDIA_SSH}..."
 if [[ "$DRY_RUN" == false ]]; then
   ssh_media "
+    set -e
     cd ${COMPOSE_DIR}
-    # Update the image tag in docker-compose.yml
-    sed -i.bak \"s|image: listenarr:.*|image: ${TAG}|\" docker-compose.yml
-    # Restart
-    docker compose down
-    docker compose up -d
-  " || die "Failed to restart container on your-server.local"
+    sed -i.bak-${TIMESTAMP} 's|image: listenarr:.*|image: ${TAG}|' docker-compose.yml
+    docker-compose down
+    docker-compose up -d
+  " || die "Failed to restart container on ${MEDIA_SSH}"
   log "Container restarted"
 else
-  log "[dry-run] Would update image tag in compose and restart container on ${MEDIA_HOST}"
+  log "[dry-run] Would sed-edit compose tag → ${TAG} and run docker-compose down && docker-compose up -d"
 fi
 
 # ── Health check ─────────────────────────────────────────────────────────────
@@ -158,7 +177,7 @@ if [[ "$DRY_RUN" == false ]]; then
   ELAPSED=0
   until curl -sf "${HEALTH_URL}" > /dev/null 2>&1; do
     if [[ $ELAPSED -ge $HEALTH_TIMEOUT ]]; then
-      die "Container did not become healthy within ${HEALTH_TIMEOUT}s. Check logs: ssh ${MEDIA_USER}@${MEDIA_HOST} 'docker logs listenarr'"
+      die "Container did not become healthy within ${HEALTH_TIMEOUT}s. Check logs: ssh ${MEDIA_SSH} 'docker logs listenarr --tail 50'"
     fi
     sleep 2
     ELAPSED=$((ELAPSED + 2))
@@ -171,13 +190,16 @@ fi
 # ── Smoke test ───────────────────────────────────────────────────────────────
 log "Running smoke tests..."
 if [[ "$DRY_RUN" == false ]]; then
-  ./scripts/smoke-test.sh || warn "Smoke tests had failures — check output above"
+  LISTENARR_HOST="${MEDIA_IP}" ./scripts/smoke-test.sh || warn "Smoke tests had failures — check output above"
 else
-  log "[dry-run] Would run: ./scripts/smoke-test.sh"
+  log "[dry-run] Would run: LISTENARR_HOST=${MEDIA_IP} ./scripts/smoke-test.sh"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 log "Deploy complete!"
 log "  Image:       ${TAG}"
 log "  Live URL:    https://your-host.example"
-log "  Rollback:    ssh ${MEDIA_USER}@${MEDIA_HOST} 'cd ${COMPOSE_DIR} && sed -i \"s|image: .*|image: ${CURRENT_IMAGE:-<previous-tag>}|\" docker-compose.yml && docker compose up -d'"
+log "  Note:        For frontend bundle changes, also load the SPA in a browser"
+log "               (incognito preferred) and watch the console. HTTP smoke is"
+log "               necessary but not sufficient for JS module-init failures."
+log "  Rollback:    ssh ${MEDIA_SSH} 'cd ${COMPOSE_DIR} && sed -i \"s|image: .*|image: ${CURRENT_IMAGE:-<previous-tag>}|\" docker-compose.yml && docker-compose up -d'"

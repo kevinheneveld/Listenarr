@@ -60,7 +60,7 @@ echo "Results: ${PASS} passed, ${FAIL} failed"
 if [[ $FAIL -gt 0 ]]; then
   echo ""
   echo "To check container logs:"
-  echo "  ssh kevin@your-server.local 'docker logs listenarr --tail 50'"
+  echo "  ssh media 'docker logs listenarr --tail 50'"
   exit 1
 fi
 
