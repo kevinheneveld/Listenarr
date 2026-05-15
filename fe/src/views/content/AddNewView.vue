@@ -838,6 +838,15 @@
                     : 'Add to Library'
                 }}
               </button>
+              <button
+                v-if="resultSeriesName(book)"
+                class="btn btn-secondary"
+                @click="addSeries(book)"
+                :title="`Bulk-add every book in '${resultSeriesName(book)}'`"
+              >
+                <PhStack />
+                Add series
+              </button>
             </div>
           </div>
         </div>
@@ -2751,9 +2760,22 @@ const closeAddLibraryModal = () => {
   showAddLibraryModal.value = false
 }
 
-// Best-effort series-name extraction from a search result. Returns null when
-// the result has no series, so the "Add series" button can stay hidden.
-function resultSeriesName(result: AudibleBookMetadata | undefined | null): string | null {
+// Best-effort series-name extraction from a search result. Duck-typed because
+// the Add New page renders two distinct result shapes — the Audible result
+// path (AudibleBookMetadata) and the titles-search path (TitleSearchResult,
+// which carries series info via .searchResult).
+interface SeriesBearingResult {
+  series?: string
+  seriesList?: string[]
+  seriesAsin?: string
+  searchResult?: {
+    series?: string
+    seriesList?: string[]
+    seriesAsin?: string
+  }
+}
+
+function resultSeriesName(result: SeriesBearingResult | undefined | null): string | null {
   if (!result) return null
   const candidates: Array<string | undefined> = [
     result.seriesList?.[0],
@@ -2767,11 +2789,11 @@ function resultSeriesName(result: AudibleBookMetadata | undefined | null): strin
   return null
 }
 
-function resultSeriesAsin(result: AudibleBookMetadata | undefined | null): string | undefined {
-  return result?.seriesAsin || undefined
+function resultSeriesAsin(result: SeriesBearingResult | undefined | null): string | undefined {
+  return result?.seriesAsin || result?.searchResult?.seriesAsin || undefined
 }
 
-const addSeries = (result: AudibleBookMetadata) => {
+const addSeries = (result: SeriesBearingResult) => {
   // Same root-folder gate as the single-add path — having a destination is
   // required before any add can succeed.
   if (rootFoldersStore.folders.length === 0 && !configStore.applicationSettings?.outputPath) {
