@@ -656,6 +656,11 @@ export interface Audiobook {
   wanted?: boolean
   // Server-computed list status used by slim /library responses.
   status?: AudiobookStatus
+  // Client-side flag set by the library store when the server returned an
+  // empty imageUrl (before the store rewrites it to an /images/{asin}
+  // placeholder). Lets filters like "missing cover art" distinguish a real
+  // image from the placeholder URL.
+  coverArtMissing?: boolean
 }
 
 export interface History {
@@ -1174,6 +1179,7 @@ export interface ActivityBucket {
 export interface ActivityStats {
   granularity: ActivityGranularity
   booksAddedByPeriod: ActivityBucket[]
+  booksImportedByPeriod: ActivityBucket[]
   totalImports: number
   failedImports: number
   importSuccessRate: number
@@ -1181,12 +1187,14 @@ export interface ActivityStats {
 
 export interface GenreCount {
   genre: string
-  count: number
+  totalBooks: number
+  ownedBooks: number
 }
 
 export interface DurationBucket {
   label: string
-  count: number
+  totalBooks: number
+  ownedBooks: number
 }
 
 export interface LanguageCount {

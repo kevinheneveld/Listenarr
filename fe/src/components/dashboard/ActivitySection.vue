@@ -31,20 +31,27 @@ const emit = defineEmits<{ (e: 'change-granularity', value: ActivityGranularity)
 
 const granularities: ActivityGranularity[] = ['Day', 'Week', 'Month']
 
+// Two overlaid series so you can see the queue → arrival lag between when a
+// book was requested (added to the library) and when its file actually landed.
 const series = computed(() => [
-  { name: 'Books added', data: props.activity.booksAddedByPeriod.map((b) => b.count) },
+  { name: 'Requested', data: props.activity.booksAddedByPeriod.map((b) => b.count) },
+  { name: 'Imported', data: props.activity.booksImportedByPeriod.map((b) => b.count) },
 ])
 const options = computed(() => ({
   chart: { type: 'area' },
+  colors: ['#74c0fc', '#51cf66'],
   xaxis: {
+    // Both series share the same period bucketing; either label list works.
     categories: props.activity.booksAddedByPeriod.map((b) => b.label),
     labels: { rotate: -45, hideOverlappingLabels: true },
   },
   fill: {
     type: 'gradient',
-    gradient: { shadeIntensity: 0.4, opacityFrom: 0.5, opacityTo: 0.05 },
+    gradient: { shadeIntensity: 0.4, opacityFrom: 0.45, opacityTo: 0.05 },
   },
   markers: { size: 3 },
+  legend: { position: 'top' as const },
+  tooltip: { shared: true, y: { formatter: (v: number) => `${v} books` } },
 }))
 </script>
 

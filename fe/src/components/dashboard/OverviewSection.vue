@@ -56,6 +56,7 @@ const ownedPercent = computed(() =>
       :value="formatNumber(o.missingBooks)"
       sublabel="Tracked, no file yet"
       :tone="o.missingBooks > 0 ? 'warning' : 'success'"
+      :to="{ path: '/audiobooks', query: { group: 'books', missing: 'files' } }"
     />
     <MetricKpiCard
       :icon="PhEye"

@@ -15,28 +15,39 @@
   You should have received a copy of the GNU Affero General Public License
   along with this program. If not, see <https://www.gnu.org/licenses/>.
 -->
-<!-- A single KPI tile: big value, label, optional sub-label and icon. -->
+<!-- A single KPI tile: big value, label, optional sub-label and icon. When the
+     optional `to` prop is supplied, the tile becomes a clickable RouterLink. -->
 <script setup lang="ts">
 import type { Component } from 'vue'
+import type { RouteLocationRaw } from 'vue-router'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     label: string
     value: string | number
     sublabel?: string
     icon?: Component
     tone?: 'default' | 'success' | 'warning' | 'danger'
+    to?: RouteLocationRaw
   }>(),
   {
     sublabel: undefined,
     icon: undefined,
     tone: 'default',
+    to: undefined,
   },
 )
+
+const isLink = () => props.to !== undefined
 </script>
 
 <template>
-  <div class="kpi-card" :class="`tone-${tone}`">
+  <component
+    :is="isLink() ? 'router-link' : 'div'"
+    :to="to"
+    class="kpi-card"
+    :class="[`tone-${tone}`, { 'kpi-card--link': isLink() }]"
+  >
     <div class="kpi-icon" v-if="icon">
       <component :is="icon" />
     </div>
@@ -45,7 +56,7 @@ withDefaults(
       <div class="kpi-label">{{ label }}</div>
       <div class="kpi-sublabel" v-if="sublabel">{{ sublabel }}</div>
     </div>
-  </div>
+  </component>
 </template>
 
 <style scoped>
@@ -67,6 +78,16 @@ withDefaults(
 .kpi-card:hover {
   transform: translateY(-2px);
   border-color: #444;
+}
+
+.kpi-card--link {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.kpi-card--link:hover {
+  border-color: var(--brand-focus);
 }
 
 .kpi-card.tone-success {

@@ -73,8 +73,13 @@ namespace Listenarr.Infrastructure.Repositories
                 .AsNoTracking()
                 .Where(d => d.EventType == DownloadHistoryEventType.Imported
                             || d.EventType == DownloadHistoryEventType.ImportFailed)
-                .Select(d => d.EventType)
+                .Select(d => new { d.EventType, d.EventDate })
                 .ToListAsync(ct);
+            var importedTimestamps = importEvents
+                .Where(e => e.EventType == DownloadHistoryEventType.Imported)
+                .Select(e => e.EventDate)
+                .ToList();
+            var importEventTypes = importEvents.Select(e => e.EventType).ToList();
 
             return new LibraryStats
             {
@@ -86,7 +91,7 @@ namespace Listenarr.Infrastructure.Repositories
                 Authors = BuildAuthorStats(books),
                 Narrators = BuildNarratorStats(books),
                 Quality = BuildQualityStats(books),
-                Activity = BuildActivityStats(addedHistory, importEvents, activityGranularity, periods),
+                Activity = BuildActivityStats(addedHistory, importedTimestamps, importEventTypes, activityGranularity, periods),
                 TopGenres = BuildTopGenres(books),
                 DurationDistribution = BuildDurationDistribution(books),
                 Languages = BuildLanguages(books),
@@ -380,11 +385,13 @@ namespace Listenarr.Infrastructure.Repositories
 
         private static ActivityStats BuildActivityStats(
             List<DateTime> addedTimestamps,
+            List<DateTime> importedTimestamps,
             List<DownloadHistoryEventType> importEvents,
             ActivityGranularity granularity,
             int periods)
         {
-            var buckets = BuildActivityBuckets(addedTimestamps, granularity, periods);
+            var addedBuckets = BuildActivityBuckets(addedTimestamps, granularity, periods);
+            var importedBuckets = BuildActivityBuckets(importedTimestamps, granularity, periods);
 
             var imported = importEvents.Count(e => e == DownloadHistoryEventType.Imported);
             var failed = importEvents.Count(e => e == DownloadHistoryEventType.ImportFailed);
@@ -393,7 +400,8 @@ namespace Listenarr.Infrastructure.Repositories
             return new ActivityStats
             {
                 Granularity = granularity,
-                BooksAddedByPeriod = buckets,
+                BooksAddedByPeriod = addedBuckets,
+                BooksImportedByPeriod = importedBuckets,
                 TotalImports = imported,
                 FailedImports = failed,
                 ImportSuccessRate = total == 0 ? 0 : Math.Round(100.0 * imported / total, 1),
@@ -480,12 +488,17 @@ namespace Listenarr.Infrastructure.Repositories
         {
             return books
                 .Where(b => b.Genres != null)
-                .SelectMany(b => b.Genres!)
-                .Where(g => !string.IsNullOrWhiteSpace(g))
-                .Select(g => g.Trim())
-                .GroupBy(g => g, StringComparer.OrdinalIgnoreCase)
-                .Select(g => new GenreCount { Genre = g.First(), Count = g.Count() })
-                .OrderByDescending(g => g.Count)
+                .SelectMany(b => b.Genres!
+                    .Where(g => !string.IsNullOrWhiteSpace(g))
+                    .Select(g => (Genre: g.Trim(), Owned: IsOwned(b))))
+                .GroupBy(x => x.Genre, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new GenreCount
+                {
+                    Genre = g.First().Genre,
+                    TotalBooks = g.Count(),
+                    OwnedBooks = g.Count(x => x.Owned),
+                })
+                .OrderByDescending(g => g.TotalBooks)
                 .ThenBy(g => g.Genre, StringComparer.OrdinalIgnoreCase)
                 .Take(TopGenreCount)
                 .ToList();
@@ -505,12 +518,19 @@ namespace Listenarr.Infrastructure.Repositories
 
         private static List<DurationBucket> BuildDurationDistribution(List<Audiobook> books)
         {
-            var hours = books.Select(EffectiveDurationHours).ToList();
+            // Each book contributes (hours, owned-flag) to a single bucket so
+            // the bucket can be split into owned vs missing in the dashboard.
+            var entries = books.Select(b => (Hours: EffectiveDurationHours(b), Owned: IsOwned(b))).ToList();
             return DurationBuckets
-                .Select(bucket => new DurationBucket
+                .Select(bucket =>
                 {
-                    Label = bucket.Label,
-                    Count = hours.Count(bucket.Matches),
+                    var inBucket = entries.Where(e => bucket.Matches(e.Hours)).ToList();
+                    return new DurationBucket
+                    {
+                        Label = bucket.Label,
+                        TotalBooks = inBucket.Count,
+                        OwnedBooks = inBucket.Count(e => e.Owned),
+                    };
                 })
                 .ToList();
         }
