@@ -53,46 +53,63 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             Monitored = false,
         };
 
+        // A book the user actually owns — has a file on disk.
+        private static Audiobook OwnedBook(
+            string title,
+            string? series = null,
+            double durationSeconds = 3600,
+            long size = 1000) => new()
+        {
+            Title = title,
+            Series = series,
+            Files = new List<AudiobookFile>
+            {
+                new() { Path = $"/{title}.m4b", Size = size, DurationSeconds = durationSeconds },
+            },
+        };
+
         // ── Overview ─────────────────────────────────────────────────────────
 
         [Fact]
-        public async Task GetLibraryStats_Overview_CountsBooksFilesMonitoredAndDuration()
+        public async Task GetLibraryStats_Overview_CountsOwnedVsMissingMonitoredAndDuration()
         {
             using var db = NewDb();
-            var withFiles = FullyPopulatedBook("Foundation");
-            withFiles.Files = new List<AudiobookFile>
+            var owned = FullyPopulatedBook("Foundation");
+            owned.Files = new List<AudiobookFile>
             {
-                new() { Path = "/a.m4b", Size = 1000, DurationSeconds = 3600, Codec = "aac", Bitrate = 128000 },
-                new() { Path = "/b.m4b", Size = 2000, DurationSeconds = 7200, Codec = "aac", Bitrate = 128000 },
+                new() { Path = "/a.m4b", Size = 1000, DurationSeconds = 3600 },
+                new() { Path = "/b.m4b", Size = 2000, DurationSeconds = 7200 },
             };
-            db.Audiobooks.Add(withFiles);
-            db.Audiobooks.Add(EmptyBook("No Files Book"));
+            db.Audiobooks.Add(owned);
+            db.Audiobooks.Add(EmptyBook("No Files Book")); // tracked but not owned
             await db.SaveChangesAsync();
 
             var stats = await new LibraryStatsRepository(db).GetLibraryStatsAsync();
 
             Assert.Equal(2, stats.Overview.TotalBooks);
+            Assert.Equal(1, stats.Overview.OwnedBooks);
+            Assert.Equal(1, stats.Overview.MissingBooks);
             Assert.Equal(1, stats.Overview.MonitoredBooks);
             Assert.Equal(1, stats.Overview.UnmonitoredBooks);
-            Assert.Equal(1, stats.Overview.BooksWithFiles);
-            Assert.Equal(1, stats.Overview.BooksWithoutFiles);
-            Assert.Equal(2, stats.Overview.TotalFiles);
             Assert.Equal(3000, stats.Overview.TotalSizeBytes);
-            // File durations (3h total) win over the Runtime estimate.
+            // Duration counts owned books only; file durations (3h) beat the Runtime estimate.
             Assert.Equal(3.0, stats.Overview.TotalDurationHours);
+            Assert.Equal(3.0, stats.Overview.AverageDurationHours);
         }
 
         [Fact]
-        public async Task GetLibraryStats_Duration_FallsBackToRuntimeWhenNoFiles()
+        public async Task GetLibraryStats_Overview_ExcludesMissingBooksFromDuration()
         {
             using var db = NewDb();
-            // Runtime 600 min = 10 hrs, no files.
+            // Runtime 600 min = 10 hrs as metadata, but no file → not owned.
             db.Audiobooks.Add(FullyPopulatedBook("Runtime Only"));
             await db.SaveChangesAsync();
 
             var stats = await new LibraryStatsRepository(db).GetLibraryStatsAsync();
 
-            Assert.Equal(10.0, stats.Overview.TotalDurationHours);
+            // Not owned, so it contributes nothing to the owned-duration total...
+            Assert.Equal(0.0, stats.Overview.TotalDurationHours);
+            // ...but the duration distribution still buckets it via the Runtime fallback.
             Assert.Equal("10–20 hrs", Assert.Single(stats.DurationDistribution, d => d.Count == 1).Label);
         }
 
@@ -145,15 +162,19 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
         public async Task GetLibraryStats_Series_ClassifiesCompleteIncompleteAndUnknown()
         {
             using var db = NewDb();
-            // Foundation: own 1 of 3 cached → incomplete, missing 2.
-            db.Audiobooks.Add(new Audiobook { Title = "Foundation", Series = "Foundation" });
-            // Dune: own 2 of 2 cached → complete.
-            db.Audiobooks.Add(new Audiobook { Title = "Dune", Series = "Dune" });
-            db.Audiobooks.Add(new Audiobook { Title = "Dune Messiah", Series = "Dune" });
-            // Mystery: own 1, no cached catalog → unknown.
-            db.Audiobooks.Add(new Audiobook { Title = "Mystery One", Series = "Mystery" });
-            // Standalone.
-            db.Audiobooks.Add(new Audiobook { Title = "Standalone" });
+            // Foundation: own a file for 1, 1 more tracked-but-missing, catalog of 3 → incomplete, missing 2.
+            db.Audiobooks.Add(OwnedBook("Foundation", series: "Foundation"));
+            db.Audiobooks.Add(new Audiobook { Title = "Foundation and Empire", Series = "Foundation" });
+            // Dune: own files for both, catalog of 2 → complete.
+            db.Audiobooks.Add(OwnedBook("Dune", series: "Dune"));
+            db.Audiobooks.Add(OwnedBook("Dune Messiah", series: "Dune"));
+            // Wheel of Time: own 2, no cached catalog → real series, completeness unknown.
+            db.Audiobooks.Add(OwnedBook("The Eye of the World", series: "Wheel of Time"));
+            db.Audiobooks.Add(OwnedBook("The Great Hunt", series: "Wheel of Time"));
+            // Mystery: a single-book Audible "series", no catalog → folded into standalone.
+            db.Audiobooks.Add(OwnedBook("Mystery One", series: "Mystery"));
+            // A genuine standalone.
+            db.Audiobooks.Add(OwnedBook("Standalone"));
 
             db.SeriesCacheEntries.Add(new SeriesCacheEntry
             {
@@ -180,34 +201,80 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
 
             var series = (await new LibraryStatsRepository(db).GetLibraryStatsAsync()).Series;
 
-            Assert.Equal(3, series.TotalSeries);
-            Assert.Equal(1, series.CompleteSeries);
-            Assert.Equal(1, series.IncompleteSeries);
-            Assert.Equal(1, series.UnknownCompletenessSeries);
-            Assert.Equal(4, series.BooksInSeries);
-            Assert.Equal(1, series.StandaloneBooks);
-            Assert.Equal(2, series.MissingBooksAcrossSeries);
+            Assert.Equal(3, series.TotalSeries); // Foundation, Dune, Wheel of Time
+            Assert.Equal(1, series.CompleteSeries); // Dune
+            Assert.Equal(1, series.IncompleteSeries); // Foundation
+            Assert.Equal(1, series.UnknownCompletenessSeries); // Wheel of Time
+            Assert.Equal(6, series.BooksInSeries); // 2 + 2 + 2 tracked across real series
+            Assert.Equal(2, series.StandaloneBooks); // Mystery (folded) + Standalone
+            Assert.Equal(1, series.SingleBookSeriesFolded); // Mystery
+            Assert.Equal(2, series.MissingBooksAcrossSeries); // Foundation: 3 catalog - 1 owned
+        }
+
+        [Fact]
+        public async Task GetLibraryStats_Series_FoldsSingleBookSeriesIntoStandalone()
+        {
+            using var db = NewDb();
+            // Single-book "series", no catalog → folded.
+            db.Audiobooks.Add(OwnedBook("Solo", series: "Solo"));
+            // Single tracked book but a 1-entry catalog → still effectively size 1 → folded.
+            db.Audiobooks.Add(OwnedBook("Singleton", series: "Singleton"));
+            db.SeriesCacheEntries.Add(new SeriesCacheEntry
+            {
+                SeriesName = "Singleton",
+                SeriesNameNormalized = "singleton",
+                CatalogBooks = new List<CachedSeriesCatalogBook> { new() { Title = "Singleton" } },
+            });
+            // Two tracked books → a real series even with no catalog.
+            db.Audiobooks.Add(OwnedBook("Pair One", series: "Pair"));
+            db.Audiobooks.Add(OwnedBook("Pair Two", series: "Pair"));
+            // One tracked book, but the catalog says the series has 5 → a real (incomplete) series.
+            db.Audiobooks.Add(OwnedBook("Known Vol 1", series: "Known"));
+            db.SeriesCacheEntries.Add(new SeriesCacheEntry
+            {
+                SeriesName = "Known",
+                SeriesNameNormalized = "known",
+                CatalogBooks = Enumerable.Range(1, 5)
+                    .Select(i => new CachedSeriesCatalogBook { Title = $"Known Vol {i}" })
+                    .ToList(),
+            });
+            await db.SaveChangesAsync();
+
+            var series = (await new LibraryStatsRepository(db).GetLibraryStatsAsync()).Series;
+
+            Assert.Equal(2, series.TotalSeries); // Pair, Known
+            Assert.Equal(2, series.SingleBookSeriesFolded); // Solo, Singleton
+            Assert.Equal(2, series.StandaloneBooks); // Solo + Singleton, folded
+            Assert.Equal(3, series.BooksInSeries); // Pair (2) + Known (1)
+            Assert.Equal(1, series.IncompleteSeries); // Known: own 1 of 5
+            Assert.Equal(4, series.MissingBooksAcrossSeries); // Known: 5 - 1
         }
 
         [Fact]
         public async Task GetLibraryStats_Series_PrefersPrimaryMembershipOverSeriesField()
         {
             using var db = NewDb();
-            db.Audiobooks.Add(new Audiobook
+            // Two books, both whose primary membership says "Primary Series" while the
+            // legacy Series field says something else — they should group as one real series.
+            foreach (var title in new[] { "Crossover One", "Crossover Two" })
             {
-                Title = "Crossover",
-                Series = "Legacy Field Series",
-                SeriesMemberships = new List<AudiobookSeriesMembership>
+                db.Audiobooks.Add(new Audiobook
                 {
-                    new() { SeriesName = "Primary Series", IsPrimary = true, SortOrder = 0 },
-                },
-            });
+                    Title = title,
+                    Series = "Legacy Field Series",
+                    Files = new List<AudiobookFile> { new() { Path = $"/{title}.m4b" } },
+                    SeriesMemberships = new List<AudiobookSeriesMembership>
+                    {
+                        new() { SeriesName = "Primary Series", IsPrimary = true, SortOrder = 0 },
+                    },
+                });
+            }
             await db.SaveChangesAsync();
 
             var series = (await new LibraryStatsRepository(db).GetLibraryStatsAsync()).Series;
 
             Assert.Equal(1, series.TotalSeries);
-            Assert.Equal(1, series.BooksInSeries);
+            Assert.Equal(2, series.BooksInSeries);
             Assert.Equal(0, series.StandaloneBooks);
         }
 
@@ -217,6 +284,7 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
         public async Task GetLibraryStats_GenresAuthorsNarratorsLanguages_AreGroupedAndCounted()
         {
             using var db = NewDb();
+            // Book A is owned (has a file); book B is tracked but missing.
             db.Audiobooks.Add(new Audiobook
             {
                 Title = "A",
@@ -224,6 +292,7 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
                 Narrators = new List<string> { "Scott Brick", "Grover Gardner" },
                 Genres = new List<string> { "Sci-Fi", "Classic" },
                 Language = "english",
+                Files = new List<AudiobookFile> { new() { Path = "/a.m4b" } },
             });
             db.Audiobooks.Add(new Audiobook
             {
@@ -240,12 +309,22 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
 
             Assert.Equal(2, stats.TopGenres.First(g => g.Genre == "Sci-Fi").Count);
             Assert.Equal(1, stats.TopGenres.First(g => g.Genre == "Classic").Count);
+
+            // Authors: total tracked vs. actually owned.
             Assert.Equal(1, stats.Authors.TotalAuthors);
-            Assert.Equal(2, stats.Authors.TopAuthors.Single().Count);
-            // Narrators are grouped case-insensitively, same as authors.
+            var asimov = stats.Authors.TopAuthors.Single();
+            Assert.Equal(2, asimov.TotalBooks);
+            Assert.Equal(1, asimov.OwnedBooks);
+
+            // Narrators are grouped case-insensitively, same as authors, with the same split.
             Assert.Equal(2, stats.Narrators.TotalNarrators);
-            Assert.Equal(2, stats.Narrators.TopNarrators.First(n => n.Narrator == "Scott Brick").Count);
-            Assert.Equal(1, stats.Narrators.TopNarrators.First(n => n.Narrator == "Grover Gardner").Count);
+            var scottBrick = stats.Narrators.TopNarrators.First(n => n.Narrator == "Scott Brick");
+            Assert.Equal(2, scottBrick.TotalBooks);
+            Assert.Equal(1, scottBrick.OwnedBooks);
+            var groverGardner = stats.Narrators.TopNarrators.First(n => n.Narrator == "Grover Gardner");
+            Assert.Equal(1, groverGardner.TotalBooks);
+            Assert.Equal(1, groverGardner.OwnedBooks);
+
             // "english"/"English" collapse to one bucket; missing → "Unknown".
             Assert.Equal(2, stats.Languages.First(l => l.Language == "English").Count);
             Assert.Equal(1, stats.Languages.First(l => l.Language == "Unknown").Count);

@@ -1092,11 +1092,10 @@ export type ActivityGranularity = 'Day' | 'Week' | 'Month'
 
 export interface LibraryOverviewStats {
   totalBooks: number
+  ownedBooks: number
+  missingBooks: number
   monitoredBooks: number
   unmonitoredBooks: number
-  booksWithFiles: number
-  booksWithoutFiles: number
-  totalFiles: number
   totalSizeBytes: number
   totalDurationHours: number
   averageDurationHours: number
@@ -1125,12 +1124,14 @@ export interface SeriesStats {
   unknownCompletenessSeries: number
   booksInSeries: number
   standaloneBooks: number
+  singleBookSeriesFolded: number
   missingBooksAcrossSeries: number
 }
 
 export interface AuthorBookCount {
   author: string
-  count: number
+  totalBooks: number
+  ownedBooks: number
 }
 
 export interface AuthorStats {
@@ -1140,7 +1141,8 @@ export interface AuthorStats {
 
 export interface NarratorBookCount {
   narrator: string
-  count: number
+  totalBooks: number
+  ownedBooks: number
 }
 
 export interface NarratorStats {

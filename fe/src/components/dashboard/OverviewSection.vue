@@ -15,14 +15,15 @@
   You should have received a copy of the GNU Affero General Public License
   along with this program. If not, see <https://www.gnu.org/licenses/>.
 -->
+<!-- Book-centric overview: leads with books actually owned vs. tracked-but-missing. -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
   PhBooks,
+  PhBookOpen,
+  PhWarningCircle,
   PhEye,
   PhEyeSlash,
-  PhFiles,
-  PhWarningCircle,
   PhHardDrives,
   PhClock,
   PhTimer,
@@ -34,11 +35,28 @@ import type { LibraryOverviewStats } from '@/types'
 const props = defineProps<{ overview: LibraryOverviewStats }>()
 
 const o = computed(() => props.overview)
+const ownedPercent = computed(() =>
+  o.value.totalBooks > 0 ? Math.round((100 * o.value.ownedBooks) / o.value.totalBooks) : 0,
+)
 </script>
 
 <template>
   <div class="kpi-grid">
-    <MetricKpiCard :icon="PhBooks" label="Total books" :value="formatNumber(o.totalBooks)" />
+    <MetricKpiCard :icon="PhBooks" label="Total books tracked" :value="formatNumber(o.totalBooks)" />
+    <MetricKpiCard
+      :icon="PhBookOpen"
+      label="Books I have"
+      :value="formatNumber(o.ownedBooks)"
+      :sublabel="`${ownedPercent}% of tracked`"
+      tone="success"
+    />
+    <MetricKpiCard
+      :icon="PhWarningCircle"
+      label="Books missing"
+      :value="formatNumber(o.missingBooks)"
+      sublabel="Tracked, no file yet"
+      :tone="o.missingBooks > 0 ? 'warning' : 'success'"
+    />
     <MetricKpiCard
       :icon="PhEye"
       label="Monitored"
@@ -51,14 +69,6 @@ const o = computed(() => props.overview)
       :value="formatNumber(o.unmonitoredBooks)"
       :tone="o.unmonitoredBooks > 0 ? 'warning' : 'default'"
     />
-    <MetricKpiCard :icon="PhFiles" label="Audio files" :value="formatNumber(o.totalFiles)" />
-    <MetricKpiCard
-      :icon="PhWarningCircle"
-      label="Books without files"
-      :value="formatNumber(o.booksWithoutFiles)"
-      :sublabel="`${formatNumber(o.booksWithFiles)} have files`"
-      :tone="o.booksWithoutFiles > 0 ? 'warning' : 'success'"
-    />
     <MetricKpiCard
       :icon="PhHardDrives"
       label="Library size"
@@ -66,13 +76,15 @@ const o = computed(() => props.overview)
     />
     <MetricKpiCard
       :icon="PhClock"
-      label="Total duration"
+      label="Owned duration"
       :value="formatHours(o.totalDurationHours)"
+      sublabel="Across books I have"
     />
     <MetricKpiCard
       :icon="PhTimer"
       label="Average length"
       :value="formatHours(o.averageDurationHours)"
+      sublabel="Per owned book"
     />
   </div>
 </template>

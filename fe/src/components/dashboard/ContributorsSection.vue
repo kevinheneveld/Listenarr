@@ -15,7 +15,9 @@
   You should have received a copy of the GNU Affero General Public License
   along with this program. If not, see <https://www.gnu.org/licenses/>.
 -->
-<!-- Authors and narrators side by side: total counts plus top-N by book count. -->
+<!-- Authors and narrators side by side. Each top-N bar is stacked: books the
+     user actually has vs. tracked-but-missing — so a big "400 books" number
+     doesn't hide that only a handful are owned. -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import DashboardChart from './DashboardChart.vue'
@@ -27,35 +29,35 @@ const props = defineProps<{
   narrators: NarratorStats
 }>()
 
-function topChartOptions(categories: string[], color: string) {
+// Shared stacked-bar options: green "have" + amber "missing".
+function stackedOptions(categories: string[]) {
   return {
-    chart: { type: 'bar' },
+    chart: { type: 'bar', stacked: true },
     plotOptions: { bar: { horizontal: true, borderRadius: 3, barHeight: '70%' } },
     xaxis: { categories },
-    colors: [color],
-    dataLabels: { enabled: true, style: { colors: ['#1a1a1a'] } },
+    colors: ['#51cf66', '#ffa500'],
+    legend: { position: 'top' as const },
+    tooltip: { y: { formatter: (v: number) => `${v} books` } },
   }
 }
 
+const authorCategories = computed(() => props.authors.topAuthors.map((a) => a.author))
 const authorSeries = computed(() => [
-  { name: 'Books', data: props.authors.topAuthors.map((a) => a.count) },
+  { name: 'Have', data: props.authors.topAuthors.map((a) => a.ownedBooks) },
+  {
+    name: 'Missing',
+    data: props.authors.topAuthors.map((a) => a.totalBooks - a.ownedBooks),
+  },
 ])
-const authorOptions = computed(() =>
-  topChartOptions(
-    props.authors.topAuthors.map((a) => a.author),
-    '#2196f3',
-  ),
-)
 
+const narratorCategories = computed(() => props.narrators.topNarrators.map((n) => n.narrator))
 const narratorSeries = computed(() => [
-  { name: 'Books', data: props.narrators.topNarrators.map((n) => n.count) },
+  { name: 'Have', data: props.narrators.topNarrators.map((n) => n.ownedBooks) },
+  {
+    name: 'Missing',
+    data: props.narrators.topNarrators.map((n) => n.totalBooks - n.ownedBooks),
+  },
 ])
-const narratorOptions = computed(() =>
-  topChartOptions(
-    props.narrators.topNarrators.map((n) => n.narrator),
-    '#b197fc',
-  ),
-)
 </script>
 
 <template>
@@ -69,8 +71,8 @@ const narratorOptions = computed(() =>
         v-if="authors.topAuthors.length"
         type="bar"
         :series="authorSeries"
-        :options="authorOptions"
-        :height="Math.max(200, authors.topAuthors.length * 26)"
+        :options="stackedOptions(authorCategories)"
+        :height="Math.max(220, authors.topAuthors.length * 28)"
       />
       <p v-else class="empty">No author data yet.</p>
     </div>
@@ -84,8 +86,8 @@ const narratorOptions = computed(() =>
         v-if="narrators.topNarrators.length"
         type="bar"
         :series="narratorSeries"
-        :options="narratorOptions"
-        :height="Math.max(200, narrators.topNarrators.length * 26)"
+        :options="stackedOptions(narratorCategories)"
+        :height="Math.max(220, narrators.topNarrators.length * 28)"
       />
       <p v-else class="empty">No narrator data yet.</p>
     </div>

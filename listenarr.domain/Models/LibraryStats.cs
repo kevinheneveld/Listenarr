@@ -40,13 +40,21 @@ namespace Listenarr.Domain.Models
     public class LibraryOverviewStats
     {
         public int TotalBooks { get; set; }
+
+        /// <summary>Books whose file(s) are present on disk — the books actually owned.</summary>
+        public int OwnedBooks { get; set; }
+
+        /// <summary>Tracked books with no file present yet (wanted / not downloaded).</summary>
+        public int MissingBooks { get; set; }
+
         public int MonitoredBooks { get; set; }
         public int UnmonitoredBooks { get; set; }
-        public int BooksWithFiles { get; set; }
-        public int BooksWithoutFiles { get; set; }
-        public int TotalFiles { get; set; }
         public long TotalSizeBytes { get; set; }
+
+        /// <summary>Total duration across owned books (hours).</summary>
         public double TotalDurationHours { get; set; }
+
+        /// <summary>Average duration per owned book (hours).</summary>
         public double AverageDurationHours { get; set; }
     }
 
@@ -90,6 +98,12 @@ namespace Listenarr.Domain.Models
         public int StandaloneBooks { get; set; }
 
         /// <summary>
+        /// Books whose only "series" was a single-book Audible series, folded
+        /// into StandaloneBooks rather than counted as a real series.
+        /// </summary>
+        public int SingleBookSeriesFolded { get; set; }
+
+        /// <summary>
         /// Sum of catalog gaps across all series with a known catalog.
         /// </summary>
         public int MissingBooksAcrossSeries { get; set; }
@@ -104,7 +118,12 @@ namespace Listenarr.Domain.Models
     public class AuthorBookCount
     {
         public string Author { get; set; } = string.Empty;
-        public int Count { get; set; }
+
+        /// <summary>Books by this author tracked in the library (owned or wanted).</summary>
+        public int TotalBooks { get; set; }
+
+        /// <summary>Of those, books whose file(s) are present on disk.</summary>
+        public int OwnedBooks { get; set; }
     }
 
     public class NarratorStats
@@ -116,7 +135,12 @@ namespace Listenarr.Domain.Models
     public class NarratorBookCount
     {
         public string Narrator { get; set; } = string.Empty;
-        public int Count { get; set; }
+
+        /// <summary>Books with this narrator tracked in the library (owned or wanted).</summary>
+        public int TotalBooks { get; set; }
+
+        /// <summary>Of those, books whose file(s) are present on disk.</summary>
+        public int OwnedBooks { get; set; }
     }
 
     public class QualityStats

@@ -41,6 +41,14 @@ const donutOptions = {
 }
 
 const hasSeries = computed(() => s.value.totalSeries > 0)
+
+// Audible labels many standalone books as 1-member "series"; those are folded
+// into the standalone count rather than counted as real series.
+const standaloneSublabel = computed(() =>
+  s.value.singleBookSeriesFolded > 0
+    ? `incl. ${s.value.singleBookSeriesFolded.toLocaleString()} single-book Audible series`
+    : `${s.value.booksInSeries.toLocaleString()} in a series`,
+)
 </script>
 
 <template>
@@ -69,7 +77,7 @@ const hasSeries = computed(() => s.value.totalSeries > 0)
       :icon="PhBookmark"
       label="Standalone books"
       :value="formatNumber(s.standaloneBooks)"
-      :sublabel="`${formatNumber(s.booksInSeries)} in a series`"
+      :sublabel="standaloneSublabel"
     />
   </div>
 
