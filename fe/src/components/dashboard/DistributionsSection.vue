@@ -18,6 +18,7 @@
 <!-- Genre, duration, and language distributions. -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import DashboardChart from './DashboardChart.vue'
 import type { GenreCount, DurationBucket, LanguageCount } from '@/types'
 
@@ -27,6 +28,8 @@ const props = defineProps<{
   languages: LanguageCount[]
 }>()
 
+const router = useRouter()
+
 const hasGenres = computed(() => props.topGenres.length > 0)
 const hasLanguages = computed(() => props.languages.length > 0)
 const hasDurations = computed(() => props.durationDistribution.some((d) => d.totalBooks > 0))
@@ -35,17 +38,46 @@ const hasDurations = computed(() => props.durationDistribution.some((d) => d.tot
 // section uses, so the dashboard reads consistently.
 const STACK_COLORS = ['#51cf66', '#ffa500']
 
+function openGenre(idx: number, seriesIndex: number) {
+  const genre = props.topGenres[idx]?.genre
+  if (!genre) return
+  const query: Record<string, string> = { group: 'books', genre }
+  if (seriesIndex === 1) query.missing = 'files'
+  router.push({ path: '/audiobooks', query })
+}
+
+function openLanguage(idx: number) {
+  const lang = props.languages[idx]?.language
+  // The "Unknown" bucket has no good URL value — leave it inert.
+  if (!lang || lang === 'Unknown') return
+  router.push({ path: '/audiobooks', query: { group: 'books', language: lang } })
+}
+
 const genreSeries = computed(() => [
   { name: 'Have', data: props.topGenres.map((g) => g.ownedBooks) },
   { name: 'Missing', data: props.topGenres.map((g) => g.totalBooks - g.ownedBooks) },
 ])
 const genreOptions = computed(() => ({
-  chart: { type: 'bar', stacked: true },
+  chart: {
+    type: 'bar',
+    stacked: true,
+    events: {
+      dataPointSelection: (
+        _event: unknown,
+        _ctx: unknown,
+        opts: { dataPointIndex: number; seriesIndex: number },
+      ) => openGenre(opts.dataPointIndex, opts.seriesIndex),
+    },
+  },
   plotOptions: { bar: { horizontal: true, borderRadius: 3, barHeight: '70%' } },
   xaxis: { categories: props.topGenres.map((g) => g.genre) },
   colors: STACK_COLORS,
   legend: { position: 'top' as const },
-  tooltip: { y: { formatter: (v: number) => `${v} books` } },
+  states: {
+    hover: { filter: { type: 'lighten', value: 0.08 } },
+    active: { filter: { type: 'darken', value: 0.15 } },
+  },
+  tooltip: { y: { formatter: (v: number) => `${v} books · click to view list` } },
 }))
 
 const durationSeries = computed(() => [
@@ -66,10 +98,20 @@ const durationOptions = computed(() => ({
 
 const languageSeries = computed(() => props.languages.map((l) => l.count))
 const languageOptions = computed(() => ({
-  chart: { type: 'donut' },
+  chart: {
+    type: 'donut',
+    events: {
+      dataPointSelection: (
+        _event: unknown,
+        _ctx: unknown,
+        opts: { dataPointIndex: number },
+      ) => openLanguage(opts.dataPointIndex),
+    },
+  },
   labels: props.languages.map((l) => l.language),
   legend: { position: 'bottom' },
   plotOptions: { pie: { donut: { size: '62%' } } },
+  tooltip: { y: { formatter: (v: number) => `${v} books · click to view list` } },
 }))
 </script>
 

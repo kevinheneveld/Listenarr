@@ -150,13 +150,23 @@
       </div>
     </div>
 
-    <!-- Drill-down chip: shown when arriving from a dashboard "missing X" link -->
-    <div v-if="filterMissingLabel" class="missing-filter-chip" role="status">
+    <!-- Drill-down chip: shown when arriving from a dashboard link.
+         Composable — author/narrator/genre/language/missing can stack. -->
+    <div v-if="hasDrilldown" class="missing-filter-chip" role="status">
       <PhFunnel />
-      <span>
-        Filtered to books missing <strong>{{ filterMissingLabel }}</strong> ({{ audiobooks.length }})
+      <span class="drilldown-summary">
+        <span class="drilldown-prefix">Filtered to:</span>
+        <span v-for="(item, i) in activeDrilldownItems" :key="i" class="drilldown-item">
+          <span class="drilldown-item-label">{{ item.label }}:</span>
+          <strong>{{ item.value }}</strong>
+        </span>
+        <span class="drilldown-count">({{ audiobooks.length }} books)</span>
       </span>
-      <button class="missing-filter-clear" @click="clearMissingFilter" title="Clear filter">
+      <button
+        class="missing-filter-clear"
+        @click="clearDrilldownFilters"
+        title="Clear drill-down filters"
+      >
         <PhX />
       </button>
     </div>
@@ -994,16 +1004,59 @@ function bookMissesField(book: Audiobook, field: MissingField): boolean {
   }
 }
 
+// Drill-down filters carry the URL-driven scope from the dashboard. They
+// compose with each other, so a click on Patterson's Missing segment can land
+// on /audiobooks?author=Patterson&missing=files and the chip summarises both.
 const filterMissing = ref<MissingField | null>(
   isMissingFieldKey(route.query.missing) ? (route.query.missing as MissingField) : null,
 )
-const filterMissingLabel = computed(() =>
-  filterMissing.value ? MISSING_FIELD_LABELS[filterMissing.value] : null,
+const filterAuthor = ref<string | null>(
+  typeof route.query.author === 'string' ? route.query.author : null,
+)
+const filterNarrator = ref<string | null>(
+  typeof route.query.narrator === 'string' ? route.query.narrator : null,
+)
+const filterGenre = ref<string | null>(
+  typeof route.query.genre === 'string' ? route.query.genre : null,
 )
 
-function clearMissingFilter() {
+// When the URL carries ?language=, mirror it into filterLanguage (which the
+// existing toolbar quick-filter already owns) and remember it was URL-driven
+// so the chip's clear button can reset it.
+const filterLanguageFromUrl = ref(false)
+
+interface DrilldownChipItem {
+  label: string
+  value: string
+}
+
+const activeDrilldownItems = computed(() => {
+  const items: DrilldownChipItem[] = []
+  if (filterAuthor.value) items.push({ label: 'Author', value: filterAuthor.value })
+  if (filterNarrator.value) items.push({ label: 'Narrator', value: filterNarrator.value })
+  if (filterGenre.value) items.push({ label: 'Genre', value: filterGenre.value })
+  if (filterLanguageFromUrl.value && filterLanguage.value !== 'all') {
+    items.push({ label: 'Language', value: filterLanguage.value })
+  }
+  if (filterMissing.value) {
+    items.push({ label: 'Missing', value: MISSING_FIELD_LABELS[filterMissing.value] })
+  }
+  return items
+})
+
+const hasDrilldown = computed(() => activeDrilldownItems.value.length > 0)
+
+function clearDrilldownFilters() {
   filterMissing.value = null
-  const { missing: _omit, ...rest } = route.query as Record<string, unknown>
+  filterAuthor.value = null
+  filterNarrator.value = null
+  filterGenre.value = null
+  if (filterLanguageFromUrl.value) {
+    filterLanguage.value = 'all'
+    filterLanguageFromUrl.value = false
+  }
+  const { missing: _m, author: _a, narrator: _n, genre: _g, language: _l, ...rest } =
+    route.query as Record<string, unknown>
   router.replace({ path: '/audiobooks', query: rest as Record<string, string> })
 }
 
@@ -1201,6 +1254,27 @@ const filteredAndSortedAudiobooks = computed(() => {
   if (filterMissing.value) {
     const field = filterMissing.value
     filtered = filtered.filter((b) => bookMissesField(b, field))
+  }
+
+  // Drill-down: author, narrator, genre — matched case-insensitively to the
+  // canonical (trimmed) name the dashboard groups on.
+  if (filterAuthor.value) {
+    const target = filterAuthor.value.toLowerCase()
+    filtered = filtered.filter((b) =>
+      (b.authors || []).some((a) => (a || '').trim().toLowerCase() === target),
+    )
+  }
+  if (filterNarrator.value) {
+    const target = filterNarrator.value.toLowerCase()
+    filtered = filtered.filter((b) =>
+      (b.narrators || []).some((n) => (n || '').trim().toLowerCase() === target),
+    )
+  }
+  if (filterGenre.value) {
+    const target = filterGenre.value.toLowerCase()
+    filtered = filtered.filter((b) =>
+      (b.genres || []).some((g) => (g || '').trim().toLowerCase() === target),
+    )
   }
 
   // Sorting
@@ -1635,9 +1709,10 @@ function clearFilters() {
   filterLanguage.value = 'all'
   filterYear.value = 'all'
 
-  // Clear drill-down missing-field filter and strip it from the URL.
-  if (filterMissing.value) {
-    clearMissingFilter()
+  // Clear drill-down filters (missing/author/narrator/genre/language) and
+  // strip them from the URL.
+  if (hasDrilldown.value) {
+    clearDrilldownFilters()
   }
 
   // Clear search text and any custom filter selection (also remove persisted search value)
@@ -1712,6 +1787,48 @@ watch(
   () => route.query.missing,
   (m) => {
     filterMissing.value = isMissingFieldKey(m) ? (m as MissingField) : null
+  },
+  { immediate: true },
+)
+
+watch(
+  () => route.query.author,
+  (a) => {
+    filterAuthor.value = typeof a === 'string' && a.trim() ? a : null
+  },
+  { immediate: true },
+)
+
+watch(
+  () => route.query.narrator,
+  (n) => {
+    filterNarrator.value = typeof n === 'string' && n.trim() ? n : null
+  },
+  { immediate: true },
+)
+
+watch(
+  () => route.query.genre,
+  (g) => {
+    filterGenre.value = typeof g === 'string' && g.trim() ? g : null
+  },
+  { immediate: true },
+)
+
+// ?language=<name> sets the existing toolbar language filter and remembers it
+// was URL-driven so the drill-down chip's clear button resets it cleanly.
+watch(
+  () => route.query.language,
+  (l) => {
+    if (typeof l === 'string' && l.trim()) {
+      filterLanguage.value = l
+      filterLanguageFromUrl.value = true
+    } else if (filterLanguageFromUrl.value) {
+      // URL no longer carries language — leave filterLanguage where it is
+      // (the user may have changed it via the dropdown) but stop counting it
+      // as drill-down state.
+      filterLanguageFromUrl.value = false
+    }
   },
   { immediate: true },
 )
@@ -2462,6 +2579,39 @@ defineExpose({
 .missing-filter-chip strong {
   color: #fff;
   font-weight: 600;
+}
+
+.drilldown-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 0.65rem;
+}
+
+.drilldown-prefix {
+  color: #ccc;
+}
+
+.drilldown-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  padding: 0.1rem 0.5rem;
+  background: rgba(var(--brand-rgb), 0.15);
+  border: 1px solid rgba(var(--brand-rgb), 0.3);
+  border-radius: 4px;
+}
+
+.drilldown-item-label {
+  color: #999;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.drilldown-count {
+  color: #aaa;
+  font-size: 0.85rem;
 }
 
 .missing-filter-clear {
