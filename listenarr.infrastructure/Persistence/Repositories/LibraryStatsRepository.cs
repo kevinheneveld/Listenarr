@@ -96,22 +96,26 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
 
         // ── Overview ─────────────────────────────────────────────────────────
 
+        // A book is "owned" when its file(s) are present on disk. With no
+        // per-book expected-file-count, presence of any file is the proxy for
+        // "the user actually has this book".
+        private static bool IsOwned(Audiobook book) => book.Files is { Count: > 0 };
+
         private static LibraryOverviewStats BuildOverview(List<Audiobook> books)
         {
-            var withFiles = books.Where(b => b.Files != null && b.Files.Count > 0).ToList();
+            var owned = books.Where(IsOwned).ToList();
             return new LibraryOverviewStats
             {
                 TotalBooks = books.Count,
+                OwnedBooks = owned.Count,
+                MissingBooks = books.Count - owned.Count,
                 MonitoredBooks = books.Count(b => b.Monitored),
                 UnmonitoredBooks = books.Count(b => !b.Monitored),
-                BooksWithFiles = withFiles.Count,
-                BooksWithoutFiles = books.Count - withFiles.Count,
-                TotalFiles = books.Sum(b => b.Files?.Count ?? 0),
                 TotalSizeBytes = books.Sum(b => b.Files?.Sum(f => f.Size ?? 0) ?? 0),
-                TotalDurationHours = Math.Round(books.Sum(EffectiveDurationHours), 1),
-                AverageDurationHours = books.Count == 0
+                TotalDurationHours = Math.Round(owned.Sum(EffectiveDurationHours), 1),
+                AverageDurationHours = owned.Count == 0
                     ? 0
-                    : Math.Round(books.Sum(EffectiveDurationHours) / books.Count, 1),
+                    : Math.Round(owned.Sum(EffectiveDurationHours) / owned.Count, 1),
             };
         }
 
@@ -218,49 +222,64 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             List<Audiobook> books,
             Dictionary<string, int> catalogCountByNormalizedName)
         {
-            var booksBySeries = new Dictionary<string, int>();
-            var standalone = 0;
+            // normalized series name -> (books tracked in library, books owned on disk)
+            var bySeries = new Dictionary<string, (int Tracked, int Owned)>();
+            var standaloneTracked = 0;
 
             foreach (var book in books)
             {
                 var name = SeriesNameOf(book);
                 if (name == null)
                 {
-                    standalone++;
+                    standaloneTracked++;
                     continue;
                 }
 
                 var key = NormalizeSeriesName(name);
-                booksBySeries[key] = booksBySeries.GetValueOrDefault(key) + 1;
+                var cur = bySeries.GetValueOrDefault(key);
+                bySeries[key] = (cur.Tracked + 1, cur.Owned + (IsOwned(book) ? 1 : 0));
             }
 
-            var stats = new SeriesStats
-            {
-                TotalSeries = booksBySeries.Count,
-                StandaloneBooks = standalone,
-                BooksInSeries = booksBySeries.Values.Sum(),
-            };
+            var stats = new SeriesStats();
+            var booksInRealSeries = 0;
 
-            foreach (var (normalizedName, ownedCount) in booksBySeries)
+            foreach (var (normalizedName, counts) in bySeries)
             {
-                if (!catalogCountByNormalizedName.TryGetValue(normalizedName, out var catalogCount)
-                    || catalogCount <= 0)
+                catalogCountByNormalizedName.TryGetValue(normalizedName, out var catalogCount);
+
+                // Audible labels standalone books as 1-member "series". When neither
+                // the library nor the catalog shows 2+ books, it isn't a real series —
+                // fold it into the standalone count instead.
+                var effectiveSize = Math.Max(counts.Tracked, catalogCount);
+                if (effectiveSize <= 1)
                 {
-                    stats.UnknownCompletenessSeries++;
+                    stats.SingleBookSeriesFolded += counts.Tracked;
+                    standaloneTracked += counts.Tracked;
                     continue;
                 }
 
-                if (ownedCount >= catalogCount)
+                stats.TotalSeries++;
+                booksInRealSeries += counts.Tracked;
+
+                if (catalogCount <= 1)
+                {
+                    // Real series (2+ owned) but no usable cached catalog to compare against.
+                    stats.UnknownCompletenessSeries++;
+                }
+                else if (counts.Owned >= catalogCount)
                 {
                     stats.CompleteSeries++;
                 }
                 else
                 {
                     stats.IncompleteSeries++;
-                    stats.MissingBooksAcrossSeries += catalogCount - ownedCount;
+                    // Books I don't yet have a file for, against the known catalog size.
+                    stats.MissingBooksAcrossSeries += catalogCount - counts.Owned;
                 }
             }
 
+            stats.BooksInSeries = booksInRealSeries;
+            stats.StandaloneBooks = standaloneTracked;
             return stats;
         }
 
@@ -270,12 +289,17 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
         {
             var byAuthor = books
                 .Where(b => b.Authors != null)
-                .SelectMany(b => b.Authors!)
-                .Where(a => !string.IsNullOrWhiteSpace(a))
-                .Select(a => a.Trim())
-                .GroupBy(a => a, StringComparer.OrdinalIgnoreCase)
-                .Select(g => new AuthorBookCount { Author = g.First(), Count = g.Count() })
-                .OrderByDescending(a => a.Count)
+                .SelectMany(b => b.Authors!
+                    .Where(a => !string.IsNullOrWhiteSpace(a))
+                    .Select(a => (Author: a.Trim(), Owned: IsOwned(b))))
+                .GroupBy(x => x.Author, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new AuthorBookCount
+                {
+                    Author = g.First().Author,
+                    TotalBooks = g.Count(),
+                    OwnedBooks = g.Count(x => x.Owned),
+                })
+                .OrderByDescending(a => a.TotalBooks)
                 .ThenBy(a => a.Author, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -292,12 +316,17 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
         {
             var byNarrator = books
                 .Where(b => b.Narrators != null)
-                .SelectMany(b => b.Narrators!)
-                .Where(n => !string.IsNullOrWhiteSpace(n))
-                .Select(n => n.Trim())
-                .GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
-                .Select(g => new NarratorBookCount { Narrator = g.First(), Count = g.Count() })
-                .OrderByDescending(n => n.Count)
+                .SelectMany(b => b.Narrators!
+                    .Where(n => !string.IsNullOrWhiteSpace(n))
+                    .Select(n => (Narrator: n.Trim(), Owned: IsOwned(b))))
+                .GroupBy(x => x.Narrator, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new NarratorBookCount
+                {
+                    Narrator = g.First().Narrator,
+                    TotalBooks = g.Count(),
+                    OwnedBooks = g.Count(x => x.Owned),
+                })
+                .OrderByDescending(n => n.TotalBooks)
                 .ThenBy(n => n.Narrator, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
