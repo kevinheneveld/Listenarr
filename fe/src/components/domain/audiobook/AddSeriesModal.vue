@@ -346,13 +346,15 @@ function close() {
                   <span v-else class="checkbox-placeholder" aria-hidden="true">
                     <PhCheckCircle v-if="isOwned(book)" class="owned-icon" />
                   </span>
-                  <img
-                    v-if="book.imageUrl"
-                    :src="book.imageUrl"
-                    :alt="book.title"
-                    class="catalog-cover"
-                    loading="lazy"
-                  />
+                  <div class="catalog-cover-slot">
+                    <img
+                      v-if="book.imageUrl"
+                      :src="book.imageUrl"
+                      :alt="book.title"
+                      class="catalog-cover"
+                      loading="lazy"
+                    />
+                  </div>
                   <div class="catalog-meta">
                     <div class="catalog-title">
                       <span class="catalog-pos" v-if="book.seriesNumber">#{{ book.seriesNumber }}</span>
@@ -573,12 +575,20 @@ function close() {
   font-size: 1.1rem;
 }
 
-.catalog-cover {
+.catalog-cover-slot {
   width: 48px;
   height: 48px;
-  object-fit: cover;
   border-radius: 3px;
   background: #2a2a2a;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.catalog-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .catalog-meta {
