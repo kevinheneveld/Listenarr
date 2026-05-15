@@ -26,6 +26,16 @@ namespace Listenarr.Api.Services
             string? language = null,
             bool forceRefresh = false,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// True when a non-empty catalog for this series is already persisted in
+        /// the cache — lets callers skip series that don't need a fetch without
+        /// triggering one.
+        /// </summary>
+        Task<bool> HasCachedCatalogAsync(
+            string name,
+            string region = "us",
+            CancellationToken cancellationToken = default);
     }
 
     public sealed class SeriesCatalogFetchResult
