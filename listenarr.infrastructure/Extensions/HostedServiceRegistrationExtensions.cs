@@ -70,6 +70,10 @@ namespace Listenarr.Infrastructure.Extensions
             // Register background service for syncing monitored series catalogs
             services.AddHostedService<SeriesMonitoringBackgroundService>();
 
+            // Register background service that caches Audible catalogs for any
+            // series present in the library (not just monitored ones)
+            services.AddHostedService<SeriesCatalogBackfillService>();
+
             // Background installer for ffprobe - run in background so startup isn't blocked
             services.AddHostedService<FfmpegInstallBackgroundService>();
 

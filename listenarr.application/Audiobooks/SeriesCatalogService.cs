@@ -161,6 +161,24 @@ namespace Listenarr.Application.Audiobooks
             };
         }
 
+        public async Task<bool> HasCachedCatalogAsync(
+            string name,
+            string region = "us",
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Mirror the cache-lookup path GetCatalogAsync uses so the answer
+            // matches what GetCatalogAsync would consider a cache hit.
+            var cached = await ResolvePersistedCacheAsync(name.Trim(), NormalizeRegion(region));
+            return cached?.CatalogBooks is { Count: > 0 };
+        }
+
         private async Task<SeriesLookupItem?> ResolveSeriesAsync(
             string normalizedName,
             string region,
