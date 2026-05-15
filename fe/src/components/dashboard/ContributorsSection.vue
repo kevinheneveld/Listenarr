@@ -20,6 +20,7 @@
      doesn't hide that only a handful are owned. -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import DashboardChart from './DashboardChart.vue'
 import { formatNumber } from './format'
 import type { AuthorStats, NarratorStats } from '@/types'
@@ -29,15 +30,39 @@ const props = defineProps<{
   narrators: NarratorStats
 }>()
 
+const router = useRouter()
+
+// Click handler factory: navigates to /audiobooks scoped to the contributor.
+// The Missing segment (seriesIndex=1) adds &missing=files so the destination
+// list is only the books that contributor is missing.
+function makeClickHandler(getName: (idx: number) => string | undefined, key: 'author' | 'narrator') {
+  return (_event: unknown, _ctx: unknown, opts: { dataPointIndex: number; seriesIndex: number }) => {
+    const name = getName(opts.dataPointIndex)
+    if (!name) return
+    const query: Record<string, string> = { group: 'books', [key]: name }
+    if (opts.seriesIndex === 1) query.missing = 'files'
+    router.push({ path: '/audiobooks', query })
+  }
+}
+
 // Shared stacked-bar options: green "have" + amber "missing".
-function stackedOptions(categories: string[]) {
+function stackedOptions(
+  categories: string[],
+  onClick: (event: unknown, ctx: unknown, opts: { dataPointIndex: number; seriesIndex: number }) => void,
+) {
   return {
-    chart: { type: 'bar', stacked: true },
+    chart: { type: 'bar', stacked: true, events: { dataPointSelection: onClick } },
     plotOptions: { bar: { horizontal: true, borderRadius: 3, barHeight: '70%' } },
     xaxis: { categories },
     colors: ['#51cf66', '#ffa500'],
     legend: { position: 'top' as const },
-    tooltip: { y: { formatter: (v: number) => `${v} books` } },
+    states: {
+      hover: { filter: { type: 'lighten', value: 0.08 } },
+      active: { filter: { type: 'darken', value: 0.15 } },
+    },
+    tooltip: {
+      y: { formatter: (v: number) => `${v} books · click to view list` },
+    },
   }
 }
 
@@ -49,6 +74,12 @@ const authorSeries = computed(() => [
     data: props.authors.topAuthors.map((a) => a.totalBooks - a.ownedBooks),
   },
 ])
+const authorOptions = computed(() =>
+  stackedOptions(
+    authorCategories.value,
+    makeClickHandler((i) => props.authors.topAuthors[i]?.author, 'author'),
+  ),
+)
 
 const narratorCategories = computed(() => props.narrators.topNarrators.map((n) => n.narrator))
 const narratorSeries = computed(() => [
@@ -58,6 +89,12 @@ const narratorSeries = computed(() => [
     data: props.narrators.topNarrators.map((n) => n.totalBooks - n.ownedBooks),
   },
 ])
+const narratorOptions = computed(() =>
+  stackedOptions(
+    narratorCategories.value,
+    makeClickHandler((i) => props.narrators.topNarrators[i]?.narrator, 'narrator'),
+  ),
+)
 </script>
 
 <template>
@@ -71,7 +108,7 @@ const narratorSeries = computed(() => [
         v-if="authors.topAuthors.length"
         type="bar"
         :series="authorSeries"
-        :options="stackedOptions(authorCategories)"
+        :options="authorOptions"
         :height="Math.max(220, authors.topAuthors.length * 28)"
       />
       <p v-else class="empty">No author data yet.</p>
@@ -86,7 +123,7 @@ const narratorSeries = computed(() => [
         v-if="narrators.topNarrators.length"
         type="bar"
         :series="narratorSeries"
-        :options="stackedOptions(narratorCategories)"
+        :options="narratorOptions"
         :height="Math.max(220, narrators.topNarrators.length * 28)"
       />
       <p v-else class="empty">No narrator data yet.</p>
