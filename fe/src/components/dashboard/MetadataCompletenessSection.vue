@@ -19,30 +19,39 @@
      is a candidate set for a future backfill action (drill-down hook). -->
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import DashboardChart from './DashboardChart.vue'
 import type { MetadataCompletenessStats } from '@/types'
 
 const props = defineProps<{ completeness: MetadataCompletenessStats }>()
 
+const router = useRouter()
+
 const c = computed(() => props.completeness)
 
-// Ordered worst-first so the most-missing field is most prominent.
+// Each entry carries the `missing` URL param value matching AudiobooksView's
+// drill-down filter so clicking a bar navigates straight to the filtered list.
 const missingFields = computed(() => {
-  const fields: { label: string; count: number }[] = [
-    { label: 'Cover art', count: c.value.missingCoverArt },
-    { label: 'ASIN', count: c.value.missingAsin },
-    { label: 'ISBN', count: c.value.missingIsbn },
-    { label: 'Genres', count: c.value.missingGenres },
-    { label: 'Narrators', count: c.value.missingNarrators },
-    { label: 'Description', count: c.value.missingDescription },
-    { label: 'Publisher', count: c.value.missingPublisher },
-    { label: 'Language', count: c.value.missingLanguage },
-    { label: 'Publish date', count: c.value.missingPublishDate },
-    { label: 'Runtime', count: c.value.missingRuntime },
-    { label: 'Series position', count: c.value.missingSeriesPosition },
+  const fields: { label: string; count: number; missingKey: string }[] = [
+    { label: 'Cover art', count: c.value.missingCoverArt, missingKey: 'coverArt' },
+    { label: 'ASIN', count: c.value.missingAsin, missingKey: 'asin' },
+    { label: 'ISBN', count: c.value.missingIsbn, missingKey: 'isbn' },
+    { label: 'Genres', count: c.value.missingGenres, missingKey: 'genres' },
+    { label: 'Narrators', count: c.value.missingNarrators, missingKey: 'narrators' },
+    { label: 'Description', count: c.value.missingDescription, missingKey: 'description' },
+    { label: 'Publisher', count: c.value.missingPublisher, missingKey: 'publisher' },
+    { label: 'Language', count: c.value.missingLanguage, missingKey: 'language' },
+    { label: 'Publish date', count: c.value.missingPublishDate, missingKey: 'publishDate' },
+    { label: 'Runtime', count: c.value.missingRuntime, missingKey: 'runtime' },
+    { label: 'Series position', count: c.value.missingSeriesPosition, missingKey: 'seriesPosition' },
   ]
+  // Worst-first so the most-missing field is the most prominent bar.
   return fields.sort((a, b) => b.count - a.count)
 })
+
+function openDrilldown(missingKey: string) {
+  router.push({ path: '/audiobooks', query: { group: 'books', missing: missingKey } })
+}
 
 const gaugeSeries = computed(() => [c.value.overallCompletenessPercent])
 const gaugeOptions = {
@@ -72,13 +81,30 @@ const barSeries = computed(() => [
   { name: 'Books missing this field', data: missingFields.value.map((f) => f.count) },
 ])
 const barOptions = computed(() => ({
-  chart: { type: 'bar' },
+  chart: {
+    type: 'bar',
+    events: {
+      // ApexCharts dataPointSelection fires on a bar click; the index matches
+      // the category order so we can look up which missing-field bar was hit.
+      dataPointSelection: (_event: unknown, _ctx: unknown, opts: { dataPointIndex: number }) => {
+        const field = missingFields.value[opts.dataPointIndex]
+        if (field) openDrilldown(field.missingKey)
+      },
+    },
+  },
   plotOptions: { bar: { horizontal: true, borderRadius: 3, barHeight: '65%' } },
   xaxis: { categories: missingFields.value.map((f) => f.label) },
   colors: ['#ffa500'],
+  states: {
+    hover: { filter: { type: 'lighten', value: 0.1 } },
+    active: { filter: { type: 'darken', value: 0.15 } },
+  },
   dataLabels: {
     enabled: true,
     style: { colors: ['#1a1a1a'] },
+  },
+  tooltip: {
+    y: { formatter: (v: number) => `${v} books · click to view list` },
   },
 }))
 </script>
@@ -92,7 +118,10 @@ const barOptions = computed(() => ({
       </p>
     </div>
     <div class="missing-chart">
-      <h3>Books missing each field</h3>
+      <h3>
+        Books missing each field
+        <span class="hint">click a bar to see the books</span>
+      </h3>
       <DashboardChart type="bar" :series="barSeries" :options="barOptions" :height="360" />
     </div>
   </div>
@@ -117,10 +146,19 @@ const barOptions = computed(() => ({
 }
 
 .missing-chart h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   margin: 0 0 0.5rem;
   color: #ccc;
   font-size: 0.95rem;
   font-weight: 500;
+}
+
+.missing-chart .hint {
+  color: #777;
+  font-size: 0.75rem;
+  font-weight: 400;
 }
 
 @media (max-width: 900px) {

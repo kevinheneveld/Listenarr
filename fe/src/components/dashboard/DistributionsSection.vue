@@ -29,28 +29,39 @@ const props = defineProps<{
 
 const hasGenres = computed(() => props.topGenres.length > 0)
 const hasLanguages = computed(() => props.languages.length > 0)
-const hasDurations = computed(() => props.durationDistribution.some((d) => d.count > 0))
+const hasDurations = computed(() => props.durationDistribution.some((d) => d.totalBooks > 0))
+
+// Shared stacked have/missing colors — same palette the authors/narrators
+// section uses, so the dashboard reads consistently.
+const STACK_COLORS = ['#51cf66', '#ffa500']
 
 const genreSeries = computed(() => [
-  { name: 'Books', data: props.topGenres.map((g) => g.count) },
+  { name: 'Have', data: props.topGenres.map((g) => g.ownedBooks) },
+  { name: 'Missing', data: props.topGenres.map((g) => g.totalBooks - g.ownedBooks) },
 ])
 const genreOptions = computed(() => ({
-  chart: { type: 'bar' },
+  chart: { type: 'bar', stacked: true },
   plotOptions: { bar: { horizontal: true, borderRadius: 3, barHeight: '70%' } },
   xaxis: { categories: props.topGenres.map((g) => g.genre) },
-  colors: ['#63e6be'],
-  dataLabels: { enabled: true, style: { colors: ['#1a1a1a'] } },
+  colors: STACK_COLORS,
+  legend: { position: 'top' as const },
+  tooltip: { y: { formatter: (v: number) => `${v} books` } },
 }))
 
 const durationSeries = computed(() => [
-  { name: 'Books', data: props.durationDistribution.map((d) => d.count) },
+  { name: 'Have', data: props.durationDistribution.map((d) => d.ownedBooks) },
+  {
+    name: 'Missing',
+    data: props.durationDistribution.map((d) => d.totalBooks - d.ownedBooks),
+  },
 ])
 const durationOptions = computed(() => ({
-  chart: { type: 'bar' },
+  chart: { type: 'bar', stacked: true },
   plotOptions: { bar: { borderRadius: 3, columnWidth: '55%' } },
   xaxis: { categories: props.durationDistribution.map((d) => d.label) },
-  colors: ['#74c0fc'],
-  dataLabels: { enabled: true, style: { colors: ['#fff'] } },
+  colors: STACK_COLORS,
+  legend: { position: 'top' as const },
+  tooltip: { y: { formatter: (v: number) => `${v} books` } },
 }))
 
 const languageSeries = computed(() => props.languages.map((l) => l.count))

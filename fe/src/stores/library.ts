@@ -38,15 +38,14 @@ export const useLibraryStore = defineStore('library', () => {
       current === 'placeholder.svg' ||
       current.endsWith('/placeholder.svg') ||
       current.includes('/placeholder.svg?')
+    const coverArtMissing = isMissing || isPlaceholder
 
-    if ((isMissing || isPlaceholder) && book.asin) {
-      return {
-        ...book,
-        imageUrl: buildApiPath(`/images/${encodeURIComponent(book.asin)}`),
-      }
-    }
+    const withImage =
+      coverArtMissing && book.asin
+        ? { ...book, imageUrl: buildApiPath(`/images/${encodeURIComponent(book.asin)}`) }
+        : book
 
-    return book
+    return coverArtMissing ? { ...withImage, coverArtMissing: true } : withImage
   }
 
   async function fetchLibrary() {

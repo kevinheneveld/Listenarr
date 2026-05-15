@@ -175,10 +175,17 @@ namespace Listenarr.Domain.Models
         public ActivityGranularity Granularity { get; set; } = ActivityGranularity.Month;
 
         /// <summary>
-        /// Books added per period, oldest bucket first, one entry per period in
-        /// the requested window (zero-filled).
+        /// Books requested (added to the library) per period, oldest bucket
+        /// first, one entry per period in the requested window (zero-filled).
         /// </summary>
         public List<ActivityBucket> BooksAddedByPeriod { get; set; } = new();
+
+        /// <summary>
+        /// Successful imports per period (file actually arrived), same
+        /// bucketing as <see cref="BooksAddedByPeriod"/>. The gap between the
+        /// two series shows the queue → arrival lag.
+        /// </summary>
+        public List<ActivityBucket> BooksImportedByPeriod { get; set; } = new();
 
         public int TotalImports { get; set; }
         public int FailedImports { get; set; }
@@ -204,13 +211,23 @@ namespace Listenarr.Domain.Models
     public class GenreCount
     {
         public string Genre { get; set; } = string.Empty;
-        public int Count { get; set; }
+
+        /// <summary>Books tagged with this genre, tracked in the library.</summary>
+        public int TotalBooks { get; set; }
+
+        /// <summary>Of those, books whose file(s) are present on disk.</summary>
+        public int OwnedBooks { get; set; }
     }
 
     public class DurationBucket
     {
         public string Label { get; set; } = string.Empty;
-        public int Count { get; set; }
+
+        /// <summary>Books with an effective duration in this bucket (tracked).</summary>
+        public int TotalBooks { get; set; }
+
+        /// <summary>Of those, books whose file(s) are present on disk.</summary>
+        public int OwnedBooks { get; set; }
     }
 
     public class LanguageCount

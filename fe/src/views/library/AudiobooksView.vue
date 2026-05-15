@@ -150,6 +150,17 @@
       </div>
     </div>
 
+    <!-- Drill-down chip: shown when arriving from a dashboard "missing X" link -->
+    <div v-if="filterMissingLabel" class="missing-filter-chip" role="status">
+      <PhFunnel />
+      <span>
+        Filtered to books missing <strong>{{ filterMissingLabel }}</strong> ({{ audiobooks.length }})
+      </span>
+      <button class="missing-filter-clear" @click="clearMissingFilter" title="Clear filter">
+        <PhX />
+      </button>
+    </div>
+
     <!-- Audiobooks Grid -->
     <div v-if="loading" class="loading-state">
       <PhSpinner class="ph-spin" />
@@ -861,6 +872,7 @@ import {
   PhUser,
   PhBooks,
   PhFolderOpen,
+  PhFunnel,
 } from '@phosphor-icons/vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useLibraryStore } from '@/stores/library'
@@ -975,6 +987,103 @@ const filterStatus = ref<'all' | 'downloaded' | 'missing' | 'mismatch' | 'downlo
 const filterQualityProfile = ref<string>('all')
 const filterLanguage = ref<string>('all')
 const filterYear = ref<string>('all')
+
+// Drill-down filter: shows books missing a specific metadata field. Driven by
+// the ?missing= URL param so dashboard "missing X" counts can link straight here.
+type MissingField =
+  | 'files'
+  | 'coverArt'
+  | 'asin'
+  | 'isbn'
+  | 'genres'
+  | 'narrators'
+  | 'description'
+  | 'publisher'
+  | 'language'
+  | 'publishDate'
+  | 'runtime'
+  | 'seriesPosition'
+
+const MISSING_FIELD_LABELS: Record<MissingField, string> = {
+  files: 'an audio file',
+  coverArt: 'Cover art',
+  asin: 'ASIN',
+  isbn: 'ISBN',
+  genres: 'Genres',
+  narrators: 'Narrators',
+  description: 'Description',
+  publisher: 'Publisher',
+  language: 'Language',
+  publishDate: 'Publish date',
+  runtime: 'Runtime',
+  seriesPosition: 'Series position',
+}
+
+const MISSING_FIELD_KEYS = Object.keys(MISSING_FIELD_LABELS) as MissingField[]
+
+function isMissingFieldKey(value: unknown): value is MissingField {
+  return typeof value === 'string' && (MISSING_FIELD_KEYS as string[]).includes(value)
+}
+
+function bookMissesField(book: Audiobook, field: MissingField): boolean {
+  switch (field) {
+    case 'files':
+      return (book.files?.length ?? book.fileCount ?? 0) === 0
+    case 'coverArt':
+      return book.coverArtMissing === true
+    case 'asin':
+      return !book.asin || book.asin.trim() === ''
+    case 'isbn': {
+      const v = book.isbn as unknown
+      if (Array.isArray(v)) return v.filter((i) => typeof i === 'string' && i.trim()).length === 0
+      return !v || (typeof v === 'string' && v.trim() === '')
+    }
+    case 'genres':
+      return !book.genres || book.genres.filter((g) => g && g.trim()).length === 0
+    case 'narrators':
+      return !book.narrators || book.narrators.filter((n) => n && n.trim()).length === 0
+    case 'description':
+      return !book.description || book.description.trim() === ''
+    case 'publisher':
+      return !book.publisher || book.publisher.trim() === ''
+    case 'language':
+      return !book.language || book.language.trim() === ''
+    case 'publishDate':
+      return (
+        (!book.publishedDate || book.publishedDate.trim() === '') &&
+        (!book.publishYear || book.publishYear.trim() === '')
+      )
+    case 'runtime': {
+      if (book.runtime && book.runtime > 0) return false
+      const hasFileDuration = (book.files || []).some(
+        (f) => (f.durationSeconds || 0) > 0,
+      )
+      return !hasFileDuration
+    }
+    case 'seriesPosition': {
+      const primary = book.seriesMemberships?.find((m) => m.seriesName && m.seriesName.trim())
+      const inSeries = !!(book.series && book.series.trim()) || !!primary
+      if (!inSeries) return false
+      const num =
+        (book.seriesNumber && book.seriesNumber.trim()) ||
+        (primary?.seriesNumber && primary.seriesNumber.trim())
+      return !num
+    }
+  }
+}
+
+const filterMissing = ref<MissingField | null>(
+  isMissingFieldKey(route.query.missing) ? (route.query.missing as MissingField) : null,
+)
+const filterMissingLabel = computed(() =>
+  filterMissing.value ? MISSING_FIELD_LABELS[filterMissing.value] : null,
+)
+
+function clearMissingFilter() {
+  filterMissing.value = null
+  const { missing: _omit, ...rest } = route.query as Record<string, unknown>
+  router.replace({ path: '/audiobooks', query: rest as Record<string, string> })
+}
 
 const availableLanguages = computed(() => {
   const langs = new Set<string>()
@@ -1164,6 +1273,12 @@ const filteredAndSortedAudiobooks = computed(() => {
       }
       return true
     })
+  }
+
+  // Drill-down: books missing a specific metadata field (from dashboard links).
+  if (filterMissing.value) {
+    const field = filterMissing.value
+    filtered = filtered.filter((b) => bookMissesField(b, field))
   }
 
   // Sorting
@@ -1643,6 +1758,11 @@ function clearFilters() {
   filterLanguage.value = 'all'
   filterYear.value = 'all'
 
+  // Clear drill-down missing-field filter and strip it from the URL.
+  if (filterMissing.value) {
+    clearMissingFilter()
+  }
+
   // Clear search text and any custom filter selection (also remove persisted search value)
   try {
     searchQuery.value = ''
@@ -1744,6 +1864,14 @@ watch(showItemDetails, async () => {
   syncMeasuredRowHeight()
   updateVisibleRange()
 })
+
+watch(
+  () => route.query.missing,
+  (m) => {
+    filterMissing.value = isMissingFieldKey(m) ? (m as MissingField) : null
+  },
+  { immediate: true },
+)
 
 watch(
   () => route.query.group,
@@ -2439,6 +2567,47 @@ defineExpose({
 </script>
 
 <style scoped>
+.missing-filter-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 1rem;
+  margin: 0.75rem 1rem;
+  background: rgba(var(--brand-rgb), 0.12);
+  border: 1px solid rgba(var(--brand-rgb), 0.35);
+  border-radius: 6px;
+  color: #ddd;
+  font-size: 0.9rem;
+}
+
+.missing-filter-chip :deep(svg) {
+  color: var(--brand-500);
+}
+
+.missing-filter-chip strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.missing-filter-clear {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #999;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.missing-filter-clear:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
 .audiobooks-view {
   --audiobooks-toolbar-height: 60px;
   --audiobooks-toolbar-offset: var(--audiobooks-toolbar-height);

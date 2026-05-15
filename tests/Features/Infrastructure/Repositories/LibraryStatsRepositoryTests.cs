@@ -109,8 +109,11 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
 
             // Not owned, so it contributes nothing to the owned-duration total...
             Assert.Equal(0.0, stats.Overview.TotalDurationHours);
-            // ...but the duration distribution still buckets it via the Runtime fallback.
-            Assert.Equal("10–20 hrs", Assert.Single(stats.DurationDistribution, d => d.Count == 1).Label);
+            // ...but the duration distribution still buckets it via the Runtime fallback,
+            // and the bucket's OwnedBooks split correctly stays 0.
+            var bucket = Assert.Single(stats.DurationDistribution, d => d.TotalBooks == 1);
+            Assert.Equal("10–20 hrs", bucket.Label);
+            Assert.Equal(0, bucket.OwnedBooks);
         }
 
         // ── Metadata completeness ────────────────────────────────────────────
@@ -307,8 +310,13 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
 
             var stats = await new LibraryStatsRepository(db).GetLibraryStatsAsync();
 
-            Assert.Equal(2, stats.TopGenres.First(g => g.Genre == "Sci-Fi").Count);
-            Assert.Equal(1, stats.TopGenres.First(g => g.Genre == "Classic").Count);
+            // Genres carry the same have/missing split as authors and narrators.
+            var sciFi = stats.TopGenres.First(g => g.Genre == "Sci-Fi");
+            Assert.Equal(2, sciFi.TotalBooks);
+            Assert.Equal(1, sciFi.OwnedBooks);
+            var classic = stats.TopGenres.First(g => g.Genre == "Classic");
+            Assert.Equal(1, classic.TotalBooks);
+            Assert.Equal(1, classic.OwnedBooks);
 
             // Authors: total tracked vs. actually owned.
             Assert.Equal(1, stats.Authors.TotalAuthors);
@@ -370,9 +378,9 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             db.History.Add(new History { EventType = "Added", Timestamp = now });
             db.History.Add(new History { EventType = "Updated", Timestamp = now }); // ignored
 
-            db.DownloadHistories.Add(new DownloadHistory { DownloadId = "1", EventType = DownloadHistoryEventType.Imported });
-            db.DownloadHistories.Add(new DownloadHistory { DownloadId = "2", EventType = DownloadHistoryEventType.Imported });
-            db.DownloadHistories.Add(new DownloadHistory { DownloadId = "3", EventType = DownloadHistoryEventType.ImportFailed });
+            db.DownloadHistories.Add(new DownloadHistory { DownloadId = "1", EventType = DownloadHistoryEventType.Imported, EventDate = now });
+            db.DownloadHistories.Add(new DownloadHistory { DownloadId = "2", EventType = DownloadHistoryEventType.Imported, EventDate = now });
+            db.DownloadHistories.Add(new DownloadHistory { DownloadId = "3", EventType = DownloadHistoryEventType.ImportFailed, EventDate = now });
             await db.SaveChangesAsync();
 
             // Default granularity is monthly, 12 periods.
@@ -381,6 +389,9 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
             Assert.Equal(ActivityGranularity.Month, activity.Granularity);
             Assert.Equal(12, activity.BooksAddedByPeriod.Count);
             Assert.Equal(2, activity.BooksAddedByPeriod.Last().Count); // current month
+            // Imported events are bucketed in their own series alongside Added.
+            Assert.Equal(12, activity.BooksImportedByPeriod.Count);
+            Assert.Equal(2, activity.BooksImportedByPeriod.Last().Count); // current month
             Assert.Equal(2, activity.TotalImports);
             Assert.Equal(1, activity.FailedImports);
             Assert.Equal(66.7, activity.ImportSuccessRate);
