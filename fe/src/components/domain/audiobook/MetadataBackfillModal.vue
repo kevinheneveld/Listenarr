@@ -243,8 +243,17 @@ async function fetchPreview(asin: string) {
 
 // Pull fields out of the Audible response (the API returns nested types like
 // `authors: [{ name }]`); flatten into a shape that lines up with Audiobook.
+//
+// GET /metadata/{asin} wraps its payload in an envelope: { metadata, source,
+// sourceUrl }. Unwrap that here so callers can rely on a flat shape; fall
+// back to raw access for the direct-shape endpoint variant.
 function mapFresh(raw: unknown): FreshMetadata {
-  const r = (raw || {}) as Record<string, unknown>
+  const outer = (raw || {}) as Record<string, unknown>
+  const r = (
+    outer.metadata && typeof outer.metadata === 'object'
+      ? (outer.metadata as Record<string, unknown>)
+      : outer
+  ) as Record<string, unknown>
   const arr = (key: string): unknown[] => (Array.isArray(r[key]) ? (r[key] as unknown[]) : [])
 
   return {
