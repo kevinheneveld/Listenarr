@@ -960,6 +960,11 @@ function candidateYear(c: AudibleSearchResult): string {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9rem;
+  /* Pin column widths so the browser's auto-layout doesn't crush one value
+     column to ~1ch when the other contains a wider element (e.g. the 72px
+     cover thumbnail on the imageUrl row). With auto layout + word-break,
+     that crush manifests as text rendering one character per line. */
+  table-layout: fixed;
 }
 .compare-table th,
 .compare-table td {
@@ -985,7 +990,12 @@ function candidateYear(c: AudibleSearchResult): string {
   color: #bbb;
 }
 .col-value {
-  word-break: break-word;
+  /* Two value columns share the remaining width equally. */
+  width: calc((100% - 166px) / 2);
+  /* Wrap by word; only break inside words as a last resort so we don't go
+     letter-per-line on long URLs. */
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 .compare-table tr.unchanged {
   opacity: 0.55;
