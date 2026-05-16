@@ -1286,14 +1286,21 @@ namespace Listenarr.Api.Controllers
         /// </summary>
         /// <param name="id">Audiobook ID.</param>
         /// <param name="updatedAudiobook">Fields to update (null fields are left unchanged).</param>
+        /// <param name="cacheImageLocally">When true and the ImageUrl is being changed to an external http(s) URL, download the cover into local library storage and rewrite the stored URL to the local path. No-op when the URL is unchanged or already local.</param>
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateAudiobook(int id, [FromBody] Audiobook updatedAudiobook)
+        public async Task<IActionResult> UpdateAudiobook(int id, [FromBody] Audiobook updatedAudiobook, [FromQuery] bool cacheImageLocally = false)
         {
             var existingAudiobook = await _repo.GetByIdAsync(id);
             if (existingAudiobook == null)
             {
                 return NotFound(new { message = "Audiobook not found" });
             }
+
+            // Remember the pre-merge ImageUrl so we can tell whether the caller
+            // actually changed the cover. Without this, FE saves that always
+            // send the current ImageUrl would re-download the cover on every
+            // unrelated edit when `cacheImageLocally=true` is in flight.
+            var previousImageUrl = existingAudiobook.ImageUrl;
 
             var legacyIdentifierFieldsTouched = false;
 
@@ -1415,11 +1422,46 @@ namespace Listenarr.Api.Controllers
                 SyncImportedIdentifiersFromLegacyFields(existingAudiobook);
             }
 
+            // Optional: download external cover art into local library storage
+            // when the caller asks for it (FE checkbox / backfill modal default).
+            // Runs *after* every other merge so the cache key sees the post-merge
+            // ASIN — important when ImageUrl and Asin change in the same PUT
+            // (the backfill modal does exactly that), otherwise we'd key the
+            // cache file on the old ASIN.
+            if (cacheImageLocally
+                && updatedAudiobook.ImageUrl != null
+                && IsExternalHttpImageUrl(existingAudiobook.ImageUrl)
+                && !string.Equals(existingAudiobook.ImageUrl, previousImageUrl, StringComparison.Ordinal))
+            {
+                var externalUrl = existingAudiobook.ImageUrl!;
+                var moved = await MoveMetadataImageToLibraryStorageAsync(existingAudiobook, externalUrl);
+                // Mirror the add-path's fallback: keep the external URL when the
+                // download fails so the user still sees a cover.
+                existingAudiobook.ImageUrl = moved ?? externalUrl;
+                if (!string.IsNullOrWhiteSpace(moved))
+                {
+                    _logger.LogInformation("Cached external cover art locally for audiobook {AudiobookId} (key={Key})",
+                        existingAudiobook.Id,
+                        LogRedaction.SanitizeText(existingAudiobook.Asin ?? "<no-asin>"));
+                }
+            }
+
             await _repo.UpdateAsync(existingAudiobook);
 
             _logger.LogInformation("Updated audiobook '{Title}' (ID: {Id})", LogRedaction.SanitizeText(existingAudiobook.Title), id);
 
             return Ok(new { message = "Audiobook updated successfully", audiobook = existingAudiobook });
+        }
+
+        // True iff the URL is an http(s)://… address pointing to something other
+        // than our local image cache. The cache helper returns relative paths
+        // like "/cache/images/library/{key}.jpg" or "/api/v1/images/{key}", so
+        // anything starting with http(s):// is by definition external.
+        private static bool IsExternalHttpImageUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

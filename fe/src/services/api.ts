@@ -1258,8 +1258,17 @@ class ApiService {
   async updateAudiobook(
     id: number,
     audiobook: Partial<Audiobook>,
+    options?: { cacheImageLocally?: boolean },
   ): Promise<{ message: string; audiobook: Audiobook }> {
-    return this.request<{ message: string; audiobook: Audiobook }>(`/library/${id}`, {
+    // When the caller opts in, the backend will download an external
+    // ImageUrl into local library storage on save. Sent as a query
+    // parameter so the Audiobook DTO model-binder isn't polluted with
+    // a non-domain flag.
+    let path = `/library/${id}`
+    if (options?.cacheImageLocally) {
+      path += '?cacheImageLocally=true'
+    }
+    return this.request<{ message: string; audiobook: Audiobook }>(path, {
       method: 'PUT',
       body: JSON.stringify(audiobook),
     })

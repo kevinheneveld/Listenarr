@@ -177,5 +177,209 @@ namespace Listenarr.Tests.Features.Api.Controllers
 
             mockRepo.Verify(r => r.UpdateAsync(existingAudiobook), Times.Once);
         }
+
+        // ── cacheImageLocally branch ───────────────────────────────────────
+        //
+        // PUT /library/{id}?cacheImageLocally=true is the contract used by the
+        // metadata-backfill modal (always) and the edit modal's "Cache cover
+        // art locally on save" checkbox (when checked). When set, an external
+        // http(s) ImageUrl change should be downloaded into library storage
+        // and the stored ImageUrl rewritten to the local path. When not set,
+        // the external URL must persist verbatim.
+
+        private static LibraryController BuildController(
+            Audiobook existing,
+            Mock<IImageCacheService> mockImageCache,
+            Mock<IAudiobookRepository> mockRepo)
+        {
+            var mockLogger = new Mock<ILogger<LibraryController>>();
+            var mockFileNaming = new Mock<IFileNamingService>();
+            var services = new ServiceCollection();
+            var provider = services.BuildServiceProvider();
+            var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+            return new LibraryController(
+                mockRepo.Object,
+                mockImageCache.Object,
+                mockLogger.Object,
+                scopeFactory,
+                new Mock<IHistoryRepository>().Object,
+                new Mock<IAudiobookFileRepository>().Object,
+                new Mock<IQualityProfileRepository>().Object,
+                new Mock<IDownloadRepository>().Object,
+                new Mock<IRootFolderRepository>().Object,
+                mockFileNaming.Object);
+        }
+
+        [Fact]
+        public async Task UpdateAudiobook_CachesExternalImage_WhenFlagIsTrue()
+        {
+            var existing = new Audiobook
+            {
+                Id = 7,
+                Title = "T",
+                Asin = "B00OLD",
+                ImageUrl = "https://example.com/old.jpg"
+            };
+            var mockRepo = new Mock<IAudiobookRepository>();
+            mockRepo.Setup(r => r.GetByIdAsync(7)).ReturnsAsync(existing);
+            mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
+
+            var mockImageCache = new Mock<IImageCacheService>();
+            mockImageCache
+                .Setup(c => c.MoveToLibraryStorageAsync("B00OLD", "https://m.media-amazon.com/images/I/abc.jpg"))
+                .ReturnsAsync("config/cache/images/library/B00OLD.jpg");
+
+            var controller = BuildController(existing, mockImageCache, mockRepo);
+            var updated = new Audiobook { ImageUrl = "https://m.media-amazon.com/images/I/abc.jpg" };
+
+            var result = await controller.UpdateAudiobook(7, updated, cacheImageLocally: true);
+
+            Assert.IsType<OkObjectResult>(result);
+            Assert.Equal("/config/cache/images/library/B00OLD.jpg", existing.ImageUrl);
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync("B00OLD", "https://m.media-amazon.com/images/I/abc.jpg"), Times.Once);
+        }
+
+        [Fact]
+        public async Task UpdateAudiobook_DoesNotCacheImage_WhenFlagIsFalse()
+        {
+            var existing = new Audiobook
+            {
+                Id = 7,
+                Title = "T",
+                Asin = "B00OLD",
+                ImageUrl = "https://example.com/old.jpg"
+            };
+            var mockRepo = new Mock<IAudiobookRepository>();
+            mockRepo.Setup(r => r.GetByIdAsync(7)).ReturnsAsync(existing);
+            mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
+
+            var mockImageCache = new Mock<IImageCacheService>();
+            var controller = BuildController(existing, mockImageCache, mockRepo);
+            var updated = new Audiobook { ImageUrl = "https://m.media-amazon.com/images/I/abc.jpg" };
+
+            await controller.UpdateAudiobook(7, updated, cacheImageLocally: false);
+
+            // External URL persists verbatim, cache service never called.
+            Assert.Equal("https://m.media-amazon.com/images/I/abc.jpg", existing.ImageUrl);
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateAudiobook_DoesNotCacheImage_WhenUrlUnchanged()
+        {
+            // Form-data saves (EditAudiobookModal at line ~1758) always include
+            // the current imageUrl. A user editing only the description must
+            // not trigger a re-download of the unchanged cover.
+            var existing = new Audiobook
+            {
+                Id = 7,
+                Title = "T",
+                Asin = "B00OLD",
+                ImageUrl = "https://example.com/old.jpg"
+            };
+            var mockRepo = new Mock<IAudiobookRepository>();
+            mockRepo.Setup(r => r.GetByIdAsync(7)).ReturnsAsync(existing);
+            mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
+
+            var mockImageCache = new Mock<IImageCacheService>();
+            var controller = BuildController(existing, mockImageCache, mockRepo);
+            // Same URL as existing — simulates the FE re-sending the current value.
+            var updated = new Audiobook { ImageUrl = "https://example.com/old.jpg" };
+
+            await controller.UpdateAudiobook(7, updated, cacheImageLocally: true);
+
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateAudiobook_DoesNotCacheImage_WhenUrlIsAlreadyLocal()
+        {
+            var existing = new Audiobook
+            {
+                Id = 7,
+                Title = "T",
+                Asin = "B00OLD",
+                ImageUrl = "https://example.com/old.jpg"
+            };
+            var mockRepo = new Mock<IAudiobookRepository>();
+            mockRepo.Setup(r => r.GetByIdAsync(7)).ReturnsAsync(existing);
+            mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
+
+            var mockImageCache = new Mock<IImageCacheService>();
+            var controller = BuildController(existing, mockImageCache, mockRepo);
+            // Local cache-style URL — IsExternalHttpImageUrl returns false.
+            var updated = new Audiobook { ImageUrl = "/config/cache/images/library/B00OLD.jpg" };
+
+            await controller.UpdateAudiobook(7, updated, cacheImageLocally: true);
+
+            Assert.Equal("/config/cache/images/library/B00OLD.jpg", existing.ImageUrl);
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task UpdateAudiobook_CachesUnderNewAsin_WhenAsinAndImageChangeInSamePut()
+        {
+            // The backfill modal sends a new ASIN *and* a new ImageUrl in the
+            // same PUT. The cache key must come from the post-merge ASIN —
+            // keying on the pre-merge ASIN would file the new cover under the
+            // wrong identifier.
+            var existing = new Audiobook
+            {
+                Id = 7,
+                Title = "T",
+                Asin = "B00OLD",
+                ImageUrl = "https://example.com/old.jpg"
+            };
+            var mockRepo = new Mock<IAudiobookRepository>();
+            mockRepo.Setup(r => r.GetByIdAsync(7)).ReturnsAsync(existing);
+            mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
+
+            var mockImageCache = new Mock<IImageCacheService>();
+            mockImageCache
+                .Setup(c => c.MoveToLibraryStorageAsync("B00NEW", "https://m.media-amazon.com/images/I/new.jpg"))
+                .ReturnsAsync("config/cache/images/library/B00NEW.jpg");
+
+            var controller = BuildController(existing, mockImageCache, mockRepo);
+            var updated = new Audiobook
+            {
+                Asin = "B00NEW",
+                ImageUrl = "https://m.media-amazon.com/images/I/new.jpg"
+            };
+
+            await controller.UpdateAudiobook(7, updated, cacheImageLocally: true);
+
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync("B00NEW", "https://m.media-amazon.com/images/I/new.jpg"), Times.Once);
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync("B00OLD", It.IsAny<string>()), Times.Never);
+            Assert.Equal("/config/cache/images/library/B00NEW.jpg", existing.ImageUrl);
+        }
+
+        [Fact]
+        public async Task UpdateAudiobook_FallsBackToExternalUrl_WhenCacheServiceReturnsNull()
+        {
+            var existing = new Audiobook
+            {
+                Id = 7,
+                Title = "T",
+                Asin = "B00OLD",
+                ImageUrl = "https://example.com/old.jpg"
+            };
+            var mockRepo = new Mock<IAudiobookRepository>();
+            mockRepo.Setup(r => r.GetByIdAsync(7)).ReturnsAsync(existing);
+            mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
+
+            var mockImageCache = new Mock<IImageCacheService>();
+            mockImageCache
+                .Setup(c => c.MoveToLibraryStorageAsync(It.IsAny<string>(), It.IsAny<string>()))
+                .ReturnsAsync((string?)null);
+
+            var controller = BuildController(existing, mockImageCache, mockRepo);
+            var updated = new Audiobook { ImageUrl = "https://m.media-amazon.com/images/I/abc.jpg" };
+
+            await controller.UpdateAudiobook(7, updated, cacheImageLocally: true);
+
+            // Cache attempt failed — fall back to the external URL so the user
+            // still sees a cover, matching the add-path's behavior.
+            Assert.Equal("https://m.media-amazon.com/images/I/abc.jpg", existing.ImageUrl);
+        }
     }
 }

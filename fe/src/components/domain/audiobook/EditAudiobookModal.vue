@@ -404,6 +404,18 @@
                     class="form-input"
                     placeholder="https://..."
                   />
+                  <label v-if="canCacheImageLocally" class="checkbox-row cache-image-row">
+                    <input
+                      type="checkbox"
+                      v-model="cacheImageLocallyOnSave"
+                    />
+                    <span>
+                      Download and cache cover art locally on save
+                      <span class="muted-help">
+                        — recommended; protects against the external URL going stale.
+                      </span>
+                    </span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -934,6 +946,38 @@ const isHydratingForm = ref(false)
 const hasLocalEdits = ref(false)
 const resolvedAudiobook = ref<Audiobook | null>(null)
 const baselineAudiobook = computed(() => resolvedAudiobook.value ?? props.audiobook)
+
+// When the user types or pastes an external Amazon/Audible cover URL, the
+// backend can download it into local library storage on save. Tracked
+// separately from the form (it's a per-save intent, not persistent state).
+// Defaulted ON whenever the current URL is external so the common case
+// (paste-and-save) just works; the visibility computed below hides it
+// when the URL is empty or already local.
+const cacheImageLocallyOnSave = ref(true)
+
+function isExternalImageUrl(value: string | null | undefined): boolean {
+  if (!value) return false
+  const v = value.trim()
+  if (!v) return false
+  return /^https?:\/\//i.test(v)
+}
+
+function isLocalImageUrl(value: string | null | undefined): boolean {
+  if (!value) return false
+  const v = value.trim()
+  if (!v) return false
+  // Anything pointing at the library cache or the images API is already local.
+  return (
+    v.startsWith('/cache/') ||
+    v.startsWith('/config/cache/') ||
+    v.startsWith('/api/v1/images/') ||
+    v.includes('/api/v1/images/')
+  )
+}
+
+const canCacheImageLocally = computed(
+  () => isExternalImageUrl(formData.value.imageUrl) && !isLocalImageUrl(formData.value.imageUrl),
+)
 
 // Minimal custom path behaviour: extra helpers removed to keep UI streamlined
 
@@ -1782,7 +1826,17 @@ async function handleSave() {
       (combined || '') !== (audiobook.basePath || '')
 
     if (hasNonIdentifierChanges) {
-      await apiService.updateAudiobook(audiobook.id, updates)
+      // Only forward the cache-image flag when the URL is actually external —
+      // canCacheImageLocally already encodes the visibility rules — so a
+      // local-URL edit doesn't accidentally trigger a (no-op) cache attempt.
+      // Omit the third argument entirely when caching isn't wanted; passing
+      // `undefined` would change call arity, which test matchers care about.
+      const shouldCacheImage = canCacheImageLocally.value && cacheImageLocallyOnSave.value
+      if (shouldCacheImage) {
+        await apiService.updateAudiobook(audiobook.id, updates, { cacheImageLocally: true })
+      } else {
+        await apiService.updateAudiobook(audiobook.id, updates)
+      }
     }
 
     if (identifiersChanged) {
@@ -2511,6 +2565,19 @@ function close() {
 }
 .checkbox-label small {
   color: #999;
+}
+
+/* Compact override for the "Cache cover art locally" row that sits
+   immediately under the Cover Image URL input — tighter than the
+   stand-alone toggles elsewhere in the modal. */
+.cache-image-row {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+}
+.cache-image-row .muted-help {
+  color: #888;
+  font-weight: 400;
 }
 
 .confirm-actions {

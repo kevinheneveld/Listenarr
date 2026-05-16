@@ -253,6 +253,9 @@ describe('EditAudiobookModal move options', () => {
         genres: ['Sci-Fi', 'Adventure'],
         imageUrl: 'https://example.com/edited.jpg',
       }),
+      // External imageUrl + default-on checkbox means the FE asks the backend
+      // to cache the cover locally on save.
+      { cacheImageLocally: true },
     )
   })
 

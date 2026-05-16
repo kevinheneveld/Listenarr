@@ -476,7 +476,13 @@ async function applyChanges() {
 
   phase.value = 'applying'
   try {
-    const result = await apiService.updateAudiobook(book.id, payload)
+    // When applying Audible metadata we always want the cover art cached
+    // locally — Audible CDN URLs go stale and proxy-served covers are the
+    // canonical library shape. No user-facing toggle here; the backfill
+    // flow's whole point is to import fresh metadata into the library.
+    const result = await apiService.updateAudiobook(book.id, payload, {
+      cacheImageLocally: true,
+    })
     toast.success(
       'Metadata updated',
       `Applied ${selected.value.size} field${selected.value.size === 1 ? '' : 's'} from Audible.`,
