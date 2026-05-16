@@ -68,4 +68,24 @@ describe('library store fetchLibrary', () => {
     expect(store.audiobooks).toHaveLength(1)
     expect(store.audiobooks[0]?.title).toBe('Book 1')
   })
+
+  it('does not substitute /images/${asin} when imageUrl is missing', async () => {
+    getLibraryMock.mockResolvedValue([
+      { id: 1, title: 'No image, has asin', asin: 'B0CQZ5167B', imageUrl: '' },
+      { id: 2, title: 'Placeholder, has asin', asin: 'B00001', imageUrl: '/placeholder.svg' },
+      { id: 3, title: 'Has image', asin: 'B00002', imageUrl: 'https://example.com/c.jpg' },
+    ])
+
+    const store = useLibraryStore()
+    await store.fetchLibrary()
+
+    expect(store.audiobooks[0]?.imageUrl).toBe('')
+    expect(store.audiobooks[0]?.coverArtMissing).toBe(true)
+
+    expect(store.audiobooks[1]?.imageUrl).toBe('')
+    expect(store.audiobooks[1]?.coverArtMissing).toBe(true)
+
+    expect(store.audiobooks[2]?.imageUrl).toBe('https://example.com/c.jpg')
+    expect(store.audiobooks[2]?.coverArtMissing).toBeUndefined()
+  })
 })

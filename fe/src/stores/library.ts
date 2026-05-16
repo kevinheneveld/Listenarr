@@ -21,7 +21,6 @@ import { apiService } from '@/services/api'
 import { signalRService } from '@/services/signalr'
 import type { Audiobook } from '@/types'
 import { errorTracking } from '@/services/errorTracking'
-import { buildApiPath } from '@/services/apiBase'
 
 export const useLibraryStore = defineStore('library', () => {
   const audiobooks = ref<Audiobook[]>([])
@@ -30,6 +29,10 @@ export const useLibraryStore = defineStore('library', () => {
   const selectedIds = ref<Set<number>>(new Set())
   let inFlightFetch: Promise<void> | null = null
 
+  // Mark missing/placeholder cover art so consumers can render the placeholder.
+  // Deliberately does NOT substitute /images/${asin}: the ASIN-keyed lookup can
+  // surface a cached cover from a different edition (or a stale match) and
+  // produce a confidently-rendered wrong cover. Better to show a placeholder.
   function normalizeLibraryImageUrl(book: Audiobook): Audiobook {
     const current = (book.imageUrl || '').trim()
     const isMissing = current.length === 0
@@ -38,14 +41,11 @@ export const useLibraryStore = defineStore('library', () => {
       current === 'placeholder.svg' ||
       current.endsWith('/placeholder.svg') ||
       current.includes('/placeholder.svg?')
-    const coverArtMissing = isMissing || isPlaceholder
 
-    const withImage =
-      coverArtMissing && book.asin
-        ? { ...book, imageUrl: buildApiPath(`/images/${encodeURIComponent(book.asin)}`) }
-        : book
-
-    return coverArtMissing ? { ...withImage, coverArtMissing: true } : withImage
+    if (isMissing || isPlaceholder) {
+      return { ...book, imageUrl: '', coverArtMissing: true }
+    }
+    return book
   }
 
   async function fetchLibrary() {

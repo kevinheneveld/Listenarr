@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Audiobooks list/grid view mode is now remembered per grouping:** Previously the list/grid toggle's stored preference was only re-applied when grouping by Books; switching to Authors or Series and navigating away would silently revert to grid. The view mode is now persisted under separate keys (`listenarr.viewMode.books`, `.authors`, `.series`) and restored when the corresponding grouping is active. A one-time migration seeds all three keys from the legacy `listenarr.viewMode` value so existing users keep their preference.
 
+### Fixed
+- **Library no longer shows a wrong cover when a book has no `imageUrl`:** The library store previously fell back to `GET /api/v1/images/{asin}` whenever a book's `imageUrl` was empty or the placeholder. Because that endpoint is keyed purely on the ASIN, a record with a stale or mismatched ASIN (e.g., from a search hit that matched the wrong edition) would render a confidently-wrong cover — for example, Brandon Sanderson's "Skyward" appearing on Dean Koontz's "The Dead Town". The fallback is removed; books with no `imageUrl` now render the standard placeholder, and the `coverArtMissing` flag is preserved so the dashboard's missing-cover-art count is unchanged. Fixing the underlying ASIN data is a separate concern.
+
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
