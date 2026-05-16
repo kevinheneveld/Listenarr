@@ -137,6 +137,12 @@ const chosenAsin = ref<string | null>(null)
 const fresh = ref<FreshMetadata | null>(null)
 const selected = ref<Set<FieldKey>>(new Set())
 
+// Editable search terms shown above the candidate list so the user can refine
+// the query (e.g. drop a middle initial, fix a typo) without closing this
+// modal and reopening the edit-audiobook modal.
+const overrideTitle = ref('')
+const overrideAuthor = ref('')
+
 // ── Open / reset ───────────────────────────────────────────────────────────
 
 watch(
@@ -170,6 +176,10 @@ function reset() {
   chosenAsin.value = null
   fresh.value = null
   selected.value = new Set()
+  // Seed the editable search fields from the current audiobook so the
+  // candidate-picker's "Search again" button starts with sensible defaults.
+  overrideTitle.value = (props.audiobook?.title || '').trim()
+  overrideAuthor.value = ((props.audiobook?.authors && props.audiobook.authors[0]) || '').trim()
 }
 
 // ── Phase 1: candidate search ──────────────────────────────────────────────
@@ -178,14 +188,22 @@ async function searchCandidates() {
   const book = props.audiobook
   if (!book) return
 
-  const title = (book.title || '').trim()
-  const author = (book.authors && book.authors[0]) || ''
+  // Prefer the editable overrides (seeded from the audiobook on open). Fall
+  // back to the audiobook's own values defensively so a stray empty-string
+  // override doesn't lose the original search terms.
+  const title = (overrideTitle.value || book.title || '').trim()
+  const author = (overrideAuthor.value || (book.authors && book.authors[0]) || '').trim()
+  // Keep the inputs in sync with what we actually searched for.
+  overrideTitle.value = title
+  overrideAuthor.value = author
   if (!title) {
-    errorMessage.value = 'No title to search with — set a title and try again.'
+    errorMessage.value = 'No title to search with — type a title above and try again.'
+    phase.value = 'pick-candidate'
     return
   }
 
   phase.value = 'searching'
+  errorMessage.value = null
   try {
     const response = await apiService.searchAudibleByTitleAndAuthor(
       title,
@@ -198,7 +216,7 @@ async function searchCandidates() {
     phase.value = 'pick-candidate'
     if (candidates.value.length === 0) {
       errorMessage.value =
-        'No matches on Audible for that title and author. Try editing the title or author first.'
+        'No matches found for that title and author. Try editing them above and search again.'
     }
   } catch (err) {
     logger.error('MetadataBackfillModal: candidate search failed', err)
@@ -518,8 +536,49 @@ function candidateYear(c: AudibleSearchResult): string {
 
           <div v-if="phase === 'searching' || phase === 'fetching'" class="status-row">
             <PhSpinner class="ph-spin" />
-            <span>{{ phase === 'searching' ? 'Searching Audible…' : 'Fetching metadata…' }}</span>
+            <span>{{ phase === 'searching' ? 'Searching online sources…' : 'Fetching metadata…' }}</span>
           </div>
+
+          <!-- Phase 1: candidate picker -->
+          <template v-if="phase === 'pick-candidate' || phase === 'searching'">
+            <p class="phase-help">
+              This book doesn't have an ASIN. Refine the title or author below if needed, then pick
+              the matching result to load its metadata.
+            </p>
+            <form
+              class="candidate-search-form"
+              @submit.prevent="searchCandidates"
+            >
+              <label class="candidate-search-field">
+                <span class="candidate-search-label">Title</span>
+                <input
+                  v-model="overrideTitle"
+                  type="text"
+                  class="form-input"
+                  :disabled="phase === 'searching'"
+                  placeholder="Book title"
+                />
+              </label>
+              <label class="candidate-search-field">
+                <span class="candidate-search-label">Author</span>
+                <input
+                  v-model="overrideAuthor"
+                  type="text"
+                  class="form-input"
+                  :disabled="phase === 'searching'"
+                  placeholder="Author name (optional)"
+                />
+              </label>
+              <button
+                type="submit"
+                class="btn btn-secondary search-again-btn"
+                :disabled="phase === 'searching' || !overrideTitle.trim()"
+              >
+                <PhMagnifyingGlass />
+                Search again
+              </button>
+            </form>
+          </template>
 
           <div v-if="errorMessage && phase !== 'review'" class="status-row error">
             <PhWarning />
@@ -528,9 +587,6 @@ function candidateYear(c: AudibleSearchResult): string {
 
           <!-- Phase 1: candidate picker -->
           <template v-if="phase === 'pick-candidate'">
-            <p class="phase-help">
-              This book doesn't have an ASIN. Pick the matching Audible result to load its metadata.
-            </p>
             <ul v-if="candidates.length" class="candidate-list">
               <li
                 v-for="c in candidates"
@@ -556,14 +612,9 @@ function candidateYear(c: AudibleSearchResult): string {
                 </div>
               </li>
             </ul>
-            <button
-              class="btn btn-secondary search-again-btn"
-              :disabled="phase !== 'pick-candidate'"
-              @click="searchCandidates"
-            >
-              <PhMagnifyingGlass />
-              Search again
-            </button>
+            <!-- The editable title/author form above already exposes a "Search
+                 again" submit button, so no duplicate retry control is needed
+                 here. -->
           </template>
 
           <!-- Phase 2: field comparison -->
@@ -840,6 +891,36 @@ function candidateYear(c: AudibleSearchResult): string {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+.candidate-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 0.6rem 0.75rem;
+  align-items: end;
+  margin: 0.5rem 0 0.75rem;
+}
+.candidate-search-form .search-again-btn {
+  align-self: end;
+  height: 2.4rem;
+}
+.candidate-search-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.candidate-search-label {
+  font-size: 0.8rem;
+  color: var(--text-muted, #888);
+}
+@media (max-width: 540px) {
+  .candidate-search-form {
+    grid-template-columns: 1fr;
+  }
+  .candidate-search-form .search-again-btn {
+    justify-self: start;
+  }
 }
 
 .review-header {
