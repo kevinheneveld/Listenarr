@@ -28,6 +28,24 @@
     <template #default>
       <ModalBody compact>
         <form @submit.prevent="handleSave" class="edit-form form-body">
+          <!-- Online metadata backfill — compare current values against
+               Audible and pick which fields to overwrite. -->
+          <div class="form-group online-backfill-row">
+            <button
+              type="button"
+              class="btn btn-secondary"
+              @click="openMetadataBackfill"
+              :disabled="!audiobook"
+            >
+              <PhDownloadSimple />
+              Fill missing from online…
+            </button>
+            <p class="help-text">
+              Compare current metadata against Audible and pick which fields to overwrite. Empty
+              fields are pre-selected; existing values are not.
+            </p>
+          </div>
+
           <!-- Monitored Status -->
           <div class="form-group">
             <label class="form-label">
@@ -761,6 +779,13 @@
     @cancel="cancelMoveConfirm"
     @confirm="handleMoveConfirm"
   />
+
+  <MetadataBackfillModal
+    :visible="showMetadataBackfill"
+    :audiobook="audiobook"
+    @close="showMetadataBackfill = false"
+    @applied="onMetadataBackfillApplied"
+  />
 </template>
 
 <script setup lang="ts">
@@ -791,6 +816,7 @@ import {
   PhTag,
   PhLink,
   PhWarning,
+  PhDownloadSimple,
 } from '@phosphor-icons/vue'
 import { useConfigurationStore } from '@/stores/configuration'
 import RootFolderSelect from '@/components/form/RootFolderSelect.vue'
@@ -800,6 +826,7 @@ import RadioCard from '@/components/settings/RadioCard.vue'
 import FolderBrowserModal from '@/components/feedback/FolderBrowserModal.vue'
 import { Modal, ModalHeader, ModalBody } from '@/components/feedback'
 import MoveAudiobookModal from '@/components/feedback/MoveAudiobookModal.vue'
+import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 // FormRow and CheckboxCard not used in this component script; UI uses local markup
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { usePathLengthCheck } from '@/composables/usePathLengthCheck'
@@ -872,6 +899,19 @@ const emit = defineEmits<{
   close: []
   saved: []
 }>()
+
+// Online metadata-backfill modal state. The modal applies changes directly
+// via PUT /library/{id} on its own; on `applied` we close this modal and
+// emit `saved` so the parent (detail view) refreshes the audiobook.
+const showMetadataBackfill = ref(false)
+function openMetadataBackfill() {
+  showMetadataBackfill.value = true
+}
+function onMetadataBackfillApplied() {
+  showMetadataBackfill.value = false
+  emit('saved')
+  emit('close')
+}
 
 const qualityProfiles = ref<QualityProfile[]>([])
 const configStore = useConfigurationStore()
