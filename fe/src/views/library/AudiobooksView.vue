@@ -160,7 +160,13 @@
           <span class="drilldown-item-label">{{ item.label }}:</span>
           <strong>{{ item.value }}</strong>
         </span>
-        <span class="drilldown-count">({{ audiobooks.length }} books)</span>
+        <span v-if="missingIdsLoading" class="drilldown-count">
+          <PhSpinner class="ph-spin" /> loading…
+        </span>
+        <span v-else-if="missingIdsError" class="drilldown-count drilldown-error">
+          ({{ missingIdsError }})
+        </span>
+        <span v-else class="drilldown-count">({{ audiobooks.length }} books)</span>
       </span>
       <button
         class="missing-filter-clear"
@@ -1035,53 +1041,6 @@ function isMissingFieldKey(value: unknown): value is MissingField {
   return typeof value === 'string' && (MISSING_FIELD_KEYS as string[]).includes(value)
 }
 
-function bookMissesField(book: Audiobook, field: MissingField): boolean {
-  switch (field) {
-    case 'files':
-      return (book.files?.length ?? book.fileCount ?? 0) === 0
-    case 'coverArt':
-      return book.coverArtMissing === true
-    case 'asin':
-      return !book.asin || book.asin.trim() === ''
-    case 'isbn': {
-      const v = book.isbn as unknown
-      if (Array.isArray(v)) return v.filter((i) => typeof i === 'string' && i.trim()).length === 0
-      return !v || (typeof v === 'string' && v.trim() === '')
-    }
-    case 'genres':
-      return !book.genres || book.genres.filter((g) => g && g.trim()).length === 0
-    case 'narrators':
-      return !book.narrators || book.narrators.filter((n) => n && n.trim()).length === 0
-    case 'description':
-      return !book.description || book.description.trim() === ''
-    case 'publisher':
-      return !book.publisher || book.publisher.trim() === ''
-    case 'language':
-      return !book.language || book.language.trim() === ''
-    case 'publishDate':
-      return (
-        (!book.publishedDate || book.publishedDate.trim() === '') &&
-        (!book.publishYear || book.publishYear.trim() === '')
-      )
-    case 'runtime': {
-      if (book.runtime && book.runtime > 0) return false
-      const hasFileDuration = (book.files || []).some(
-        (f) => (f.durationSeconds || 0) > 0,
-      )
-      return !hasFileDuration
-    }
-    case 'seriesPosition': {
-      const primary = book.seriesMemberships?.find((m) => m.seriesName && m.seriesName.trim())
-      const inSeries = !!(book.series && book.series.trim()) || !!primary
-      if (!inSeries) return false
-      const num =
-        (book.seriesNumber && book.seriesNumber.trim()) ||
-        (primary?.seriesNumber && primary.seriesNumber.trim())
-      return !num
-    }
-  }
-}
-
 // Drill-down filters carry the URL-driven scope from the dashboard. They
 // compose with each other, so a click on Patterson's Missing segment can land
 // on /audiobooks?author=Patterson&missing=files and the chip summarises both.
@@ -1102,6 +1061,21 @@ const filterGenre = ref<string | null>(
 // existing toolbar quick-filter already owns) and remember it was URL-driven
 // so the chip's clear button can reset it.
 const filterLanguageFromUrl = ref(false)
+
+// The library list endpoint returns a slim DTO that doesn't carry every
+// metadata field (Description, Isbn, etc.), so client-side predicates can't
+// reliably tell "missing X" for those fields. Defer to the dashboard's
+// authoritative ID list — fetched once per filterMissing change and used to
+// gate the filter so its results agree with the dashboard's headline counts.
+const missingIdSet = ref<Set<number> | null>(null)
+const missingIdsLoading = ref(false)
+const missingIdsError = ref<string | null>(null)
+
+// Translate the URL-style camelCase missing-field key into the backend's
+// PascalCase MissingField enum name.
+function backendMissingFieldName(field: MissingField): string {
+  return field.charAt(0).toUpperCase() + field.slice(1)
+}
 
 interface DrilldownChipItem {
   label: string
@@ -1329,9 +1303,18 @@ const filteredAndSortedAudiobooks = computed(() => {
   }
 
   // Drill-down: books missing a specific metadata field (from dashboard links).
+  // Authoritative ID list comes from the backend so the result matches the
+  // dashboard's headline counts even when the library list payload is slim
+  // (Description, Isbn, etc. aren't in the slim DTO). While the IDs are
+  // loading or after an error we filter to an empty set rather than show
+  // a misleading "everything passes" list.
   if (filterMissing.value) {
-    const field = filterMissing.value
-    filtered = filtered.filter((b) => bookMissesField(b, field))
+    if (missingIdSet.value) {
+      const ids = missingIdSet.value
+      filtered = filtered.filter((b) => ids.has(b.id))
+    } else {
+      filtered = []
+    }
   }
 
   // Drill-down: author, narrator, genre — matched case-insensitively to the
@@ -1944,6 +1927,35 @@ watch(
   () => route.query.missing,
   (m) => {
     filterMissing.value = isMissingFieldKey(m) ? (m as MissingField) : null
+  },
+  { immediate: true },
+)
+
+// Whenever the drill-down field changes, fetch the authoritative ID list from
+// the dashboard endpoint. The filter pipeline waits on it (so it doesn't show
+// stale or incorrect results) and the chip shows a loading state while it
+// loads.
+watch(
+  filterMissing,
+  async (field) => {
+    if (!field) {
+      missingIdSet.value = null
+      missingIdsLoading.value = false
+      missingIdsError.value = null
+      return
+    }
+    missingIdsLoading.value = true
+    missingIdsError.value = null
+    missingIdSet.value = null
+    try {
+      const resp = await apiService.getDashboardMissingIds(backendMissingFieldName(field))
+      missingIdSet.value = new Set(resp.ids)
+    } catch (err) {
+      missingIdsError.value = err instanceof Error ? err.message : 'Failed to load drill-down IDs'
+      logger.error('AudiobooksView: missing-IDs fetch failed', err)
+    } finally {
+      missingIdsLoading.value = false
+    }
   },
   { immediate: true },
 )
@@ -2735,8 +2747,15 @@ defineExpose({
 }
 
 .drilldown-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   color: #aaa;
   font-size: 0.85rem;
+}
+
+.drilldown-error {
+  color: #e74c3c;
 }
 
 .missing-filter-clear {

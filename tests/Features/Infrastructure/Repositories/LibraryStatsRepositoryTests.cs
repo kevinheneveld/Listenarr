@@ -453,6 +453,43 @@ namespace Listenarr.Tests.Features.Infrastructure.Repositories
 
         // ── Empty library ────────────────────────────────────────────────────
 
+        // ── Drill-down ID list ───────────────────────────────────────────────
+
+        [Fact]
+        public async Task GetBookIdsMissingField_ReturnsOnlyBooksMissingThatField()
+        {
+            using var db = NewDb();
+            // Fully populated book: not missing anything.
+            var complete = FullyPopulatedBook("Foundation");
+            complete.Files = new List<AudiobookFile>
+            {
+                new() { Path = "/a.m4b", Size = 1, DurationSeconds = 3600 },
+            };
+            db.Audiobooks.Add(complete);
+            // Empty book: missing everything including Description.
+            db.Audiobooks.Add(EmptyBook("Empty"));
+            // Populated but no description: should appear in missing-Description.
+            var noDesc = FullyPopulatedBook("No Description");
+            noDesc.Description = null;
+            db.Audiobooks.Add(noDesc);
+            await db.SaveChangesAsync();
+
+            var repo = new LibraryStatsRepository(db);
+
+            var missingDescIds = await repo.GetBookIdsMissingFieldAsync(MissingField.Description);
+            Assert.Equal(2, missingDescIds.Count);
+            Assert.Contains(noDesc.Id, missingDescIds);
+            Assert.DoesNotContain(complete.Id, missingDescIds);
+
+            // Files: only Empty + No Description (which has no Files) are unowned.
+            var missingFilesIds = await repo.GetBookIdsMissingFieldAsync(MissingField.Files);
+            Assert.DoesNotContain(complete.Id, missingFilesIds);
+
+            // Cover art: complete has imageUrl, the others don't.
+            var missingCoverIds = await repo.GetBookIdsMissingFieldAsync(MissingField.CoverArt);
+            Assert.DoesNotContain(complete.Id, missingCoverIds);
+        }
+
         [Fact]
         public async Task GetLibraryStats_EmptyLibrary_ReturnsZeroedStats()
         {

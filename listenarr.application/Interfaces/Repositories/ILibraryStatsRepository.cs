@@ -35,5 +35,13 @@ namespace Listenarr.Application.Interfaces.Repositories
             ActivityGranularity activityGranularity = ActivityGranularity.Month,
             int activityPeriods = 12,
             CancellationToken ct = default);
+
+        /// <summary>
+        /// Returns the IDs of every audiobook that is "missing" the given
+        /// metadata field, using the same predicates that drive the dashboard's
+        /// metadata-completeness counts. The dashboard drill-down filters the
+        /// library by this set so its results match the headline numbers exactly.
+        /// </summary>
+        Task<List<int>> GetBookIdsMissingFieldAsync(MissingField field, CancellationToken ct = default);
     }
 }

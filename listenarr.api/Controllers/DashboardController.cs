@@ -61,5 +61,19 @@ namespace Listenarr.Api.Controllers
                 stats.Overview.TotalBooks, stats.Series.TotalSeries, activityGranularity, activityPeriods);
             return Ok(stats);
         }
+
+        /// <summary>
+        /// Returns the IDs of every audiobook that is missing the given metadata
+        /// field, matching the dashboard's headline counts. The dashboard
+        /// drill-down filters the audiobooks list by this set so the two stay
+        /// in sync even when the library-list payload is slim and doesn't
+        /// carry every field (e.g. Description, Isbn).
+        /// </summary>
+        [HttpGet("missing/{field}/ids")]
+        public async Task<IActionResult> GetBooksMissingField(MissingField field, CancellationToken ct)
+        {
+            var ids = await _libraryStats.GetBookIdsMissingFieldAsync(field, ct);
+            return Ok(new { field = field.ToString(), ids });
+        }
     }
 }

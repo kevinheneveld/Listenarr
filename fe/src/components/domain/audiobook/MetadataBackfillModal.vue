@@ -482,8 +482,8 @@ function candidateYear(c: AudibleSearchResult): string {
 </script>
 
 <template>
-  <transition name="modal-fade">
-    <div v-if="visible" class="modal-overlay" @click.self="close">
+  <Teleport to="body">
+    <div v-if="visible" class="modal-overlay metadata-backfill-overlay" @click.self="close">
       <div class="modal" role="dialog" aria-modal="true">
         <header class="modal-header">
           <h2>
@@ -655,7 +655,7 @@ function candidateYear(c: AudibleSearchResult): string {
         </footer>
       </div>
     </div>
-  </transition>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -666,7 +666,9 @@ function candidateYear(c: AudibleSearchResult): string {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  /* Above the shared Modal component (which uses z-index 3000) so this
+     backfill modal isn't hidden behind the parent edit modal it's opened from. */
+  z-index: 3100;
   padding: 1rem;
 }
 

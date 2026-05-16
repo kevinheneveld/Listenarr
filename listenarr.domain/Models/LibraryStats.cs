@@ -169,6 +169,29 @@ namespace Listenarr.Domain.Models
         Month,
     }
 
+    /// <summary>
+    /// Per-book metadata-completeness axes the dashboard can drill into. Each
+    /// value maps to a predicate over Audiobook that picks the books "missing"
+    /// that thing. Mirrors the field set tracked in
+    /// <see cref="MetadataCompletenessStats"/>, plus <c>Files</c> for the
+    /// overview "Books missing" tile.
+    /// </summary>
+    public enum MissingField
+    {
+        Files,
+        CoverArt,
+        Asin,
+        Isbn,
+        Genres,
+        Narrators,
+        Description,
+        Publisher,
+        Language,
+        PublishDate,
+        Runtime,
+        SeriesPosition,
+    }
+
     public class ActivityStats
     {
         /// <summary>Granularity the time-series buckets were computed at.</summary>

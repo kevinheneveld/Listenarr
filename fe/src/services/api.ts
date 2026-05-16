@@ -1845,6 +1845,19 @@ class ApiService {
     return this.request<LibraryStats>(`/dashboard/stats?${params}`)
   }
 
+  /**
+   * Returns the IDs of every audiobook the dashboard considers "missing" the
+   * given metadata field. Backend is the authority — the library list payload
+   * is slim and doesn't carry every field (Description, Isbn, etc.), so the
+   * drill-down filters by this ID set instead of relying on the local payload.
+   * Field names mirror the backend MissingField enum (PascalCase).
+   */
+  async getDashboardMissingIds(field: string): Promise<{ field: string; ids: number[] }> {
+    return this.request<{ field: string; ids: number[] }>(
+      `/dashboard/missing/${encodeURIComponent(field)}/ids`,
+    )
+  }
+
   // System endpoints
   async getSystemInfo(): Promise<SystemInfo> {
     return this.request<SystemInfo>('/system/info')

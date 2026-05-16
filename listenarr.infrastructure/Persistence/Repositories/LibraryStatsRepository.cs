@@ -170,17 +170,17 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             var stats = new MetadataCompletenessStats
             {
                 TotalBooks = books.Count,
-                MissingCoverArt = books.Count(b => string.IsNullOrWhiteSpace(b.ImageUrl)),
-                MissingAsin = books.Count(b => string.IsNullOrWhiteSpace(b.Asin)),
-                MissingIsbn = books.Count(b => b.Isbn == null || !b.Isbn.Any(i => !string.IsNullOrWhiteSpace(i))),
-                MissingGenres = books.Count(b => b.Genres == null || !b.Genres.Any(g => !string.IsNullOrWhiteSpace(g))),
-                MissingNarrators = books.Count(b => b.Narrators == null || !b.Narrators.Any(n => !string.IsNullOrWhiteSpace(n))),
-                MissingDescription = books.Count(b => string.IsNullOrWhiteSpace(b.Description)),
-                MissingPublisher = books.Count(b => string.IsNullOrWhiteSpace(b.Publisher)),
-                MissingLanguage = books.Count(b => string.IsNullOrWhiteSpace(b.Language)),
-                MissingPublishDate = books.Count(b => string.IsNullOrWhiteSpace(b.PublishedDate) && string.IsNullOrWhiteSpace(b.PublishYear)),
-                MissingRuntime = books.Count(b => !HasAnyDuration(b)),
-                MissingSeriesPosition = books.Count(b => SeriesNameOf(b) != null && string.IsNullOrWhiteSpace(SeriesNumberOf(b))),
+                MissingCoverArt = books.Count(b => MissesField(b, MissingField.CoverArt)),
+                MissingAsin = books.Count(b => MissesField(b, MissingField.Asin)),
+                MissingIsbn = books.Count(b => MissesField(b, MissingField.Isbn)),
+                MissingGenres = books.Count(b => MissesField(b, MissingField.Genres)),
+                MissingNarrators = books.Count(b => MissesField(b, MissingField.Narrators)),
+                MissingDescription = books.Count(b => MissesField(b, MissingField.Description)),
+                MissingPublisher = books.Count(b => MissesField(b, MissingField.Publisher)),
+                MissingLanguage = books.Count(b => MissesField(b, MissingField.Language)),
+                MissingPublishDate = books.Count(b => MissesField(b, MissingField.PublishDate)),
+                MissingRuntime = books.Count(b => MissesField(b, MissingField.Runtime)),
+                MissingSeriesPosition = books.Count(b => MissesField(b, MissingField.SeriesPosition)),
             };
 
             if (books.Count > 0)
@@ -191,6 +191,42 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             }
 
             return stats;
+        }
+
+        /// <summary>
+        /// Shared per-field "is this book missing X?" predicate. Same logic
+        /// drives the dashboard's metadata-completeness counts and the
+        /// drill-down ID list, so the two never disagree.
+        /// </summary>
+        internal static bool MissesField(Audiobook b, MissingField field) => field switch
+        {
+            MissingField.Files => !IsOwned(b),
+            MissingField.CoverArt => string.IsNullOrWhiteSpace(b.ImageUrl),
+            MissingField.Asin => string.IsNullOrWhiteSpace(b.Asin),
+            MissingField.Isbn => b.Isbn == null || !b.Isbn.Any(i => !string.IsNullOrWhiteSpace(i)),
+            MissingField.Genres => b.Genres == null || !b.Genres.Any(g => !string.IsNullOrWhiteSpace(g)),
+            MissingField.Narrators => b.Narrators == null || !b.Narrators.Any(n => !string.IsNullOrWhiteSpace(n)),
+            MissingField.Description => string.IsNullOrWhiteSpace(b.Description),
+            MissingField.Publisher => string.IsNullOrWhiteSpace(b.Publisher),
+            MissingField.Language => string.IsNullOrWhiteSpace(b.Language),
+            MissingField.PublishDate => string.IsNullOrWhiteSpace(b.PublishedDate) && string.IsNullOrWhiteSpace(b.PublishYear),
+            MissingField.Runtime => !HasAnyDuration(b),
+            MissingField.SeriesPosition => SeriesNameOf(b) != null && string.IsNullOrWhiteSpace(SeriesNumberOf(b)),
+            _ => false,
+        };
+
+        public async Task<List<int>> GetBookIdsMissingFieldAsync(MissingField field, CancellationToken ct = default)
+        {
+            var books = await _db.Audiobooks
+                .AsNoTracking()
+                .Include(a => a.Files)
+                .Include(a => a.SeriesMemberships)
+                .ToListAsync(ct);
+
+            return books
+                .Where(b => MissesField(b, field))
+                .Select(b => b.Id)
+                .ToList();
         }
 
         // ── Series ───────────────────────────────────────────────────────────
