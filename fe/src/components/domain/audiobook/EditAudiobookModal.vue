@@ -28,24 +28,6 @@
     <template #default>
       <ModalBody compact>
         <form @submit.prevent="handleSave" class="edit-form form-body">
-          <!-- Online metadata backfill — compare current values against
-               Audible and pick which fields to overwrite. -->
-          <div class="form-group online-backfill-row">
-            <button
-              type="button"
-              class="btn btn-secondary"
-              @click="openMetadataBackfill"
-              :disabled="!audiobook"
-            >
-              <PhDownloadSimple />
-              Fill missing from online…
-            </button>
-            <p class="help-text">
-              Compare current metadata against Audible and pick which fields to overwrite. Empty
-              fields are pre-selected; existing values are not.
-            </p>
-          </div>
-
           <!-- Monitored Status -->
           <div class="form-group">
             <label class="form-label">
@@ -78,10 +60,24 @@
 
           <!-- Metadata -->
           <div class="form-group">
-            <label class="form-label" for="metadata-title">
-              <PhInfo></PhInfo>
-              Metadata
-            </label>
+            <div class="metadata-header">
+              <label class="form-label" for="metadata-title">
+                <PhInfo></PhInfo>
+                Metadata
+              </label>
+              <div class="fill-missing-actions">
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm fill-missing-btn"
+                  :disabled="!props.audiobook"
+                  title="Compare this book's metadata against Audible and pick which fields to overwrite."
+                  @click="openMetadataBackfill"
+                >
+                  <PhDownloadSimple :size="14" />
+                  Fill missing from online…
+                </button>
+              </div>
+            </div>
             <div class="form-control-card">
               <div class="metadata-grid">
                 <div class="metadata-field metadata-field--wide">
@@ -1674,12 +1670,15 @@ function finishEditingDestination() {
 async function handleSave() {
   const audiobook = baselineAudiobook.value
   if (!audiobook || !hasChanges.value) return
-  // If the base path (destination) changed, prompt the user with rich options
+  // If the base path (destination) changed, prompt the user with rich options.
+  // Normalise trailing path separators on both sides so a no-op edit (e.g.
+  // "/audiobooks/" vs "/audiobooks") doesn't trigger the move dialog.
   const combined = combinedBasePath()
   const originalBase = audiobook.basePath || ''
+  const normalisePathForCompare = (p: string) => (p || '').replace(/[/\\]+$/, '')
   let userWantsMove = true
   let userWantsDeleteEmpty = true
-  if ((combined || '') !== originalBase) {
+  if (normalisePathForCompare(combined || '') !== normalisePathForCompare(originalBase)) {
     const choice = await askMoveConfirmation(originalBase || '', combined || '')
     if (!choice || !choice.proceed) return
     userWantsMove = Boolean(choice.moveFiles)
@@ -2147,6 +2146,30 @@ function close() {
   display: flex;
   flex-direction: column;
 }
+
+.metadata-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.fill-missing-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.fill-missing-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 
 .identifier-list {
   display: flex;
