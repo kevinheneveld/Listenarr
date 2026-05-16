@@ -265,11 +265,18 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
-        public async Task UpdateAudiobook_DoesNotCacheImage_WhenUrlUnchanged()
+        public async Task UpdateAudiobook_CachesUnchangedExternalImage_WhenFlagIsTrue()
         {
-            // Form-data saves (EditAudiobookModal at line ~1758) always include
-            // the current imageUrl. A user editing only the description must
-            // not trigger a re-download of the unchanged cover.
+            // "Convert this existing external cover to local" is the primary
+            // use case for the edit-modal checkbox: the user opens a record
+            // whose cover is still hosted on Amazon, ticks the box (or leaves
+            // it on its default-ON state for external URLs), and saves
+            // unrelated edits. The URL didn't change but the user's *intent*
+            // to cache did — honor that.
+            //
+            // The FE prevents this from re-downloading on every subsequent
+            // save: once the URL is local, `canCacheImageLocally` returns
+            // false, the checkbox hides, the flag stops being sent.
             var existing = new Audiobook
             {
                 Id = 7,
@@ -282,13 +289,20 @@ namespace Listenarr.Tests.Features.Api.Controllers
             mockRepo.Setup(r => r.UpdateAsync(It.IsAny<Audiobook>())).ReturnsAsync(true);
 
             var mockImageCache = new Mock<IImageCacheService>();
+            mockImageCache
+                .Setup(c => c.MoveToLibraryStorageAsync("B00OLD", "https://example.com/old.jpg"))
+                .ReturnsAsync("config/cache/images/library/B00OLD.jpg");
+
             var controller = BuildController(existing, mockImageCache, mockRepo);
-            // Same URL as existing — simulates the FE re-sending the current value.
+            // Same URL as existing — simulates the FE re-sending the current
+            // value alongside an unrelated description edit. Cache must still
+            // fire because cacheImageLocally=true is the user's signal.
             var updated = new Audiobook { ImageUrl = "https://example.com/old.jpg" };
 
             await controller.UpdateAudiobook(7, updated, cacheImageLocally: true);
 
-            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+            mockImageCache.Verify(c => c.MoveToLibraryStorageAsync("B00OLD", "https://example.com/old.jpg"), Times.Once);
+            Assert.Equal("/config/cache/images/library/B00OLD.jpg", existing.ImageUrl);
         }
 
         [Fact]

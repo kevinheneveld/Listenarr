@@ -1296,12 +1296,6 @@ namespace Listenarr.Api.Controllers
                 return NotFound(new { message = "Audiobook not found" });
             }
 
-            // Remember the pre-merge ImageUrl so we can tell whether the caller
-            // actually changed the cover. Without this, FE saves that always
-            // send the current ImageUrl would re-download the cover on every
-            // unrelated edit when `cacheImageLocally=true` is in flight.
-            var previousImageUrl = existingAudiobook.ImageUrl;
-
             var legacyIdentifierFieldsTouched = false;
 
             // Only update non-null properties to support partial updates
@@ -1428,10 +1422,18 @@ namespace Listenarr.Api.Controllers
             // ASIN — important when ImageUrl and Asin change in the same PUT
             // (the backfill modal does exactly that), otherwise we'd key the
             // cache file on the old ASIN.
+            //
+            // No "URL changed" guard: the user's intent to cache is encoded in
+            // `cacheImageLocally`, not in whether the URL is different. The FE
+            // self-limits re-downloads — once the post-cache URL is local, the
+            // "Cache cover art locally on save" checkbox auto-hides and the
+            // flag stops being sent on subsequent edits. We do still require
+            // that `updatedAudiobook.ImageUrl` was present in the request so
+            // we don't surprise-cache when the caller omitted the field
+            // (e.g., the backfill modal applying only non-cover fields).
             if (cacheImageLocally
                 && updatedAudiobook.ImageUrl != null
-                && IsExternalHttpImageUrl(existingAudiobook.ImageUrl)
-                && !string.Equals(existingAudiobook.ImageUrl, previousImageUrl, StringComparison.Ordinal))
+                && IsExternalHttpImageUrl(existingAudiobook.ImageUrl))
             {
                 var externalUrl = existingAudiobook.ImageUrl!;
                 var moved = await MoveMetadataImageToLibraryStorageAsync(existingAudiobook, externalUrl);
