@@ -427,9 +427,13 @@ async function applyChanges() {
     const v = getFresh(metadata, key)
     if (isEmpty(v)) continue
     switch (key) {
-      case 'isbn':
-        payload.isbn = String(v as string) as unknown as Audiobook['isbn']
+      case 'isbn': {
+        // Backend expects List<string> even though Audible returns a single
+        // string. Wrap it so the JSON deserialiser doesn't 400 the whole PUT.
+        const isbnStr = String(v as string).trim()
+        payload.isbn = (isbnStr ? [isbnStr] : []) as unknown as Audiobook['isbn']
         break
+      }
       case 'runtime':
         payload.runtime = Number(v)
         break
