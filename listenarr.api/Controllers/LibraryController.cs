@@ -1282,6 +1282,127 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Stream a single audio file from a library audiobook for browser-side
+        /// preview (narrator identification, language check, etc.). Authentication
+        /// flows through the existing SessionAuthenticationMiddleware cookie path
+        /// so the browser's native &lt;audio&gt; element can play the URL directly
+        /// without needing to set custom headers. Range processing is enabled so
+        /// the browser can scrub through a large file without downloading it all.
+        /// </summary>
+        /// <param name="id">Audiobook ID the file must belong to.</param>
+        /// <param name="fileId">AudiobookFile row ID.</param>
+        [HttpGet("{id}/files/{fileId}/stream")]
+        public async Task<IActionResult> StreamAudiobookFile(int id, int fileId)
+        {
+            var file = await _audioFileRepository.GetByIdAsync(fileId);
+            if (file == null)
+            {
+                return NotFound(new { message = "File not found" });
+            }
+
+            // The route-bound audiobook id MUST match the file's audiobook —
+            // prevents using a known file id under an arbitrary audiobook URL
+            // to probe what's in the library.
+            if (file.AudiobookId != id)
+            {
+                _logger.LogWarning("StreamAudiobookFile: file {FileId} belongs to audiobook {ActualId}, not requested {RequestedId}",
+                    fileId, file.AudiobookId, id);
+                return NotFound(new { message = "File not found" });
+            }
+
+            if (string.IsNullOrWhiteSpace(file.Path))
+            {
+                return NotFound(new { message = "File has no path on disk" });
+            }
+
+            string absolutePath;
+            try
+            {
+                absolutePath = Path.GetFullPath(file.Path);
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is PathTooLongException || ex is NotSupportedException)
+            {
+                _logger.LogWarning(ex, "StreamAudiobookFile: rejected malformed path for file {FileId}", fileId);
+                return BadRequest(new { message = "Invalid file path" });
+            }
+
+            // Defense in depth against path-traversal: the resolved absolute
+            // path MUST sit under one of the configured root folders. The DB
+            // is the primary source of truth (file rows are populated by
+            // Listenarr's own scan code), but if a row's Path were ever
+            // tampered with — DB write bug, manual SQL, future endpoint that
+            // accepts arbitrary file paths — this is the last line of defense
+            // before we hand a `PhysicalFile` of `/etc/shadow` to a client.
+            var rootFolders = await _rootFolderRepository.GetAllAsync();
+            var roots = (rootFolders ?? new List<Listenarr.Domain.Models.RootFolder>())
+                .Select(r => r.Path)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .ToList();
+            if (roots.Count == 0 || !roots.Any(root => FileUtils.IsPathInsideOf(absolutePath, root!)))
+            {
+                _logger.LogWarning("StreamAudiobookFile: rejected file outside configured root folders. fileId={FileId} path={Path}",
+                    fileId, LogRedaction.SanitizeFilePath(absolutePath));
+                return NotFound(new { message = "File not accessible" });
+            }
+
+            if (!System.IO.File.Exists(absolutePath))
+            {
+                return NotFound(new { message = "File missing on disk" });
+            }
+
+            // Reject reparse points / symlinks. Same posture as ImagesController.
+            try
+            {
+                var attrs = System.IO.File.GetAttributes(absolutePath);
+                if ((attrs & System.IO.FileAttributes.ReparsePoint) != 0)
+                {
+                    _logger.LogWarning("StreamAudiobookFile: rejected reparse-point file {FileId}", fileId);
+                    return NotFound(new { message = "File not accessible" });
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "StreamAudiobookFile: failed inspecting file attributes for file {FileId}", fileId);
+                return StatusCode(500);
+            }
+
+            var contentType = ResolveAudioContentType(absolutePath);
+            if (contentType == null)
+            {
+                _logger.LogInformation("StreamAudiobookFile: unsupported extension for file {FileId} ({Ext})",
+                    fileId, Path.GetExtension(absolutePath));
+                return StatusCode(415, new { message = "Unsupported audio format for in-browser preview" });
+            }
+
+            return PhysicalFile(absolutePath, contentType, enableRangeProcessing: true);
+        }
+
+        // Map common audiobook file extensions to MIME types browsers handle.
+        // Returns null for anything we don't want to attempt to stream (the
+        // browser would just fail to play it, but better to surface a 415).
+        // .aax is intentionally NOT in the list — DRM-protected, the browser
+        // can't decode it anyway.
+        private static string? ResolveAudioContentType(string path)
+        {
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            return ext switch
+            {
+                ".mp3" => "audio/mpeg",
+                ".m4a" => "audio/mp4",
+                ".m4b" => "audio/mp4",
+                ".mp4" => "audio/mp4",
+                ".aac" => "audio/aac",
+                ".ogg" => "audio/ogg",
+                ".oga" => "audio/ogg",
+                ".opus" => "audio/ogg",
+                ".flac" => "audio/flac",
+                ".wav" => "audio/wav",
+                ".webm" => "audio/webm",
+                _ => null,
+            };
+        }
+
+        /// <summary>
         /// Update an existing audiobook's metadata and settings. Supports partial updates — only non-null fields are applied.
         /// </summary>
         /// <param name="id">Audiobook ID.</param>

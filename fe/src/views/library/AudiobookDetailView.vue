@@ -420,6 +420,15 @@
                 >
               </div>
               <div class="file-actions">
+                <button
+                  type="button"
+                  class="preview-play-btn"
+                  title="Preview this file in the browser"
+                  aria-label="Preview this file"
+                  @click.stop="openFilePreview(f)"
+                >
+                  <PhPlay weight="fill" />
+                </button>
                 <span class="file-size" v-if="f.size">{{ formatFileSize(f.size) }}</span>
                 <span class="file-size" v-else>Unknown size</span>
                 <PhCaretDown
@@ -642,6 +651,14 @@
     @close="showOrganizeModal = false"
     @done="handleOrganizeDone"
   />
+
+  <FilePreviewModal
+    :visible="previewVisible"
+    :audiobook-id="audiobook?.id ?? null"
+    :file="previewFile"
+    :audiobook-title="audiobook?.title ?? null"
+    @close="closeFilePreview"
+  />
 </template>
 
 <script setup lang="ts">
@@ -710,7 +727,9 @@ import {
   PhFileMinus,
   PhCircle,
   PhDiscordLogo,
+  PhPlay,
 } from '@phosphor-icons/vue'
+import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1740,6 +1759,37 @@ function toggleFileAccordion(fileId: number): void {
   } else {
     expandedFileAccordions.value.add(fileId)
   }
+}
+
+// ── In-browser file preview ────────────────────────────────────────────────
+// Drives the FilePreviewModal so the user can identify a narrator (or
+// language / audio quality) without leaving the page or downloading the
+// whole file locally.
+const previewVisible = ref(false)
+const previewFile = ref<{
+  id: number
+  path?: string | null
+  format?: string | null
+  durationSeconds?: number | null
+  size?: number | null
+} | null>(null)
+
+function openFilePreview(file: {
+  id: number
+  path?: string | null
+  format?: string | null
+  durationSeconds?: number | null
+  size?: number | null
+}): void {
+  previewFile.value = file
+  previewVisible.value = true
+}
+
+function closeFilePreview(): void {
+  previewVisible.value = false
+  // Keep `previewFile` around for one tick so the modal can render its
+  // closing animation without losing the bound file metadata. The next
+  // `openFilePreview` will overwrite it.
 }
 
 function getFullPath(relativePath?: string): string {
@@ -2780,6 +2830,38 @@ a.identifier-link:hover {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+/* Play button that opens the in-browser preview modal. Compact enough
+   that it sits comfortably alongside the file size + accordion chevron. */
+.preview-play-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid #3a3a3a;
+  border-radius: 50%;
+  color: #ddd;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+.preview-play-btn:hover {
+  background: var(--brand-focus, #3b82f6);
+  border-color: var(--brand-focus, #3b82f6);
+  color: #fff;
+}
+.preview-play-btn:focus-visible {
+  outline: 2px solid var(--brand-focus, #3b82f6);
+  outline-offset: 2px;
+}
+.preview-play-btn svg {
+  font-size: 14px;
 }
 
 .accordion-toggle {

@@ -1255,6 +1255,15 @@ class ApiService {
     })
   }
 
+  // URL the browser's <audio> element can load directly to preview a file.
+  // Auth flows through the session cookie automatically — no headers or query
+  // tokens required (see SessionAuthenticationMiddleware's cookie fallback).
+  // The endpoint serves the raw file with HTTP Range support so scrubbing in
+  // a large m4b doesn't download the whole thing.
+  getFileStreamUrl(audiobookId: number, fileId: number): string {
+    return buildApiPath(`/library/${audiobookId}/files/${fileId}/stream`)
+  }
+
   async updateAudiobook(
     id: number,
     audiobook: Partial<Audiobook>,
