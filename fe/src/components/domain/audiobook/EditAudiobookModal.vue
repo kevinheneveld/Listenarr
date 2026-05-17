@@ -69,6 +69,17 @@
                 <button
                   type="button"
                   class="btn btn-secondary btn-sm fill-missing-btn"
+                  :disabled="fillingMissingMetadata || !props.audiobook?.id"
+                  title="Re-extract metadata from this book's files and fill in any blank fields. Existing values are preserved."
+                  @click="fillMissingMetadata"
+                >
+                  <PhSpinner v-if="fillingMissingMetadata" class="ph-spin" :size="14" />
+                  <PhMagicWand v-else :size="14" />
+                  {{ fillingMissingMetadata ? 'Refreshing...' : 'Fill missing from file' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm fill-missing-btn"
                   :disabled="!props.audiobook"
                   title="Compare this book's metadata against Audible and pick which fields to overwrite."
                   @click="openMetadataBackfill"
@@ -825,6 +836,7 @@ import {
   PhLink,
   PhWarning,
   PhDownloadSimple,
+  PhMagicWand,
 } from '@phosphor-icons/vue'
 import { useConfigurationStore } from '@/stores/configuration'
 import RootFolderSelect from '@/components/form/RootFolderSelect.vue'
@@ -921,6 +933,27 @@ function onMetadataBackfillApplied() {
   emit('close')
 }
 
+async function fillMissingMetadata() {
+  const audiobook = props.audiobook
+  if (!audiobook?.id || fillingMissingMetadata.value) return
+
+  fillingMissingMetadata.value = true
+  try {
+    await apiService.scanAudiobook(audiobook.id, undefined, true)
+    toast.success(
+      'Metadata refresh enqueued',
+      'Scanning files for missing metadata. Reopen this audiobook to see the updated fields.',
+    )
+  } catch (error) {
+    toast.error(
+      'Metadata refresh failed',
+      error instanceof Error ? error.message : String(error),
+    )
+  } finally {
+    fillingMissingMetadata.value = false
+  }
+}
+
 const qualityProfiles = ref<QualityProfile[]>([])
 const configStore = useConfigurationStore()
 const rootStore = useRootFoldersStore()
@@ -946,6 +979,7 @@ const isHydratingForm = ref(false)
 const hasLocalEdits = ref(false)
 const resolvedAudiobook = ref<Audiobook | null>(null)
 const baselineAudiobook = computed(() => resolvedAudiobook.value ?? props.audiobook)
+const fillingMissingMetadata = ref(false)
 
 // When the user types or pastes an external Amazon/Audible cover URL, the
 // backend can download it into local library storage on save. Tracked
