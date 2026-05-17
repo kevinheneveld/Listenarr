@@ -319,6 +319,7 @@ builder.Services.AddScoped<ISearchResultFilter, AudiobookOnlyFilter>();
 builder.Services.AddScoped<ISearchResultFilter, PromotionalTitleFilter>();
 builder.Services.AddScoped<ISearchResultFilter, ProductLikeTitleFilter>();
 builder.Services.AddScoped<ISearchResultFilter, MissingInformationFilter>();
+builder.Services.AddScoped<ISearchResultFilter, RelevanceFilter>();
 builder.Services.AddScoped<SearchResultFilterPipeline>();
 
 // Add metadata fetching strategies

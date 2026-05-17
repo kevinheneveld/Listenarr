@@ -19,6 +19,7 @@
 using Listenarr.Application.Interfaces;
 using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Application.Notification;
+using Listenarr.Application.Search.Filters;
 using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -101,6 +102,7 @@ namespace Listenarr.Application.Search
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
             var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
+            var filterPipeline = scope.ServiceProvider.GetRequiredService<SearchResultFilterPipeline>();
 
             // Get all monitored audiobooks that haven't been searched in the last 6 hours
             var cutoffTime = DateTime.UtcNow.AddHours(-6);
@@ -125,7 +127,7 @@ namespace Listenarr.Application.Search
                 try
                 {
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
-                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, stoppingToken);
+                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, filterPipeline, stoppingToken);
 
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
@@ -163,6 +165,7 @@ namespace Listenarr.Application.Search
             IAudiobookRepository audiobookRepository,
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
+            SearchResultFilterPipeline filterPipeline,
             CancellationToken stoppingToken)
         {
             var qualityProfile = audiobook.QualityProfile;
@@ -217,8 +220,10 @@ namespace Listenarr.Application.Search
             var searchQuery = BuildSearchQuery(audiobook);
             _logger.LogInformation("Searching for audiobook '{Title}' with query: {Query}", audiobook.Title, searchQuery);
 
-            // Search for results
-            var searchResults = await searchService.SearchAsync(searchQuery, isAutomaticSearch: true);
+            // Search for results. Restrict to the Newznab "Books > Audiobook" category
+            // (3030) so music-only indexers configured in Prowlarr without a category
+            // restriction don't return concert/album torrents for audiobook queries.
+            var searchResults = await searchService.SearchAsync(searchQuery, category: "3030", isAutomaticSearch: true);
             _logger.LogInformation("Found {Count} raw search results for audiobook '{Title}'", searchResults.Count, audiobook.Title);
 
             // Broadcast detailed debug info about the raw search results to help diagnose automatic search failures
@@ -249,6 +254,22 @@ namespace Listenarr.Application.Search
             if (!searchResults.Any())
             {
                 _logger.LogInformation("No search results found for audiobook '{Title}'", audiobook.Title);
+                return 0;
+            }
+
+            // Context-aware filter pass — reject results whose title isn't relevant to
+            // this specific audiobook (e.g., a Patterson Hood concert recording vs. a
+            // James Patterson audiobook sharing only the "Patterson" surname).
+            var preFilterCount = searchResults.Count;
+            searchResults = filterPipeline.ApplyFilters(searchResults, logFilteredResults: true, audiobook: audiobook);
+            if (searchResults.Count < preFilterCount)
+            {
+                _logger.LogInformation("Filtered {Removed} of {Total} raw results for audiobook '{Title}' via context-aware pipeline", preFilterCount - searchResults.Count, preFilterCount, audiobook.Title);
+            }
+
+            if (!searchResults.Any())
+            {
+                _logger.LogInformation("All search results filtered for audiobook '{Title}'", audiobook.Title);
                 return 0;
             }
 
