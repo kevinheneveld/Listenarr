@@ -3456,6 +3456,30 @@ namespace Listenarr.Api.Controllers
                 return 0;
             }
 
+            // Context-aware filter pass — reject results whose title isn't relevant to
+            // this specific audiobook before scoring picks one to download. This is the
+            // bulk-search-all endpoint, an auto-pick flow like AutomaticSearchService.
+            try
+            {
+                using var filterScope = _scopeFactory.CreateScope();
+                var filterPipeline = filterScope.ServiceProvider.GetRequiredService<Listenarr.Application.Search.Filters.SearchResultFilterPipeline>();
+                var preFilterCount = searchResults.Count;
+                searchResults = filterPipeline.ApplyFilters(searchResults, logFilteredResults: true, audiobook: audiobook);
+                if (searchResults.Count < preFilterCount)
+                {
+                    _logger.LogInformation("Filtered {Removed} of {Total} raw results for audiobook '{Title}' via context-aware pipeline", preFilterCount - searchResults.Count, preFilterCount, LogRedaction.SanitizeText(audiobook.Title));
+                }
+                if (!searchResults.Any())
+                {
+                    _logger.LogInformation("All search results filtered for audiobook '{Title}'", LogRedaction.SanitizeText(audiobook.Title));
+                    return 0;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "SearchResultFilterPipeline unavailable; skipping context-aware filtering for audiobook {Id}", audiobook.Id);
+            }
+
             // Score results against quality profile
             var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile!);
 

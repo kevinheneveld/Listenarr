@@ -25,6 +25,7 @@ using Listenarr.Application.Common;
 using Listenarr.Application.Interfaces;
 using Listenarr.Domain.Models;
 using Listenarr.Application.Interfaces.Repositories;
+using Listenarr.Application.Search.Filters;
 using Microsoft.Extensions.Logging;
 using Listenarr.Application.Security;
 
@@ -44,7 +45,8 @@ namespace Listenarr.Application.Downloads
         IDownloadQueueService downloadQueueService,
         INotificationService notificationService,
         IHubBroadcaster hubBroadcaster,
-        IDownloadHistoryService downloadHistoryService) : IDownloadService
+        IDownloadHistoryService downloadHistoryService,
+        SearchResultFilterPipeline filterPipeline) : IDownloadService
     {
         // Cache expiration constants
         private const int QueueCacheExpirationSeconds = 10;
@@ -216,6 +218,23 @@ namespace Listenarr.Application.Downloads
                 {
                     Success = false,
                     Message = "No search results found"
+                };
+            }
+
+            // Context-aware filter pass — reject results whose title isn't relevant to
+            // this specific audiobook before scoring picks one to download.
+            var preFilterCount = searchResults.Count;
+            searchResults = filterPipeline.ApplyFilters(searchResults, logFilteredResults: true, audiobook: audiobook);
+            if (searchResults.Count < preFilterCount)
+            {
+                logger.LogInformation("Filtered {Removed} of {Total} raw results for audiobook '{Title}' via context-aware pipeline", preFilterCount - searchResults.Count, preFilterCount, LogRedaction.SanitizeText(audiobook.Title));
+            }
+            if (!searchResults.Any())
+            {
+                return new SearchAndDownloadResult
+                {
+                    Success = false,
+                    Message = "All results filtered as irrelevant"
                 };
             }
 
