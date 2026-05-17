@@ -707,13 +707,12 @@ namespace Listenarr.Application.Search
                             var authorFiltered = deduplicated.AsEnumerable();
                             if (!string.IsNullOrWhiteSpace(language)) authorFiltered = authorFiltered.Where(b => !string.IsNullOrWhiteSpace(b.Language) && string.Equals(b.Language, language, StringComparison.OrdinalIgnoreCase));
 
-                            // Title-based filtering can be done directly against the author results
+                            // Title-based filtering can be done directly against the author results.
+                            // Use punctuation-tolerant matching so user-typed titles like
+                            // "1634 - The Baltic War" still find Audible's "1634: The Baltic War".
                             if (!string.IsNullOrEmpty(titleVal))
                             {
-                                authorFiltered = authorFiltered.Where(b =>
-                                    (!string.IsNullOrWhiteSpace(b.Title) && b.Title.IndexOf(titleVal, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                                    (!string.IsNullOrWhiteSpace(b.Subtitle) && b.Subtitle.IndexOf(titleVal, StringComparison.OrdinalIgnoreCase) >= 0)
-                                );
+                                authorFiltered = authorFiltered.Where(b => TitleMatcher.Matches(b.Title, b.Subtitle, titleVal));
                             }
 
                             // If an ISBN was provided we must match against detailed metadata;
