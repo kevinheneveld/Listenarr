@@ -42,8 +42,10 @@ import {
   PhMagnifyingGlass,
   PhArrowLeft,
   PhDownloadSimple,
+  PhPlay,
 } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
+import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import { useToast } from '@/services/toastService'
 import { logger } from '@/utils/logger'
 import type {
@@ -142,6 +144,13 @@ const selected = ref<Set<FieldKey>>(new Set())
 // modal and reopening the edit-audiobook modal.
 const overrideTitle = ref('')
 const overrideAuthor = ref('')
+
+// In-browser audio preview of the owned file. Lets the user audition the
+// narrator before committing to a candidate — Audible often lists multiple
+// editions of the same book under different ASINs (different narrators or
+// abridgements) and the cover/title alone can't tell them apart.
+const showPreview = ref(false)
+const previewFile = computed(() => props.audiobook?.files?.[0] ?? null)
 
 // ── Open / reset ───────────────────────────────────────────────────────────
 
@@ -533,12 +542,26 @@ function candidateYear(c: AudibleSearchResult): string {
         </header>
 
         <div class="modal-body">
-          <p v-if="audiobook" class="book-name">
-            <strong>{{ audiobook.title }}</strong>
-            <span v-if="audiobook.authors?.length" class="muted">
-              · {{ audiobook.authors.join(', ') }}
-            </span>
-          </p>
+          <div v-if="audiobook" class="book-name">
+            <p class="book-name-text">
+              <strong>{{ audiobook.title }}</strong>
+              <span v-if="audiobook.authors?.length" class="muted">
+                · {{ audiobook.authors.join(', ') }}
+              </span>
+            </p>
+            <button
+              v-if="previewFile"
+              type="button"
+              class="btn btn-secondary btn-sm preview-btn"
+              :title="(audiobook.files?.length ?? 0) > 1
+                ? `Audition the first audio file (${audiobook.files?.length} files in this book) so you can identify the narrator before picking a candidate`
+                : 'Audition the audio file so you can identify the narrator before picking a candidate'"
+              @click="showPreview = true"
+            >
+              <PhPlay :size="14" />
+              Preview my file
+            </button>
+          </div>
 
           <div v-if="phase === 'searching' || phase === 'fetching'" class="status-row">
             <PhSpinner class="ph-spin" />
@@ -726,6 +749,14 @@ function candidateYear(c: AudibleSearchResult): string {
       </div>
     </div>
   </Teleport>
+
+  <FilePreviewModal
+    :visible="showPreview"
+    :audiobook-id="audiobook?.id ?? null"
+    :file="previewFile"
+    :audiobook-title="audiobook?.title ?? null"
+    @close="showPreview = false"
+  />
 </template>
 
 <style scoped>
@@ -791,11 +822,25 @@ function candidateYear(c: AudibleSearchResult): string {
 }
 
 .book-name {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
   margin: 0 0 1rem;
   color: #ddd;
 }
+.book-name-text {
+  margin: 0;
+}
 .book-name strong {
   color: #fff;
+}
+.preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
 }
 .muted {
   color: #888;
