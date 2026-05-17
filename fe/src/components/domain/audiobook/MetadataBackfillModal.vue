@@ -353,13 +353,30 @@ function getFresh(metadata: FreshMetadata | null, key: FieldKey): unknown {
   return (metadata as unknown as Record<string, unknown>)[key]
 }
 
-function sameValue(a: unknown, b: unknown): boolean {
+function sameValue(a: unknown, b: unknown, key?: FieldKey): boolean {
   if (isEmpty(a) && isEmpty(b)) return true
   if (Array.isArray(a) && Array.isArray(b)) {
     if (a.length !== b.length) return false
     return a.every((v, i) => String(v).trim() === String(b[i]).trim())
   }
+  // Date-shaped fields: compare the date portion only. Audible returns ISO
+  // timestamps like 2019-06-04T07:00:00Z; the library stores bare YYYY-MM-DD.
+  // String-trim equality would always mark them different and let the user
+  // overwrite with a no-op.
+  if (key === 'publishedDate') {
+    return normalizeDateForCompare(a) === normalizeDateForCompare(b)
+  }
   return String(a ?? '').trim() === String(b ?? '').trim()
+}
+
+function normalizeDateForCompare(v: unknown): string {
+  if (v == null) return ''
+  const s = String(v).trim()
+  if (!s) return ''
+  // Match a leading YYYY-MM-DD (with optional time/zone suffix). Anything else
+  // falls back to the trimmed string so non-ISO inputs still compare sensibly.
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s)
+  return m ? m[1] : s
 }
 
 function defaultSelection(book: Audiobook | null, metadata: FreshMetadata | null): Set<FieldKey> {
@@ -369,7 +386,7 @@ function defaultSelection(book: Audiobook | null, metadata: FreshMetadata | null
     const cur = getCurrent(book, key)
     const f = getFresh(metadata, key)
     if (isEmpty(f)) continue
-    if (sameValue(cur, f)) continue
+    if (sameValue(cur, f, key)) continue
     // Default ON only when the book's current value is empty.
     if (isEmpty(cur)) set.add(key)
   }
@@ -393,7 +410,7 @@ const rows = computed<FieldRow[]>(() => {
     const cur = getCurrent(book, key)
     const f = getFresh(metadata, key)
     const empty = isEmpty(cur)
-    const unchanged = !isEmpty(f) && sameValue(cur, f)
+    const unchanged = !isEmpty(f) && sameValue(cur, f, key)
     const selectable = !isEmpty(f) && !unchanged
     return {
       key,
