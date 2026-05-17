@@ -81,6 +81,7 @@ import {
   API_IMAGES_PATH_PREFIX,
   API_ORIGIN,
   EFFECTIVE_API_BASE,
+  buildApiPath,
 } from './apiBase'
 
 const getApiImageOrigin = (): string => (import.meta.env.DEV ? '' : API_ORIGIN)
