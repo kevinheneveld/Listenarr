@@ -26,6 +26,7 @@ using System.Text;
 using Listenarr.Domain.Common;
 using Listenarr.Application.Interfaces;
 using Listenarr.Application.Common;
+using Listenarr.Application.Common.Images;
 using Listenarr.Domain.Models.Configurations;
 using Listenarr.Domain.Models;
 using Listenarr.Application.Interfaces.Repositories;
@@ -74,6 +75,7 @@ namespace Listenarr.Api.Controllers
         private readonly IRootFolderService? _rootFolderService;
         private readonly ILibraryAddService? _libraryAddService;
         private readonly IRenameService? _renameService;
+        private readonly IExternalCoverArtSweepService? _externalCoverArtSweepService;
         /// <summary>Initializes a new instance of <see cref="LibraryController"/>.</summary>
         /// <param name="repo">Repository for audiobook persistence and queries.</param>
         /// <param name="imageCacheService">Service for caching and moving cover images.</param>
@@ -91,6 +93,7 @@ namespace Listenarr.Api.Controllers
         /// <param name="rootFolderService">Optional root folder service for managing and enumerating configured root folders used for validating explicit scan paths.</param>
         /// <param name="libraryAddService">Optional shared add-to-library service used by runtime requests and background syncs.</param>
         /// <param name="renameService">Optional organize/rename service used for previewing and executing library file organization.</param>
+        /// <param name="externalCoverArtSweepService">Optional sweep service that downloads still-external cover URLs into local library storage on demand.</param>
         public LibraryController(
             IAudiobookRepository repo,
             IImageCacheService imageCacheService,
@@ -107,7 +110,8 @@ namespace Listenarr.Api.Controllers
             NotificationService? notificationService = null,
             IRootFolderService? rootFolderService = null,
             ILibraryAddService? libraryAddService = null,
-            IRenameService? renameService = null)
+            IRenameService? renameService = null,
+            IExternalCoverArtSweepService? externalCoverArtSweepService = null)
         {
             _repo = repo;
             _imageCacheService = imageCacheService;
@@ -125,6 +129,7 @@ namespace Listenarr.Api.Controllers
             _rootFolderService = rootFolderService;
             _libraryAddService = libraryAddService;
             _renameService = renameService;
+            _externalCoverArtSweepService = externalCoverArtSweepService;
         }
 
         private static bool ComputeWantedFlag(Audiobook audiobook)
@@ -1576,16 +1581,11 @@ namespace Listenarr.Api.Controllers
             return Ok(new { message = "Audiobook updated successfully", audiobook = existingAudiobook });
         }
 
-        // True iff the URL is an http(s)://… address pointing to something other
-        // than our local image cache. The cache helper returns relative paths
-        // like "/cache/images/library/{key}.jpg" or "/api/v1/images/{key}", so
-        // anything starting with http(s):// is by definition external.
+        // Thin alias kept for readability at the call sites in this controller.
+        // Predicate logic lives in LibraryImageStorageHelper so the sweep service
+        // sees the exact same definition of "external".
         private static bool IsExternalHttpImageUrl(string? url)
-        {
-            if (string.IsNullOrWhiteSpace(url)) return false;
-            return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                || url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
-        }
+            => LibraryImageStorageHelper.IsExternalHttpImageUrl(url);
 
         /// <summary>
         /// Delete an audiobook from the library, including its cached cover image.
@@ -2599,6 +2599,48 @@ namespace Listenarr.Api.Controllers
             }
 
             return Ok(new { message = "Bulk update completed", results });
+        }
+
+        /// <summary>
+        /// One-shot admin sweep: walk every audiobook and download any external
+        /// http(s) cover URL into local library storage. Idempotent — records
+        /// already pointing at the local cache are skipped, so re-running after
+        /// a successful sweep is a no-op. Per-record failures (download 404, IO
+        /// error, etc.) are logged and counted but do not abort the sweep.
+        /// </summary>
+        [HttpPost("cache-external-covers")]
+        public async Task<IActionResult> CacheExternalCovers(CancellationToken cancellationToken)
+        {
+            if (_externalCoverArtSweepService == null)
+            {
+                return StatusCode(503, new { message = "External cover-art sweep service is unavailable" });
+            }
+
+            ExternalCoverArtSweepResult result;
+            try
+            {
+                result = await _externalCoverArtSweepService.SweepAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return StatusCode(499, new { message = "Sweep cancelled" });
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "External cover-art sweep failed");
+                return StatusCode(500, new { message = "External cover-art sweep failed", error = ex.Message });
+            }
+
+            return Ok(new
+            {
+                message = $"Sweep complete: cached {result.Succeeded} of {result.Queued} external covers",
+                totalScanned = result.TotalScanned,
+                alreadyLocal = result.AlreadyLocal,
+                queued = result.Queued,
+                succeeded = result.Succeeded,
+                failed = result.Failed,
+                durationMs = result.DurationMs,
+            });
         }
 
         /// <summary>
@@ -4343,57 +4385,8 @@ namespace Listenarr.Api.Controllers
             return legacyIdentifierFieldsTouched;
         }
 
-        private async Task<string?> MoveMetadataImageToLibraryStorageAsync(Audiobook audiobook, string imageUrl)
-        {
-            if (string.IsNullOrWhiteSpace(imageUrl)) return null;
-
-            try
-            {
-                var imageKey = !string.IsNullOrWhiteSpace(audiobook.Asin)
-                    ? audiobook.Asin!
-                    : (audiobook.Isbn != null && audiobook.Isbn.Any(i => !string.IsNullOrWhiteSpace(i))
-                        ? "img-" + ComputeShortHash(audiobook.Isbn.First(i => !string.IsNullOrWhiteSpace(i)))
-                        : "img-" + ComputeShortHash($"{audiobook.Title}|{audiobook.Authors?.FirstOrDefault()}"));
-
-                var libraryImagePath = await _imageCacheService.MoveToLibraryStorageAsync(imageKey, imageUrl);
-                if (string.IsNullOrWhiteSpace(libraryImagePath))
-                {
-                    return null;
-                }
-
-                return "/" + libraryImagePath.TrimStart('/');
-            }
-            catch (IOException ex)
-            {
-                _logger.LogWarning(ex, "Failed to move rescanned metadata image for audiobook {AudiobookId}", audiobook.Id);
-                return null;
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                _logger.LogWarning(ex, "Failed to move rescanned metadata image for audiobook {AudiobookId}", audiobook.Id);
-                return null;
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogWarning(ex, "Failed to move rescanned metadata image for audiobook {AudiobookId}", audiobook.Id);
-                return null;
-            }
-            catch (TaskCanceledException ex)
-            {
-                _logger.LogWarning(ex, "Failed to move rescanned metadata image for audiobook {AudiobookId}", audiobook.Id);
-                return null;
-            }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogWarning(ex, "Failed to move rescanned metadata image for audiobook {AudiobookId}", audiobook.Id);
-                return null;
-            }
-            catch (UriFormatException ex)
-            {
-                _logger.LogWarning(ex, "Failed to move rescanned metadata image for audiobook {AudiobookId}", audiobook.Id);
-                return null;
-            }
-        }
+        private Task<string?> MoveMetadataImageToLibraryStorageAsync(Audiobook audiobook, string imageUrl)
+            => LibraryImageStorageHelper.MoveExternalImageToLibraryAsync(_imageCacheService, audiobook, imageUrl, _logger);
 
         private static List<string> NormalizeMetadataStringList(IEnumerable<string>? values)
         {

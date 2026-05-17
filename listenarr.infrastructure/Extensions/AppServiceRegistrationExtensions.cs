@@ -18,6 +18,7 @@
 // csharp
 using Listenarr.Application.Audiobooks;
 using Listenarr.Application.Common;
+using Listenarr.Application.Common.Images;
 using Listenarr.Application.Downloads;
 using Listenarr.Application.Interfaces;
 using Listenarr.Application.Metadata;
@@ -97,6 +98,7 @@ namespace Listenarr.Infrastructure.Extensions
                 sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath
             ));
+            services.AddScoped<IExternalCoverArtSweepService, ExternalCoverArtSweepService>();
             services.AddScoped<IFileNamingService, FileNamingService>();
             services.AddScoped<IRenameService, RenameService>();
             // Centralized import service: handles moving/copying, naming and audiobook registration
