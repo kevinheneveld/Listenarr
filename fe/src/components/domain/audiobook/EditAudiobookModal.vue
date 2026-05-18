@@ -801,7 +801,7 @@
 
   <MetadataBackfillModal
     :visible="showMetadataBackfill"
-    :audiobook="audiobook"
+    :audiobook="baselineAudiobook"
     @close="showMetadataBackfill = false"
     @applied="onMetadataBackfillApplied"
   />
