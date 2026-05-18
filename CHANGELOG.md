@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Audiobook files now display in natural order on the detail view:** Multi-disc / multi-chapter books showed up in the (essentially undefined) row-insertion order EF returned from the scan — e.g. Disc 08, 01, 06, 10, 07, 09… for a 14-disc book. Files now sort by filename using a natural-sort key (treating embedded digit runs as numeric values, so "Disc 02" precedes "Disc 10"), with files lacking a path sinking to the end. A new `AudiobookFileOrdering.InNaturalOrder` helper centralizes the ordering and is applied at both `LibraryController.GetAudiobook` (the FE detail-view's actual data source — its anonymous-object response had its own independent `files` projection that bypassed `AudiobookDtoFactory`) and `AudiobookDtoFactory.BuildFromEntity` (the scan-broadcast / move-op path). The shared `ToNaturalSortKey` algorithm previously private to `MultiFileImportPlanner` was lifted to a new `Listenarr.Domain.Common.NaturalSort.ToKey` so all three sites use the same comparison.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added

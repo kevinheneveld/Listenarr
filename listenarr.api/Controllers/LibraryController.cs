@@ -797,7 +797,11 @@ namespace Listenarr.Api.Controllers
                     })
                     .ToList(),
                 tags = updated.Tags,
-                files = updated.Files?.Select(f => new
+                // Sort via the shared AudiobookFileOrdering helper so multi-file books
+                // (e.g. a 14-disc rip) appear in human-natural order — "Disc 01..14"
+                // rather than the essentially-undefined row-insertion order EF returns.
+                // Same helper feeds AudiobookDtoFactory so the two responses can't drift.
+                files = AudiobookFileOrdering.InNaturalOrder(updated.Files).Select(f => new
                 {
                     id = f.Id,
                     path = f.Path,
