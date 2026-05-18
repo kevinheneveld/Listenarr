@@ -450,6 +450,10 @@ builder.Services.AddHttpClient("sabnzbd")
         .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt))));
 
 // nzbget
+// AllowAutoRedirect=false + a custom safe-redirect handler so the Authorization header is
+// re-applied on same-host non-downgrade 30x responses (typical for reverse-proxy setups in
+// front of NZBGet). See NzbgetSafeRedirectHandler for the security rules.
+builder.Services.AddTransient<Listenarr.Infrastructure.Adapters.NzbgetSafeRedirectHandler>();
 builder.Services.AddHttpClient("nzbget")
     .ConfigureHttpClient(client =>
     {
@@ -458,8 +462,10 @@ builder.Services.AddHttpClient("nzbget")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler()
     {
         AutomaticDecompression = System.Net.DecompressionMethods.All,
-        UseCookies = false
+        UseCookies = false,
+        AllowAutoRedirect = false
     })
+    .AddHttpMessageHandler<Listenarr.Infrastructure.Adapters.NzbgetSafeRedirectHandler>()
     .SetHandlerLifetime(TimeSpan.FromMinutes(5))
     .AddPolicyHandler(HttpPolicyExtensions
         .HandleTransientHttpError()
