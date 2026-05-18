@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Backfill candidate search now finds books that Audible's author-catalog endpoint omits:** `SearchService.IntelligentSearchAsync`'s AUTHOR_TITLE branch fetched the user's author from Audible's per-author catalog and filtered the results by the user's title. Audible's catalog is incomplete in two distinct ways that both broke the modal in practice — (a) co-authored works appear only under one of the co-authors (e.g. "Gwendy's Button Box" appears under Chizmar's page, not King's), and (b) some catalogs return a long list of titles but specific editions are missing via attribution / pagination / featured-collection oddities (Asimov's catalog returns 97 titles but the English "Robots and Empire" / B0CSV7NJMB isn't among them — only the Spanish edition makes it through the title filter, so the user sees one wrong-language result and a misleading "this is the only match" screen). The branch now supplements the narrow author-page-plus-title path with a title-only Audible search whenever the narrow path returns fewer than 5 candidates, merging the results deduped by ASIN. The narrow hits stay in the list (they're still valid candidates) and the title-only matches fill in everything the author endpoint missed. Above the threshold the narrow path is trusted unchanged, so common queries like "Foundation" by Asimov don't get diluted with other-author "Foundation" books. The supplement log line names the author + title + narrow count so the failure mode is visible in support traces.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added

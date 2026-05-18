@@ -682,6 +682,11 @@ namespace Listenarr.Application.Search
                             }
                         }
                         _logger.LogInformation("Audible AUTHOR_TITLE: finished aggregating pages for '{Author}': aggregated={AggregatedCount}, pageSize={PageSize}, maxPages={MaxPages}", authorVal, aggregated.Count, pageSize, maxPages);
+                        // `converted` is declared outside the `aggregated.Any()` block so the
+                        // narrow-result-thin fallback below can read from and merge into it
+                        // even when the author-page returned nothing at all.
+                        var converted = new List<SearchResult>();
+
                         if (aggregated?.Any() == true)
                         {
                             // Deduplicate results based on ASIN to prevent repeated books across pages
@@ -693,7 +698,6 @@ namespace Listenarr.Application.Search
 
                             _logger.LogInformation("Deduplicated AUTHOR_TITLE results for '{Author}': {OriginalCount} -> {DeduplicatedCount}", authorVal, aggregated.Count, deduplicated.Count);
 
-                            var converted = new List<SearchResult>();
                             try { _logger.LogInformation("Audible author lookup returned {Count} aggregated results for author '{Author}'", deduplicated.Count, authorVal); }
                             catch (Exception caughtEx_4) when (caughtEx_4 is not OperationCanceledException && caughtEx_4 is not OutOfMemoryException && caughtEx_4 is not StackOverflowException)
                             {
@@ -796,8 +800,94 @@ namespace Listenarr.Application.Search
                                 }
                             }
 
-                            if (converted.Any()) return SearchResultConverters.ToMetadataList(converted);
                         }
+
+                        // AUTHOR_TITLE fallback / supplement: Audible's author-page endpoint
+                        // is incomplete for some authors — sometimes by attribution (a
+                        // co-authored work like "Gwendy's Button Box" only appears under
+                        // Stephen King's co-author Richard Chizmar), sometimes by pagination
+                        // or featured-collection filing (Asimov's catalog returns 97
+                        // titles but the English "Robots and Empire" / B0CSV7NJMB is not
+                        // among them, even though it lives at audible.com/pd/...).
+                        //
+                        // When the narrow author-page-plus-title path produces fewer than
+                        // NarrowResultsConfidenceThreshold candidates, broaden with a
+                        // title-only Audible search and merge the results, deduped by
+                        // ASIN. The author-page hits stay in the list (they're still
+                        // valid candidates) and the title-only matches fill in everything
+                        // Audible's author endpoint missed. We only return early when the
+                        // narrow path looks confident enough on its own.
+                        const int NarrowResultsConfidenceThreshold = 5;
+                        if (converted.Count >= NarrowResultsConfidenceThreshold)
+                        {
+                            return SearchResultConverters.ToMetadataList(converted);
+                        }
+
+                        if (!string.IsNullOrEmpty(titleVal))
+                        {
+                            try
+                            {
+                                _logger.LogInformation(
+                                    "AUTHOR_TITLE narrow path returned {Count} candidates (< threshold {Threshold}) for author '{Author}' title '{Title}' — supplementing with title-only Audible search",
+                                    converted.Count,
+                                    NarrowResultsConfidenceThreshold,
+                                    authorVal,
+                                    titleVal);
+                            }
+                            catch (Exception caughtExLog) when (caughtExLog is not OperationCanceledException && caughtExLog is not OutOfMemoryException && caughtExLog is not StackOverflowException)
+                            {
+                                System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
+                            }
+
+                            var fallbackRes = await _audibleService.SearchByTitleAsync(titleVal, 1, 50, region, language);
+                            if (fallbackRes?.Results != null && fallbackRes.Results.Any())
+                            {
+                                var seenAsins = new HashSet<string>(
+                                    converted
+                                        .Where(c => !string.IsNullOrWhiteSpace(c.Asin))
+                                        .Select(c => c.Asin!),
+                                    StringComparer.OrdinalIgnoreCase);
+
+                                var fallbackFiltered = fallbackRes.Results.AsEnumerable();
+                                if (!string.IsNullOrWhiteSpace(language))
+                                {
+                                    fallbackFiltered = fallbackFiltered.Where(b => string.IsNullOrWhiteSpace(b.Language) || string.Equals(b.Language, language, StringComparison.OrdinalIgnoreCase));
+                                }
+                                foreach (var book in fallbackFiltered.Where(book => !string.IsNullOrWhiteSpace(book.Asin) && !seenAsins.Contains(book.Asin!)))
+                                {
+                                    var bookResp = new AudibleBookResponse
+                                    {
+                                        Asin = book.Asin,
+                                        Title = book.Title,
+                                        Subtitle = book.Subtitle,
+                                        Authors = book.Authors,
+                                        ImageUrl = book.ImageUrl,
+                                        Language = book.Language,
+                                        BookFormat = book.BookFormat,
+                                        Genres = book.Genres,
+                                        Series = book.Series,
+                                        Publisher = book.Publisher,
+                                        Narrators = book.Narrators,
+                                        ReleaseDate = book.ReleaseDate
+                                    };
+                                    try
+                                    {
+                                        var meta = _metadataConverters.ConvertAudibleToMetadata(bookResp, book.Asin!, "Audible");
+                                        var sr = await _metadataConverters.ConvertMetadataToSearchResultAsync(meta, book.Asin!);
+                                        sr.IsEnriched = true;
+                                        sr.MetadataSource = "Audible";
+                                        converted.Add(sr);
+                                        seenAsins.Add(book.Asin!);
+                                    }
+                                    catch (Exception exMetaConv) when (exMetaConv is not OperationCanceledException && exMetaConv is not OutOfMemoryException && exMetaConv is not StackOverflowException)
+                                    {
+                                        _logger.LogDebug(exMetaConv, "Failed converting audible data for ASIN {Asin} in AUTHOR_TITLE title-only supplement", book.Asin);
+                                    }
+                                }
+                            }
+                        }
+
+                        if (converted.Any()) return SearchResultConverters.ToMetadataList(converted);
                     }
 
                     // TITLE-only
