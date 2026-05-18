@@ -22,7 +22,6 @@ namespace Listenarr.Domain.Common
 {
     public static class MultiFileImportPlanner
     {
-        private static readonly Regex NumericChunkPattern = new(@"\d+|\D+", RegexOptions.Compiled);
         private static readonly Regex DiskPattern = new(
             @"\b(?:disc|disk|cd|part|pt|volume|vol)\s*[-_. ]*0*(\d+)\b",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -53,7 +52,7 @@ namespace Listenarr.Domain.Common
             }
 
             var ordered = distinct.Values
-                .OrderBy(i => ToNaturalSortKey(GetComparablePath(i.RelativePath, i.FullPath)), StringComparer.Ordinal)
+                .OrderBy(i => NaturalSort.ToKey(GetComparablePath(i.RelativePath, i.FullPath)), StringComparer.Ordinal)
                 .ThenBy(i => GetComparablePath(i.RelativePath, i.FullPath), StringComparer.OrdinalIgnoreCase)
                 .ThenBy(i => i.FullPath, StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -146,18 +145,6 @@ namespace Listenarr.Domain.Common
         {
             var preferred = string.IsNullOrWhiteSpace(relativePath) ? fullPath : relativePath;
             return preferred.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
-        }
-
-        private static string ToNaturalSortKey(string value)
-        {
-            return string.Concat(
-                NumericChunkPattern.Matches(value).Select(match =>
-                {
-                    var chunk = match.Value;
-                    return int.TryParse(chunk, out var numeric)
-                        ? numeric.ToString("D12")
-                        : chunk.ToUpperInvariant();
-                }));
         }
 
         private static int? TryParseNumber(Match match)

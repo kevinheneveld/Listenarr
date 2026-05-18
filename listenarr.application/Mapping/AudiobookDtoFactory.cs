@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using Listenarr.Application.Audiobooks;
+using Listenarr.Domain.Common;
 using Listenarr.Domain.Models;
 
 namespace Listenarr.Application.Mapping
@@ -26,21 +27,25 @@ namespace Listenarr.Application.Mapping
         {
             if (audiobook == null) return null!;
 
-            var files = audiobook.Files?.Select(f => new AudiobookFileDto
-            {
-                Id = f.Id,
-                Path = f.Path,
-                Size = f.Size,
-                DurationSeconds = f.DurationSeconds,
-                Format = f.Format,
-                Container = f.Container,
-                Codec = f.Codec,
-                Bitrate = f.Bitrate,
-                SampleRate = f.SampleRate,
-                Channels = f.Channels,
-                CreatedAt = f.CreatedAt,
-                Source = f.Source
-            }).ToArray();
+            // Sort via the shared AudiobookFileOrdering helper so this DTO factory and the
+            // LibraryController.GetAudiobook endpoint (the FE detail view's actual data
+            // source) cannot drift apart on file ordering.
+            var files = AudiobookFileOrdering.InNaturalOrder(audiobook.Files)
+                .Select(f => new AudiobookFileDto
+                {
+                    Id = f.Id,
+                    Path = f.Path,
+                    Size = f.Size,
+                    DurationSeconds = f.DurationSeconds,
+                    Format = f.Format,
+                    Container = f.Container,
+                    Codec = f.Codec,
+                    Bitrate = f.Bitrate,
+                    SampleRate = f.SampleRate,
+                    Channels = f.Channels,
+                    CreatedAt = f.CreatedAt,
+                    Source = f.Source
+                }).ToArray();
 
             var dto = new AudiobookDto
             {
