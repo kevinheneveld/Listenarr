@@ -17,7 +17,12 @@
 -->
 <template>
   <teleport to="body">
-    <div v-if="visible" class="modal-overlay" @click.self="onClose">
+    <div
+      v-if="visible"
+      class="modal-overlay"
+      :style="overlayStyle"
+      @click.self="onClose"
+    >
       <div
         ref="contentRef"
         class="modal-content"
@@ -70,6 +75,11 @@ const props = defineProps({
   title: { type: String, default: '' },
   showClose: { type: Boolean, default: true },
   size: { type: String as () => 'sm' | 'md' | 'lg', default: 'md' },
+  // Optional inline-style override for the overlay's z-index. Lets a caller open
+  // this Modal from inside another modal whose overlay sits above the default
+  // z-index of 3000 (e.g., MetadataBackfillModal uses 3100). Pass a value
+  // higher than the parent's overlay to ensure this Modal stacks on top.
+  overlayZIndex: { type: Number, default: undefined },
 })
 const emit = defineEmits(['close'])
 
@@ -80,6 +90,10 @@ function onClose() {
 const sizeClass = computed(() => {
   return props.size === 'sm' ? 'modal-sm' : props.size === 'lg' ? 'modal-lg' : 'modal-md'
 })
+
+const overlayStyle = computed(() =>
+  props.overlayZIndex != null ? { zIndex: props.overlayZIndex } : undefined,
+)
 
 const contentRef = ref<HTMLElement | null>(null)
 const ariaLabelledBy = ref<string | undefined>(undefined)

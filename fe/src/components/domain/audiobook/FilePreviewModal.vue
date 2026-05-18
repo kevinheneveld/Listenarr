@@ -25,7 +25,7 @@
   cookie fallback so no header plumbing is needed on this side.
 -->
 <template>
-  <Modal :visible="visible" size="md" @close="onClose">
+  <Modal :visible="visible" size="md" :overlay-z-index="overlayZIndex" @close="onClose">
     <template #header>
       <ModalHeader :title="title" @close="onClose" />
     </template>
@@ -86,6 +86,10 @@ interface Props {
   audiobookId: number | null
   file: FileLike | null
   audiobookTitle?: string | null
+  // Optional z-index override for the overlay. Set higher than the parent
+  // modal's overlay z-index when opening this preview from inside another
+  // modal (e.g., MetadataBackfillModal uses 3100, so pass 3200).
+  overlayZIndex?: number
 }
 
 interface Emits {

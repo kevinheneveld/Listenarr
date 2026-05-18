@@ -772,6 +772,7 @@ function candidateYear(c: AudibleSearchResult): string {
     :audiobook-id="audiobook?.id ?? null"
     :file="previewFile"
     :audiobook-title="audiobook?.title ?? null"
+    :overlay-z-index="3200"
     @close="showPreview = false"
   />
 </template>
