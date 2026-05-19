@@ -1703,6 +1703,58 @@ namespace Listenarr.Api.Controllers
             return StatusCode(500, new { message = "Failed to delete audiobook" });
         }
 
+        /// <summary>
+        /// Delete a single tracked file from an audiobook. Optionally also remove the file from disk.
+        /// </summary>
+        /// <param name="id">Owning audiobook ID.</param>
+        /// <param name="fileId">AudiobookFile row ID to delete.</param>
+        /// <param name="deleteFromDisk">When true, attempt to delete the file from disk too. Disk-delete failures surface as warnings; the DB row is still removed.</param>
+        [HttpDelete("{id}/files/{fileId}")]
+        public async Task<IActionResult> DeleteAudiobookFile(int id, int fileId, [FromQuery] bool deleteFromDisk = false)
+        {
+            var ct = HttpContext.RequestAborted;
+            var audiobook = await _repo.GetByIdAsync(id);
+            if (audiobook == null)
+            {
+                return NotFound(new { message = "Audiobook not found" });
+            }
+
+            DeleteAudiobookFileResult result;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var audioFileService = scope.ServiceProvider.GetRequiredService<IAudiobookFileService>();
+                result = await audioFileService.DeleteAudiobookFileAsync(audiobook, fileId, deleteFromDisk, source: "manual", ct: ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to delete AudiobookFile {FileId} for audiobook {AudiobookId}", fileId, id);
+                return StatusCode(500, new { message = "Failed to delete file" });
+            }
+
+            switch (result.Outcome)
+            {
+                case DeleteAudiobookFileOutcome.NotFound:
+                    return NotFound(new { message = "File not found" });
+
+                case DeleteAudiobookFileOutcome.DoesNotBelongToAudiobook:
+                    return BadRequest(new { message = "File does not belong to this audiobook" });
+
+                case DeleteAudiobookFileOutcome.Deleted:
+                    return Ok(new
+                    {
+                        message = "File removed",
+                        fileId,
+                        deletedFromDisk = result.DeletedFromDisk,
+                        path = result.Path,
+                        warnings = result.Warnings
+                    });
+
+                default:
+                    return StatusCode(500, new { message = "Unknown delete outcome" });
+            }
+        }
+
         private sealed class DeleteFilesystemResult
         {
             public int DeletedFiles { get; set; }
