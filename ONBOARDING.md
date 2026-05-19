@@ -8,10 +8,10 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
 
 ### Live deploy
 
-- **Live image:** `listenarr:local-20260518-0750` (head `40a436bc` on `kevin/live`).
+- **Live image:** `listenarr:local-20260518-1653` (head `2522760c` on `kevin/live`).
 - **Live URL:** https://your-host.example.
-- **One-step rollback:** `listenarr:local-20260517-1651` (pre-safe-redirect handler — has the old URL-embedded-creds NZBGet approach).
-- **Two-step rollback:** `listenarr:local-20260517-1634` (no z-index fix either).
+- **One-step rollback:** `listenarr:local-20260518-1430` (search-fallback v1 — fires only at zero narrow results; doesn't help the Robots-and-Empire case where narrow returns one wrong-language match).
+- **Two-step rollback:** `listenarr:local-20260518-1306` (pre-search-fallback entirely — backfill can't find Gwendy's Button Box or English Robots and Empire).
 - Deploy chain since the rebase shipped:
 
   | Tag | Head | What it added |
@@ -24,14 +24,20 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
   | `local-20260517-1634` | `50d8b4b6` | `ImagesController` swallows `RuntimeBinderException`. |
   | `local-20260517-1651` | `a712b49a` | `Modal.overlayZIndex` prop so `FilePreviewModal` stacks above the backfill overlay. |
   | `local-20260518-0750` | `40a436bc` | NZBGet safe-redirect handler (supersedes URL-embedded-creds approach from `0fad52b9`). PR #580 rewritten to match. |
+  | `local-20260518-1239` | `07d59881` | **Incomplete** natural-sort fix — landed in `AudiobookDtoFactory` but `LibraryController.GetAudiobook` constructs its own anonymous response and was missed. FE detail view still showed scan-time order. |
+  | `local-20260518-1306` | `fef94958` | Complete natural-sort fix — new `AudiobookFileOrdering.InNaturalOrder` helper applied to **both** `LibraryController.GetAudiobook` and `AudiobookDtoFactory`. Controller-level test added. |
+  | `local-20260518-1430` | `301a645f` | **v1** search-fallback for the AUTHOR_TITLE branch — fired only when narrow returned zero. Fixed Gwendy's Button Box (zero narrow → fallback) but missed Robots and Empire (one narrow Spanish match → no fallback, English edition still hidden). |
+  | `local-20260518-1653` | `2522760c` | **v2** search-fallback — supplements narrow with title-only Audible search when narrow < 5 candidates, merging deduped by ASIN. Covers both Gwendy and Robots cases without diluting healthy-result queries like "Foundation" by Asimov. PR branch force-pushed. |
 
 ### Branch state
 
 | Branch | Tip | Notes |
 |---|---|---|
 | `canary` | `31b6c628` v0.4.1 | Clean mirror of upstream. |
-| `kevin/live` | `40a436bc` | Deployed. **53 commits above canary.** Pushed to `fork/kevin/live`. |
-| `kevin/live-rebased` | `05eaf215` | Same code as `kevin/live` (cherry-picked the safe-redirect commit, so the hash differs but the diff is identical). Pushed. Kept as a safety harbor; can be deleted once you're confident in the live deploy. |
+| `kevin/live` | `2522760c` | Deployed. **55 commits above canary.** Force-pushed to `fork/kevin/live` (reset to drop the v1 search-fallback commit + its doc commit, then cherry-picked v2). |
+| `kevin/live-rebased` | `d3d6ef28` | Same code as `kevin/live` (cherry-picks differ in hash but not content). Force-pushed after corresponding reset. |
+| `fix/audiobook-files-natural-sort` | `52aa1cf5` | Pushed to `fork`. **No PR opened yet** — queued for the next pacing wave. |
+| `fix/backfill-search-fallback-to-title` | `759c283a` | Pushed to `fork` (force-pushed today with v2 fix — supplement at < 5 threshold, not just zero). **No PR opened yet** — queued. |
 
 ### Upstream PRs (9 open, 1 closed)
 
@@ -57,10 +63,12 @@ Bumped from 5 → 9 since the rebase shipped.
 
 ### kevin/live features still without an upstream PR (queue)
 
-Wave 1 (today) shipped K + J as drafts (#604, #605). Eight more queued:
+Wave 1 (today) shipped K + J as drafts (#604, #605). Eight more queued, plus two branches already pushed to fork that just need `gh pr create --draft`:
 
-| Tier | # | Name | Commits on `kevin/live` | Size | Notes |
+| Tier | # | Name | Branch / commits on `kevin/live` | Size | Notes |
 |---|---|---|---|---|---|
+| 2 (next session) | NS | Audiobook files natural-sort | `fix/audiobook-files-natural-sort` (`52aa1cf5`) — pushed; on `kevin/live` as `fef94958` | Small | Single shared `AudiobookFileOrdering.InNaturalOrder` helper applied at both `LibraryController.GetAudiobook` and `AudiobookDtoFactory`. Controller-level test exercising the actual API endpoint. Ready to `gh pr create --draft`. |
+| 2 (next session) | SF | Backfill search fallback to title-only | `fix/backfill-search-fallback-to-title` (`759c283a`) — pushed; on `kevin/live` as `2522760c` | Small | AUTHOR_TITLE branch in `IntelligentSearchAsync` supplements with title-only Audible search when narrow returns < 5 candidates, merging deduped by ASIN. Three-test regression suite (zero, thin, healthy). Ready to `gh pr create --draft`. |
 | 2 (next session) | H | Pre-ingest verification (music-shape) | `c65dd0f9` | Small | Single new file in `listenarr.application/Downloads/`. Defensive import-time check. |
 | 2 (next session) | F | Auto-cache Audible series catalogs | `b4370cdd` | Small | Single new background service + 1-method interface addition. |
 | 3 | B | In-browser audio preview | `46085a4d` + `d5e9a886` | Medium | New `FilePreviewModal` + streaming endpoint. **The feature today's modal-stacking saga was built around** — well exercised, ready to PR. |
@@ -86,6 +94,7 @@ Wave 1 (today) shipped K + J as drafts (#604, #605). Eight more queued:
 2. **Two integration tests dropped during chunk 1** in `tests/Features/Api/Services/AudioFileServiceTests.cs` still have TODO comments. Unit promotion coverage is in `AudioFileService_PromotionTests.cs` and the new `AudioFileService_ForceMetadataRefreshTests.cs`. Worth re-porting against the new ctor shape.
 3. **Two nullable-dereference warnings** in `listenarr.application/Audiobooks/AudiobookFileService.cs` lines 250 and 262 (pre-existing, not introduced by chunk 3).
 4. **`[0.2.72]` CHANGELOG heading on `kevin/live`** has no release date — that's normal for in-flight unreleased changes. Tag and date it when you next cut a release.
+5. **`StartupConfigServiceTests.SaveAsync_PreservesAuthenticationRequired` is flaky in the deploy script's parallel-test run.** Hits `IOException: Directory not empty` cleaning up `tests/bin/Debug/net10.0/config/cache/images` — a teardown race when another test writes to that path mid-`RemoveDirectoryRecursive`. Passes in isolation. Workaround when the deploy aborts: re-run with `--skip-tests` (already-vetted commits). Real fix: have the test create its own unique temp cache dir per `Guid.NewGuid()` instead of sharing `tests/bin/.../config/cache/images`.
 
 ## Operational notes
 
