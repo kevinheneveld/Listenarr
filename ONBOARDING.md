@@ -8,10 +8,10 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
 
 ### Live deploy
 
-- **Live image:** `listenarr:local-20260519-0720` (head `219703e1` on `kevin/live`).
+- **Live image:** `listenarr:local-20260519-0817` (head `b5818ba9` on `kevin/live`, post-rebase onto v0.4.2 canary).
 - **Live URL:** https://your-host.example.
-- **One-step rollback:** `listenarr:local-20260518-1756` (exact-match collapse + paste-ASIN; no per-file-delete trash button on the Files tab).
-- **Two-step rollback:** `listenarr:local-20260518-1730` (paste-ASIN escape hatch only — no exact-match collapse, candidates aren't narrowed to the obvious match).
+- **One-step rollback:** `listenarr:local-20260519-0720` (pre-rebase tree; same FE/BE behaviour but on the old v0.4.1 canary base).
+- **Two-step rollback:** `listenarr:local-20260518-1756` (no per-file-delete trash button on the Files tab).
 - Deploy chain since the rebase shipped:
 
   | Tag | Head | What it added |
@@ -31,17 +31,20 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
   | `local-20260518-1730` | `84d63d48` | Paste-an-Audible-URL escape hatch in backfill modal — when search can't reach a book (e.g. B0CSV7NJMB exists at `/metadata/B0CSV7NJMB` but is invisible to keyword / title / author-page search), the user can paste the URL or bare ASIN. Regex extracts the 10-char ASIN and routes through the existing `pickCandidate(asin)` flow. Kevin/live-only since the modal isn't on canary yet — will bundle with feature C upstream PR. |
   | `local-20260518-1756` | `60f87596` | Exact-match collapse for the backfill candidate search — when any merged candidate's normalized title equals the user's title AND the author overlaps, return only the exact matches (preserving multiple narrators / abridgements). Above the threshold or when no candidate exactly matches, return the full merged list unchanged. Second commit on `fix/backfill-search-fallback-to-title`; both upstream-bound. |
   | `local-20260519-0720` | `219703e1` (merge of `23430c7c`) | Per-file delete on the audiobook detail page — trash button per Files-tab row + confirm modal with "Also delete the file from disk" checkbox. Backend `DELETE /library/{id}/files/{fileId}?deleteFromDisk={bool}`; disk-delete failures non-fatal (DB row removed, warning surfaced); writes a "File Removed" history entry. 6 service + 4 controller tests. Cut from canary on `feat/per-file-delete`; merged into kevin/live. |
+  | `local-20260519-0817` | `b5818ba9` (post-rebase) | **Rebase deploy** — kevin/live rebased onto upstream canary v0.4.2 (`02a029b2`, brings in #576 foundational refactor + ~18 stabilization fixes). All 12 PR / queued branches rebased onto the new canary cleanly. Tests 769/769 green. Same FE/BE behaviour as `0720`; this deploy is to verify the rebased base runs cleanly before opening any new PRs or starting move/rename work. |
 
 ### Branch state
 
 | Branch | Tip | Notes |
 |---|---|---|
-| `canary` | `31b6c628` v0.4.1 | Clean mirror of upstream. |
-| `kevin/live` | `219703e1` (merge) | Deployed. **58 commits above canary** (56 + per-file-delete + the merge). Pushed to `fork/kevin/live`. |
-| `kevin/live-rebased` | `219703e1` | **Reset to match `kevin/live` exactly** (force-pushed) — the prior cherry-pick chain was diverging in hashes and the merge of `feat/per-file-delete` produced conflicts that were already cleanly resolved on `kevin/live`. Both branches now point at the same commit; the "rebased" distinction is no longer maintained. |
-| `fix/audiobook-files-natural-sort` | `52aa1cf5` | Pushed to `fork`. **No PR opened yet** — queued for the next pacing wave. |
-| `fix/backfill-search-fallback-to-title` | `d67df4b9` | Two commits on canary: (1) `759c283a` broadening when narrow < 5, (2) `d67df4b9` exact-match collapse. **No PR opened yet** — queued. |
-| `feat/per-file-delete` | `23430c7c` | Pushed to `fork`. Single canary-based commit. **No PR opened yet** — queued. |
+| `canary` | `02a029b2` v0.4.2 | Clean mirror of upstream. **Advanced 18 commits this session** — the foundational refactor (#576) and the post-refactor stabilization fixes are now in. |
+| `kevin/live` | `b5818ba9` (rebased) | Deployed. **68 commits above the new canary** (preserves the per-file-delete merge structure via `--rebase-merges`). Pushed to `fork/kevin/live`. |
+| `kevin/live-rebased` | `b5818ba9` | Kept in lockstep with `kevin/live` (same commit). The "rebased" distinction is no longer maintained — both branches always point at the same commit. |
+| `fix/audiobook-files-natural-sort` | `9b910948` | **Rebased onto v0.4.2 canary**, pushed. Ready to `gh pr create --draft`. |
+| `fix/backfill-search-fallback-to-title` | `11bbe264` | **Rebased onto v0.4.2 canary**, pushed. Two commits: broadening + exact-match collapse. Ready to `gh pr create --draft`. |
+| `feat/per-file-delete` | `a1ed8570` | **Rebased onto v0.4.2 canary**, pushed. Single commit. Ready to `gh pr create --draft`. |
+
+**Post-rebase note (this session):** the entire branch tree was rebased onto upstream canary v0.4.2 (`02a029b2`) at the end of this session, after the foundational refactor (#576) merged upstream. All 12 PR branches and `kevin/live` itself were rebased cleanly. The 9 open upstream PRs need a `git push fork --force-with-lease` if GitHub hasn't auto-detected the rebase yet — done in this session, see commits at the rebased tips below.
 
 ### Upstream PRs (9 open, 1 closed)
 
@@ -63,7 +66,26 @@ Bumped from 5 → 9 since the rebase shipped.
 |---|---|---|
 | [#583](https://github.com/Listenarrs/Listenarr/pull/583) | **Closed 2026-05-14** | Pass A + opt-in rescan. Kevin closed after the maintainer asked "why opt-in?" Reasoning still holds; per session decision do not re-open as-is. |
 
-**Pacing posture:** the maintainer's 2026-05-14 note on #590 said "you may not want to open too many at this time." Kevin's instruction is "set them as draft until we hear it's OK to make them live." As of this session **all 9 open PRs are now draft** — #580, #600, #603 were converted via `gh pr ready --undo`. Going forward: never open a PR upstream as non-draft without explicit clearance from Kevin.
+**Pacing posture:** the maintainer's 2026-05-14 note on #590 said "you may not want to open too many at this time." Kevin's instruction is "set them as draft until we hear it's OK to make them live." All 9 open PRs are draft. Going forward: never open a PR upstream as non-draft without explicit clearance from Kevin.
+
+**Post-rebase status (this session, 2026-05-19):** the foundational refactor (PR #576 "Download importation improvements + Clarification of project structure") merged upstream on 2026-05-15, followed by ~18 commits of T4g1's stabilization fixes through 2026-05-17. Canary is now at `v0.4.2` (`02a029b2`). All 12 of Kevin's PR / queued branches were rebased onto this new canary cleanly:
+
+| Branch | New tip (post-rebase) | Status |
+|---|---|---|
+| `fix/wwwroot-permissions` | `cac533e3` | open PR #604, draft |
+| `fix/quality-profile-fallback` | `6ca26baf` | open PR #605, draft |
+| `fix/modal-overlay-z-index` | `6ba19474` | open PR #603, draft |
+| `fix/images-recoverable-runtime-binder` | `c4596688` | open PR #600, draft |
+| `fix/nzbget-xmlrpc-auth` | `88309552` | open PR #580, draft |
+| `fix/automatic-search-relevance` | `60b14cbe` | open PR #591, draft |
+| `feat/audiobooks-grouped-list-view` | `c365ece7` | open PR #585, draft (base of stack) |
+| `feat/audiobooks-collection-ready-count` | `3492def8` | open PR #589, draft (stacked on #585) |
+| `feat/audiobooks-view-mode-per-grouping` | `e9fd9f61` | open PR #590, draft (stacked on #585) |
+| `fix/audiobook-files-natural-sort` | `9b910948` | queued, no PR yet |
+| `fix/backfill-search-fallback-to-title` | `11bbe264` | queued, no PR yet |
+| `feat/per-file-delete` | `a1ed8570` | queued, no PR yet |
+
+`kevin/live` was rebased with `--rebase-merges` to preserve the per-file-delete merge structure; tests 769/769 green on the rebased tip. **Watch for the green light to open the queue:** maintainer reply on #590 (no response yet to Kevin's 2026-05-17 rebase-done update), a draft review, or ~7 days of canary quiet after the last `[fix]` commit on 2026-05-17.
 
 ### kevin/live features still without an upstream PR (queue)
 
