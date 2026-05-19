@@ -152,6 +152,45 @@ const overrideAuthor = ref('')
 const showPreview = ref(false)
 const previewFile = computed(() => props.audiobook?.files?.[0] ?? null)
 
+// Direct ASIN / Audible-URL paste — escape hatch for cases where Audible's
+// search doesn't surface the right edition. Example from the wild:
+// "Robots and Empire" (B0CSV7NJMB) is fully accessible via the per-ASIN
+// metadata endpoint but never appears in Audible's keyword or author-page
+// search results, so the user has no way to reach it through the candidate
+// picker. Pasting the audible.com URL (or the bare ASIN) lets them load
+// the metadata directly. The ASIN is the only thing we need — anything
+// else in the URL is decoration.
+const pasteAsinInput = ref('')
+const pasteAsinError = ref<string | null>(null)
+// 10-character alphanumeric Audible identifier. Audible URLs come in many
+// shapes (different stores, ref/srsltid query params, with/without trailing
+// slash) — extracting the first 10-char token in the URL is the most
+// resilient parse. Audiobook ASINs typically start with B0 but older
+// titles and some collections use other prefixes, so don't lock to B0.
+const ASIN_TOKEN_REGEX = /\b([0-9A-Z]{10})\b/i
+const parsedPasteAsin = computed(() => parseAsinFromInput(pasteAsinInput.value))
+
+function parseAsinFromInput(raw: string): string | null {
+  const trimmed = (raw || '').trim()
+  if (!trimmed) return null
+  const match = trimmed.match(ASIN_TOKEN_REGEX)
+  return match ? match[1].toUpperCase() : null
+}
+
+function loadFromPaste() {
+  const asin = parsedPasteAsin.value
+  if (!asin) {
+    pasteAsinError.value = 'Paste an Audible URL or a 10-character ASIN (e.g. B0CSV7NJMB).'
+    return
+  }
+  pasteAsinError.value = null
+  // pickCandidate already records the chosen ASIN and triggers fetchPreview,
+  // which transitions the modal into the comparison phase with the loaded
+  // metadata. Reuse it so the paste path and the click-a-candidate path
+  // converge on the same downstream behaviour.
+  pickCandidate(asin)
+}
+
 // ── Open / reset ───────────────────────────────────────────────────────────
 
 watch(
@@ -189,6 +228,10 @@ function reset() {
   // candidate-picker's "Search again" button starts with sensible defaults.
   overrideTitle.value = (props.audiobook?.title || '').trim()
   overrideAuthor.value = ((props.audiobook?.authors && props.audiobook.authors[0]) || '').trim()
+  // The paste-ASIN field is per-session; clear it on every open so a stale
+  // value from a previous book doesn't surface when the modal reopens.
+  pasteAsinInput.value = ''
+  pasteAsinError.value = null
 }
 
 // ── Phase 1: candidate search ──────────────────────────────────────────────
@@ -580,7 +623,7 @@ function candidateYear(c: AudibleSearchResult): string {
             </button>
           </div>
 
-          <div v-if="phase === 'searching' || phase === 'fetching'" class="status-row">
+          <div v-if="phase === 'searching'" class="status-row">
             <PhSpinner class="ph-spin" />
             <span>{{ phase === 'searching' ? 'Searching online sources…' : 'Fetching metadata…' }}</span>
           </div>
@@ -624,6 +667,37 @@ function candidateYear(c: AudibleSearchResult): string {
                 Search again
               </button>
             </form>
+
+            <!-- Escape hatch when search can't find the right edition. Some
+                 Audible records (especially recent releases or alternate
+                 editions) exist in the per-ASIN metadata endpoint but never
+                 surface in keyword / author-page search results, leaving the
+                 user with no way to reach them through the candidate list.
+                 Pasting the audible.com URL (or just the ASIN) loads the
+                 metadata directly via the same path the candidate-click flow
+                 uses. -->
+            <form class="paste-asin-form" @submit.prevent="loadFromPaste">
+              <label class="paste-asin-field">
+                <span class="paste-asin-label">Or paste an Audible link / ASIN</span>
+                <input
+                  v-model="pasteAsinInput"
+                  type="text"
+                  class="form-input"
+                  :disabled="phase === 'searching'"
+                  placeholder="B0CSV7NJMB or https://www.audible.com/pd/.../B0CSV7NJMB"
+                />
+              </label>
+              <button
+                type="submit"
+                class="btn btn-secondary paste-asin-btn"
+                :disabled="phase === 'searching' || !parsedPasteAsin"
+                :title="parsedPasteAsin ? `Load metadata for ${parsedPasteAsin}` : 'Paste an Audible URL or ASIN first'"
+              >
+                <PhDownloadSimple />
+                Load
+              </button>
+            </form>
+            <p v-if="pasteAsinError" class="paste-asin-error">{{ pasteAsinError }}</p>
           </template>
 
           <div v-if="errorMessage && phase !== 'review'" class="status-row error">
@@ -988,6 +1062,49 @@ function candidateYear(c: AudibleSearchResult): string {
     grid-template-columns: 1fr;
   }
   .candidate-search-form .search-again-btn {
+    justify-self: start;
+  }
+}
+
+/* Paste-an-ASIN / Audible-URL escape hatch. Mirrors the candidate-search
+   layout so the two forms read as a related pair, separated by a thin top
+   border so the user understands it as an alternative input. */
+.paste-asin-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.6rem 0.75rem;
+  align-items: end;
+  margin: 0 0 0.5rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--color-border, rgba(255, 255, 255, 0.08));
+}
+.paste-asin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.paste-asin-label {
+  font-size: 0.8rem;
+  color: var(--text-muted, #888);
+}
+.paste-asin-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  align-self: end;
+  height: 2.4rem;
+}
+.paste-asin-error {
+  color: #ff8a8a;
+  font-size: 0.85rem;
+  margin: 0.25rem 0 0.5rem;
+}
+@media (max-width: 540px) {
+  .paste-asin-form {
+    grid-template-columns: 1fr;
+  }
+  .paste-asin-btn {
     justify-self: start;
   }
 }
