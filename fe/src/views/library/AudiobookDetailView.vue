@@ -422,6 +422,15 @@
               <div class="file-actions">
                 <span class="file-size" v-if="f.size">{{ formatFileSize(f.size) }}</span>
                 <span class="file-size" v-else>Unknown size</span>
+                <button
+                  class="file-action-btn"
+                  type="button"
+                  title="Rename file"
+                  aria-label="Rename file"
+                  @click.stop="openRenameFile(f)"
+                >
+                  <PhPencil />
+                </button>
                 <PhCaretDown
                   class="accordion-toggle"
                   :class="{ rotated: isFileAccordionExpanded(f.id) }"
@@ -642,6 +651,14 @@
     @close="showOrganizeModal = false"
     @done="handleOrganizeDone"
   />
+
+  <RenameFileModal
+    :visible="showRenameFileModal"
+    :audiobook-id="audiobook?.id ?? null"
+    :file="renameFileTarget"
+    @close="closeRenameFile"
+    @done="handleRenameFileDone"
+  />
 </template>
 
 <script setup lang="ts">
@@ -673,6 +690,7 @@ import { useProtectedImages } from '@/composables/useProtectedImages'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
+import RenameFileModal from '@/components/domain/organize/RenameFileModal.vue'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { Pill } from '@/components/base'
@@ -737,6 +755,8 @@ const scanQueued = ref(false)
 const scanJobId = ref<string | null>(null)
 const showEditModal = ref(false)
 const showOrganizeModal = ref(false)
+const showRenameFileModal = ref(false)
+const renameFileTarget = ref<{ id: number } | null>(null)
 const showMoreActions = ref(false)
 
 // History state
@@ -1612,6 +1632,21 @@ async function handleEditSaved() {
 
 async function handleOrganizeDone() {
   showOrganizeModal.value = false
+  await loadAudiobook()
+}
+
+function openRenameFile(file: { id: number }): void {
+  renameFileTarget.value = { id: file.id }
+  showRenameFileModal.value = true
+}
+
+function closeRenameFile(): void {
+  showRenameFileModal.value = false
+  renameFileTarget.value = null
+}
+
+async function handleRenameFileDone(): Promise<void> {
+  closeRenameFile()
   await loadAudiobook()
 }
 
@@ -2780,6 +2815,26 @@ a.identifier-link:hover {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.file-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.file-action-btn:hover,
+.file-action-btn:focus-visible {
+  color: var(--text-primary, #fff);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .accordion-toggle {
