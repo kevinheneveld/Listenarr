@@ -8,10 +8,10 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
 
 ### Live deploy
 
-- **Live image:** `listenarr:local-20260518-1730` (head `84d63d48` on `kevin/live`).
+- **Live image:** `listenarr:local-20260519-0720` (head `219703e1` on `kevin/live`).
 - **Live URL:** https://your-host.example.
-- **One-step rollback:** `listenarr:local-20260518-1653` (pre paste-ASIN escape hatch — no way to reach books like B0CSV7NJMB that exist in the per-ASIN endpoint but never surface in Audible search).
-- **Two-step rollback:** `listenarr:local-20260518-1430` (search-fallback v1, narrow-zero only).
+- **One-step rollback:** `listenarr:local-20260518-1756` (exact-match collapse + paste-ASIN; no per-file-delete trash button on the Files tab).
+- **Two-step rollback:** `listenarr:local-20260518-1730` (paste-ASIN escape hatch only — no exact-match collapse, candidates aren't narrowed to the obvious match).
 - Deploy chain since the rebase shipped:
 
   | Tag | Head | What it added |
@@ -29,16 +29,19 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
   | `local-20260518-1430` | `301a645f` | **v1** search-fallback for the AUTHOR_TITLE branch — fired only when narrow returned zero. Fixed Gwendy's Button Box (zero narrow → fallback) but missed Robots and Empire (one narrow Spanish match → no fallback, English edition still hidden). |
   | `local-20260518-1653` | `2522760c` | **v2** search-fallback — supplements narrow with title-only Audible search when narrow < 5 candidates, merging deduped by ASIN. Covers both Gwendy and Robots cases without diluting healthy-result queries like "Foundation" by Asimov. PR branch force-pushed. |
   | `local-20260518-1730` | `84d63d48` | Paste-an-Audible-URL escape hatch in backfill modal — when search can't reach a book (e.g. B0CSV7NJMB exists at `/metadata/B0CSV7NJMB` but is invisible to keyword / title / author-page search), the user can paste the URL or bare ASIN. Regex extracts the 10-char ASIN and routes through the existing `pickCandidate(asin)` flow. Kevin/live-only since the modal isn't on canary yet — will bundle with feature C upstream PR. |
+  | `local-20260518-1756` | `60f87596` | Exact-match collapse for the backfill candidate search — when any merged candidate's normalized title equals the user's title AND the author overlaps, return only the exact matches (preserving multiple narrators / abridgements). Above the threshold or when no candidate exactly matches, return the full merged list unchanged. Second commit on `fix/backfill-search-fallback-to-title`; both upstream-bound. |
+  | `local-20260519-0720` | `219703e1` (merge of `23430c7c`) | Per-file delete on the audiobook detail page — trash button per Files-tab row + confirm modal with "Also delete the file from disk" checkbox. Backend `DELETE /library/{id}/files/{fileId}?deleteFromDisk={bool}`; disk-delete failures non-fatal (DB row removed, warning surfaced); writes a "File Removed" history entry. 6 service + 4 controller tests. Cut from canary on `feat/per-file-delete`; merged into kevin/live. |
 
 ### Branch state
 
 | Branch | Tip | Notes |
 |---|---|---|
 | `canary` | `31b6c628` v0.4.1 | Clean mirror of upstream. |
-| `kevin/live` | `84d63d48` | Deployed. **56 commits above canary.** Pushed to `fork/kevin/live`. |
-| `kevin/live-rebased` | `c33d0c09` | Same code as `kevin/live` (cherry-picks differ in hash but not content). Pushed. |
+| `kevin/live` | `219703e1` (merge) | Deployed. **58 commits above canary** (56 + per-file-delete + the merge). Pushed to `fork/kevin/live`. |
+| `kevin/live-rebased` | `219703e1` | **Reset to match `kevin/live` exactly** (force-pushed) — the prior cherry-pick chain was diverging in hashes and the merge of `feat/per-file-delete` produced conflicts that were already cleanly resolved on `kevin/live`. Both branches now point at the same commit; the "rebased" distinction is no longer maintained. |
 | `fix/audiobook-files-natural-sort` | `52aa1cf5` | Pushed to `fork`. **No PR opened yet** — queued for the next pacing wave. |
-| `fix/backfill-search-fallback-to-title` | `759c283a` | Pushed to `fork` (force-pushed today with v2 fix — supplement at < 5 threshold, not just zero). **No PR opened yet** — queued. |
+| `fix/backfill-search-fallback-to-title` | `d67df4b9` | Two commits on canary: (1) `759c283a` broadening when narrow < 5, (2) `d67df4b9` exact-match collapse. **No PR opened yet** — queued. |
+| `feat/per-file-delete` | `23430c7c` | Pushed to `fork`. Single canary-based commit. **No PR opened yet** — queued. |
 
 ### Upstream PRs (9 open, 1 closed)
 
@@ -69,7 +72,8 @@ Wave 1 (today) shipped K + J as drafts (#604, #605). Eight more queued, plus two
 | Tier | # | Name | Branch / commits on `kevin/live` | Size | Notes |
 |---|---|---|---|---|---|
 | 2 (next session) | NS | Audiobook files natural-sort | `fix/audiobook-files-natural-sort` (`52aa1cf5`) — pushed; on `kevin/live` as `fef94958` | Small | Single shared `AudiobookFileOrdering.InNaturalOrder` helper applied at both `LibraryController.GetAudiobook` and `AudiobookDtoFactory`. Controller-level test exercising the actual API endpoint. Ready to `gh pr create --draft`. |
-| 2 (next session) | SF | Backfill search fallback to title-only | `fix/backfill-search-fallback-to-title` (`759c283a`) — pushed; on `kevin/live` as `2522760c` | Small | AUTHOR_TITLE branch in `IntelligentSearchAsync` supplements with title-only Audible search when narrow returns < 5 candidates, merging deduped by ASIN. Three-test regression suite (zero, thin, healthy). Ready to `gh pr create --draft`. |
+| 2 (next session) | SF | Backfill search fallback + exact-match collapse | `fix/backfill-search-fallback-to-title` (`d67df4b9`) — two commits, pushed | Small/Medium | AUTHOR_TITLE branch in `IntelligentSearchAsync` (1) supplements with title-only Audible search when narrow returns < 5 candidates, merging deduped by ASIN, and (2) collapses the merged list to exact title+author matches when any exist (multi-narrator keeps all matches; no exact match → return full merged list). Six-test regression suite. Ready to `gh pr create --draft`. |
+| 2 (next session) | PFD | Per-file delete on audiobook detail page | `feat/per-file-delete` (`23430c7c`) — pushed; on `kevin/live` as `23430c7c` (merge `219703e1`) | Small | Trash button per Files-tab row + confirm modal with "Also delete the file from disk" checkbox (default on). Backend `DELETE /library/{id}/files/{fileId}?deleteFromDisk={bool}`; disk-delete failures non-fatal; writes "File Removed" history entry. 6 service + 4 controller tests. Ready to `gh pr create --draft`. |
 | 2 (next session) | H | Pre-ingest verification (music-shape) | `c65dd0f9` | Small | Single new file in `listenarr.application/Downloads/`. Defensive import-time check. |
 | 2 (next session) | F | Auto-cache Audible series catalogs | `b4370cdd` | Small | Single new background service + 1-method interface addition. |
 | 3 | B | In-browser audio preview | `46085a4d` + `d5e9a886` | Medium | New `FilePreviewModal` + streaming endpoint. **The feature today's modal-stacking saga was built around** — well exercised, ready to PR. |
