@@ -8,10 +8,10 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
 
 ### Live deploy
 
-- **Live image:** `listenarr:local-20260518-1653` (head `2522760c` on `kevin/live`).
+- **Live image:** `listenarr:local-20260518-1730` (head `84d63d48` on `kevin/live`).
 - **Live URL:** https://your-host.example.
-- **One-step rollback:** `listenarr:local-20260518-1430` (search-fallback v1 — fires only at zero narrow results; doesn't help the Robots-and-Empire case where narrow returns one wrong-language match).
-- **Two-step rollback:** `listenarr:local-20260518-1306` (pre-search-fallback entirely — backfill can't find Gwendy's Button Box or English Robots and Empire).
+- **One-step rollback:** `listenarr:local-20260518-1653` (pre paste-ASIN escape hatch — no way to reach books like B0CSV7NJMB that exist in the per-ASIN endpoint but never surface in Audible search).
+- **Two-step rollback:** `listenarr:local-20260518-1430` (search-fallback v1, narrow-zero only).
 - Deploy chain since the rebase shipped:
 
   | Tag | Head | What it added |
@@ -28,14 +28,15 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
   | `local-20260518-1306` | `fef94958` | Complete natural-sort fix — new `AudiobookFileOrdering.InNaturalOrder` helper applied to **both** `LibraryController.GetAudiobook` and `AudiobookDtoFactory`. Controller-level test added. |
   | `local-20260518-1430` | `301a645f` | **v1** search-fallback for the AUTHOR_TITLE branch — fired only when narrow returned zero. Fixed Gwendy's Button Box (zero narrow → fallback) but missed Robots and Empire (one narrow Spanish match → no fallback, English edition still hidden). |
   | `local-20260518-1653` | `2522760c` | **v2** search-fallback — supplements narrow with title-only Audible search when narrow < 5 candidates, merging deduped by ASIN. Covers both Gwendy and Robots cases without diluting healthy-result queries like "Foundation" by Asimov. PR branch force-pushed. |
+  | `local-20260518-1730` | `84d63d48` | Paste-an-Audible-URL escape hatch in backfill modal — when search can't reach a book (e.g. B0CSV7NJMB exists at `/metadata/B0CSV7NJMB` but is invisible to keyword / title / author-page search), the user can paste the URL or bare ASIN. Regex extracts the 10-char ASIN and routes through the existing `pickCandidate(asin)` flow. Kevin/live-only since the modal isn't on canary yet — will bundle with feature C upstream PR. |
 
 ### Branch state
 
 | Branch | Tip | Notes |
 |---|---|---|
 | `canary` | `31b6c628` v0.4.1 | Clean mirror of upstream. |
-| `kevin/live` | `2522760c` | Deployed. **55 commits above canary.** Force-pushed to `fork/kevin/live` (reset to drop the v1 search-fallback commit + its doc commit, then cherry-picked v2). |
-| `kevin/live-rebased` | `d3d6ef28` | Same code as `kevin/live` (cherry-picks differ in hash but not content). Force-pushed after corresponding reset. |
+| `kevin/live` | `84d63d48` | Deployed. **56 commits above canary.** Pushed to `fork/kevin/live`. |
+| `kevin/live-rebased` | `c33d0c09` | Same code as `kevin/live` (cherry-picks differ in hash but not content). Pushed. |
 | `fix/audiobook-files-natural-sort` | `52aa1cf5` | Pushed to `fork`. **No PR opened yet** — queued for the next pacing wave. |
 | `fix/backfill-search-fallback-to-title` | `759c283a` | Pushed to `fork` (force-pushed today with v2 fix — supplement at < 5 threshold, not just zero). **No PR opened yet** — queued. |
 
