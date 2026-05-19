@@ -265,5 +265,100 @@ namespace Listenarr.Application.Audiobooks
                 return false;
             }
         }
+
+        public async Task<DeleteAudiobookFileResult> DeleteAudiobookFileAsync(
+            Audiobook audiobook,
+            int fileId,
+            bool deleteFromDisk,
+            string? source = "manual",
+            CancellationToken ct = default)
+        {
+            ArgumentNullException.ThrowIfNull(audiobook);
+
+            var file = await audiobookFileRepository.GetByIdAsync(fileId, ct);
+            if (file == null)
+            {
+                return DeleteAudiobookFileResult.NotFound();
+            }
+
+            if (file.AudiobookId != audiobook.Id)
+            {
+                logger.LogWarning(
+                    "Refusing to delete AudiobookFile {FileId}: belongs to audiobook {OwnerId}, not {RequestedId}",
+                    fileId, file.AudiobookId, audiobook.Id);
+                return DeleteAudiobookFileResult.WrongAudiobook(file.Path);
+            }
+
+            var warnings = new List<string>();
+            var deletedFromDisk = false;
+
+            if (deleteFromDisk && !string.IsNullOrWhiteSpace(file.Path))
+            {
+                try
+                {
+                    if (File.Exists(file.Path))
+                    {
+                        File.Delete(file.Path);
+                        deletedFromDisk = true;
+                        logger.LogInformation(
+                            "Deleted audiobook file from disk for audiobook {AudiobookId}: {Path}",
+                            audiobook.Id, LogRedaction.SanitizeFilePath(file.Path));
+                    }
+                    else
+                    {
+                        logger.LogInformation(
+                            "Skipping disk delete — file not present for audiobook {AudiobookId}: {Path}",
+                            audiobook.Id, LogRedaction.SanitizeFilePath(file.Path));
+                    }
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    var warning = $"Could not delete file '{Path.GetFileName(file.Path)}' from disk.";
+                    warnings.Add(warning);
+                    logger.LogWarning(ex, "Failed to delete audiobook file from disk for audiobook {AudiobookId}: {Path}",
+                        audiobook.Id, LogRedaction.SanitizeFilePath(file.Path));
+                }
+            }
+
+            await audiobookFileRepository.DeleteAsync(fileId, ct);
+            logger.LogInformation(
+                "Deleted AudiobookFile {FileId} for audiobook {AudiobookId}: {Path}",
+                fileId, audiobook.Id, LogRedaction.SanitizeFilePath(file.Path));
+
+            try
+            {
+                var historyEntry = new History
+                {
+                    AudiobookId = audiobook.Id,
+                    AudiobookTitle = audiobook.Title ?? "Unknown",
+                    EventType = "File Removed",
+                    Message = $"File removed: {Path.GetFileName(file.Path)}",
+                    Source = source ?? "manual",
+                    Data = JsonSerializer.Serialize(new
+                    {
+                        FileId = fileId,
+                        FilePath = file.Path,
+                        FileSize = file.Size,
+                        Format = file.Format,
+                        DeletedFromDisk = deletedFromDisk,
+                        Warnings = warnings
+                    }),
+                    Timestamp = DateTime.UtcNow
+                };
+                await historyRepository.AddAsync(historyEntry);
+            }
+            catch (Exception hx) when (hx is not OperationCanceledException && hx is not OutOfMemoryException && hx is not StackOverflowException)
+            {
+                logger.LogDebug(hx, "Failed to create history entry for removed audiobook file {Path}", LogRedaction.SanitizeFilePath(file.Path));
+            }
+
+            return new DeleteAudiobookFileResult
+            {
+                Outcome = DeleteAudiobookFileOutcome.Deleted,
+                DeletedFromDisk = deletedFromDisk,
+                Path = file.Path,
+                Warnings = warnings
+            };
+        }
     }
 }

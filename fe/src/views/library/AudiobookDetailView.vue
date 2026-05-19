@@ -422,6 +422,15 @@
               <div class="file-actions">
                 <span class="file-size" v-if="f.size">{{ formatFileSize(f.size) }}</span>
                 <span class="file-size" v-else>Unknown size</span>
+                <button
+                  type="button"
+                  class="file-delete-btn"
+                  :title="`Delete ${getFileName(f.path)}`"
+                  :aria-label="`Delete ${getFileName(f.path)}`"
+                  @click.stop="confirmDeleteFile(f)"
+                >
+                  <PhTrash />
+                </button>
                 <PhCaretDown
                   class="accordion-toggle"
                   :class="{ rotated: isFileAccordionExpanded(f.id) }"
@@ -601,6 +610,44 @@
         </div>
       </template>
     </DeleteConfirmationModal>
+
+    <DeleteConfirmationModal
+      :visible="showFileDeleteDialog"
+      title="Delete File"
+      :confirmText="deletingFile ? 'Deleting...' : 'Delete'"
+      @close="cancelDeleteFile"
+      @confirm="executeDeleteFile"
+    >
+      <template #default>
+        <p>
+          Are you sure you want to remove
+          <strong>{{ fileToDelete ? getFileName(fileToDelete.path) : '' }}</strong>
+          from this audiobook?
+        </p>
+        <p v-if="fileToDelete?.path" class="file-delete-path">
+          {{ getFullPath(fileToDelete.path) }}
+        </p>
+        <div class="delete-options">
+          <div class="checkbox-row">
+            <label class="checkbox-wrapper checkbox-label">
+              <input
+                v-model="deleteFileFromDisk"
+                type="checkbox"
+                class="checkbox-input"
+                aria-label="Also delete the file from disk"
+              />
+              <div class="checkbox-content">
+                <span class="checkbox-title">Also delete the file from disk</span>
+                <small
+                  >Unchecked: only the database record is removed; the file stays on disk and a
+                  rescan will re-import it.</small
+                >
+              </div>
+            </label>
+          </div>
+        </div>
+      </template>
+    </DeleteConfirmationModal>
   </div>
 
   <!-- Loading State -->
@@ -730,6 +777,11 @@ const showManualSearchModal = ref(false)
 const deleting = ref(false)
 const deleteFilesOnDisk = ref(false)
 const deleteFolderOnDisk = ref(false)
+type AudiobookFile = NonNullable<AudiobookType['files']>[number]
+const showFileDeleteDialog = ref(false)
+const fileToDelete = ref<AudiobookFile | null>(null)
+const deleteFileFromDisk = ref(true)
+const deletingFile = ref(false)
 const showFullDescription = ref(false)
 const scanning = ref(false)
 const rescanningMetadata = ref(false)
@@ -1583,6 +1635,50 @@ async function executeDelete() {
 function resetDeleteOptions() {
   deleteFilesOnDisk.value = false
   deleteFolderOnDisk.value = false
+}
+
+function confirmDeleteFile(file: AudiobookFile) {
+  fileToDelete.value = file
+  deleteFileFromDisk.value = true
+  showFileDeleteDialog.value = true
+}
+
+function cancelDeleteFile() {
+  showFileDeleteDialog.value = false
+  fileToDelete.value = null
+}
+
+async function executeDeleteFile() {
+  if (!audiobook.value || !fileToDelete.value) return
+
+  const file = fileToDelete.value
+  const audiobookId = audiobook.value.id
+  const toast = useToast()
+  deletingFile.value = true
+  try {
+    const result = await apiService.deleteAudiobookFile(audiobookId, file.id, {
+      deleteFromDisk: deleteFileFromDisk.value,
+    })
+    if (result.warnings && result.warnings.length > 0) {
+      toast.warning('File removed with warnings', result.warnings.join(' '))
+    } else if (result.deletedFromDisk) {
+      toast.success('File deleted', `Removed ${getFileName(file.path)} and deleted it from disk.`)
+    } else {
+      toast.success('File removed', `Removed ${getFileName(file.path)} from this audiobook.`)
+    }
+    await loadAudiobook()
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'AudiobookDetailView',
+      operation: 'executeDeleteFile',
+      metadata: { audiobookId, fileId: file.id },
+    })
+    toast.error('Delete failed', 'Could not delete the file. See logs for details.')
+  } finally {
+    deletingFile.value = false
+    showFileDeleteDialog.value = false
+    fileToDelete.value = null
+  }
 }
 
 watch(deleteFolderOnDisk, (checked) => {
@@ -2780,6 +2876,34 @@ a.identifier-link:hover {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.file-delete-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: #999;
+  cursor: pointer;
+  padding: 4px;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.file-delete-btn:hover,
+.file-delete-btn:focus-visible {
+  color: var(--color-danger, #e25555);
+  background-color: rgba(226, 85, 85, 0.12);
+}
+
+.file-delete-path {
+  margin-top: 4px;
+  color: #999;
+  font-size: 13px;
+  word-break: break-all;
 }
 
 .accordion-toggle {
