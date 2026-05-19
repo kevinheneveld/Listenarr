@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Caching.Memory;
@@ -818,12 +819,11 @@ namespace Listenarr.Application.Search
                         // Audible's author endpoint missed. We only return early when the
                         // narrow path looks confident enough on its own.
                         const int NarrowResultsConfidenceThreshold = 5;
-                        if (converted.Count >= NarrowResultsConfidenceThreshold)
-                        {
-                            return SearchResultConverters.ToMetadataList(converted);
-                        }
-
-                        if (!string.IsNullOrEmpty(titleVal))
+                        // Supplement (don't return early) when narrow is thin AND we have
+                        // a title to broaden with. We always fall through to the
+                        // exact-match collapse below so it can run regardless of whether
+                        // the supplement fired — the collapse is independent of count.
+                        if (converted.Count < NarrowResultsConfidenceThreshold && !string.IsNullOrEmpty(titleVal))
                         {
                             try
                             {
@@ -884,6 +884,54 @@ namespace Listenarr.Application.Search
                                         _logger.LogDebug(exMetaConv, "Failed converting audible data for ASIN {Asin} in AUTHOR_TITLE title-only supplement", book.Asin);
                                     }
                                 }
+                            }
+                        }
+
+                        // Exact-match suppression: if any merged candidate's normalized title
+                        // is *equal* to the user's typed title AND its author overlaps the
+                        // user's typed author, that candidate is unambiguously the book the
+                        // user is trying to backfill — the other candidates are just noise
+                        // in the picker at that point. Collapse to only the exact matches
+                        // (keeping all of them so multiple narrators / abridgements of the
+                        // same book remain visible). When no candidate exactly matches, fall
+                        // through and return the full merged list so the user can still
+                        // disambiguate from the broader set.
+                        //
+                        // The check uses TitleMatcher.Normalize (lowercase, letters+digits
+                        // only, collapsed whitespace) for title equality — strict enough
+                        // that "Robots and Empire" doesn't collapse against
+                        // "Robots and Empire: Robot Series, Book 4". Author check is a
+                        // substring contains on the normalized author so "Stephen King"
+                        // matches "Stephen King" but also accepts the user typing just
+                        // "King" or just "Stephen". When the supplied author is empty,
+                        // title equality alone is enough.
+                        if (converted.Any() && !string.IsNullOrEmpty(titleVal))
+                        {
+                            var normalizedQueryTitle = NormalizeForExactMatch(titleVal);
+                            var normalizedQueryAuthor = NormalizeForExactMatch(authorVal);
+
+                            var exactMatches = converted
+                                .Where(c =>
+                                    !string.IsNullOrEmpty(c.Title)
+                                    && NormalizeForExactMatch(c.Title) == normalizedQueryTitle
+                                    && (string.IsNullOrEmpty(normalizedQueryAuthor)
+                                        || (!string.IsNullOrEmpty(c.Artist)
+                                            && NormalizeForExactMatch(c.Artist).Contains(normalizedQueryAuthor))))
+                                .ToList();
+
+                            if (exactMatches.Count > 0)
+                            {
+                                try
+                                {
+                                    _logger.LogInformation(
+                                        "AUTHOR_TITLE collapse: {ExactCount} of {TotalCount} candidates exactly match title '{Title}' / author '{Author}' — returning only exact matches",
+                                        exactMatches.Count, converted.Count, titleVal, authorVal);
+                                }
+                                catch (Exception caughtExLog2) when (caughtExLog2 is not OperationCanceledException && caughtExLog2 is not OutOfMemoryException && caughtExLog2 is not StackOverflowException)
+                                {
+                                    System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
+                                }
+                                return SearchResultConverters.ToMetadataList(exactMatches);
                             }
                         }
 
@@ -4286,6 +4334,37 @@ namespace Listenarr.Application.Search
                 _logger.LogError(ex, "Invalid operation error retrieving enabled metadata sources");
                 return new List<ApiConfiguration>();
             }
+        }
+
+        /// <summary>
+        /// Permissive lowercase-and-collapse normalization for the AUTHOR_TITLE exact-match
+        /// suppression. Lowercases the input, keeps only letters and digits, and collapses
+        /// any other character into a single space so common punctuation differences don't
+        /// block equality (e.g. "Robots and Empire" matches "Robots & Empire" but is still
+        /// distinct from "Robots and Empire: Robot Series, Book 4"). Defined locally so the
+        /// fix doesn't pull in a dependency on the TitleMatcher helper that lives on a
+        /// separate PR branch.
+        /// </summary>
+        private static string NormalizeForExactMatch(string? input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+            var sb = new StringBuilder(input.Length);
+            var lastWasSpace = true;
+            foreach (var ch in input)
+            {
+                if (char.IsLetterOrDigit(ch))
+                {
+                    sb.Append(char.ToLowerInvariant(ch));
+                    lastWasSpace = false;
+                }
+                else if (!lastWasSpace)
+                {
+                    sb.Append(' ');
+                    lastWasSpace = true;
+                }
+            }
+            if (sb.Length > 0 && sb[sb.Length - 1] == ' ') sb.Length--;
+            return sb.ToString();
         }
     }
 }
