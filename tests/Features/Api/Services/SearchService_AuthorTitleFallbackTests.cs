@@ -29,29 +29,39 @@ using Xunit;
 
 namespace Listenarr.Tests.Features.Api.Services
 {
-    // Audible's per-author catalog endpoint is incomplete in ways that bite the
-    // backfill modal in practice:
+    // The AUTHOR_TITLE branch is responsible for the backfill modal's candidate
+    // search. It's two cooperating behaviours:
     //
-    //  - Some co-authored works appear only under one of the co-authors (Gwendy's
-    //    Button Box is on Chizmar's author page, not Stephen King's). Narrow
-    //    AUTHOR_TITLE search returns zero — needs fallback.
-    //  - Some catalogs return a long list of titles but omit specific editions
-    //    via attribution / pagination / featured-collection oddities (Asimov's
-    //    catalog returns 97 titles but the English "Robots and Empire" /
-    //    B0CSV7NJMB is not among them — only the Spanish edition makes it
-    //    through the title filter). Narrow AUTHOR_TITLE returns one wrong-language
-    //    result and the user sees a misleading "this is the only match" screen.
+    //   * BROADENING: Audible's per-author catalog is incomplete in ways that
+    //     bite users in practice. When the narrow author-page-plus-title path
+    //     returns fewer than NarrowResultsConfidenceThreshold (5) candidates,
+    //     the branch supplements with a title-only Audible search and merges
+    //     the results deduped by ASIN. Covers co-authored works (Gwendy's
+    //     Button Box on Chizmar's page only, not King's) and incomplete
+    //     catalog responses (Asimov's 97-title catalog missing the English
+    //     "Robots and Empire").
     //
-    // The fix: when AUTHOR_TITLE produces fewer than NarrowResultsConfidenceThreshold
-    // (5) candidates, supplement with a title-only Audible search and merge the
-    // results, deduped by ASIN. Above the threshold the narrow path is trusted
-    // and no extra call is made.
+    //   * COLLAPSE: After the broadening merge, if any candidate's normalized
+    //     title is *equal* to the user's title AND its author overlaps the
+    //     user's author, that candidate is unambiguously the book — the rest
+    //     are noise in the picker. Collapse to only the exact matches
+    //     (preserving multiple narrators / abridgements of the same title).
+    //     When no candidate exactly matches, return the full merged list so
+    //     the user can still disambiguate from the broader set.
     public class SearchService_AuthorTitleFallbackTests
     {
+        // ──────────────────────────────────────────────────────────────────
+        // BROADENING — narrow path is thin, supplement and merge
+        // ──────────────────────────────────────────────────────────────────
+
         [Fact]
         public async Task IntelligentSearch_AuthorTitle_FallsBackToTitleOnly_WhenAuthorPageReturnsZero()
         {
             // Gwendy case: King's author page is missing the book entirely.
+            // Note the user typed "Gwendy" (one word) — the response title
+            // "Gwendy's Button Box" does NOT normalize-equal "Gwendy", so the
+            // exact-match collapse does not fire. The result is the single
+            // candidate that came back from the title-only supplement.
             var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
             audibleMock
                 .Setup(s => s.SearchByAuthorAsync("Stephen King", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
@@ -92,17 +102,17 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
-        public async Task IntelligentSearch_AuthorTitle_MergesNarrowAndBroadResults_WhenNarrowIsThin()
+        public async Task IntelligentSearch_AuthorTitle_MergeAndCollapse_WhenSupplementSurfacesExactMatch()
         {
-            // Robots case: Asimov's author page returns 97 titles but the only one
-            // that filters down to "Robots and Empire" is the Spanish edition
-            // (B0BXFNTYWZ "Robots e Imperio [Robots and Empire]"). The narrow
-            // result count of 1 is below the < 5 threshold, so the fallback fires
-            // and the English edition (B0CSV7NJMB) found by title-only search is
-            // merged into the candidate list.
+            // Robots case: Asimov's author page returns one match (Spanish
+            // edition). The narrow count of 1 triggers the supplement; the
+            // supplement returns both editions; merge dedupes the Spanish
+            // duplicate; the exact-match collapse then keeps only B0CSV7NJMB
+            // because its normalized title "robots and empire" equals the
+            // query while the Spanish edition "robots e imperio robots and
+            // empire" does not. The Spanish entry is filtered out as noise.
             var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
 
-            // Author-page narrow returns one match for "Robots and Empire" — the Spanish edition.
             audibleMock
                 .Setup(s => s.SearchByAuthorAsync("Isaac Asimov", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(new AudibleSearchResponse
@@ -119,8 +129,6 @@ namespace Listenarr.Tests.Features.Api.Services
                     TotalResults = 1
                 });
 
-            // Title-only fallback returns both editions. The Spanish one (already in
-            // narrow) should be deduped; the English one should be added.
             audibleMock
                 .Setup(s => s.SearchByTitleAsync("Robots and Empire", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
                 .ReturnsAsync(new AudibleSearchResponse
@@ -147,10 +155,8 @@ namespace Listenarr.Tests.Features.Api.Services
             var results = await service.IntelligentSearchAsync("AUTHOR:Isaac Asimov TITLE:Robots and Empire");
 
             Assert.NotNull(results);
-            Assert.Equal(2, results.Count);
-            var asins = results.Select(r => r.Asin).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            Assert.Contains("B0BXFNTYWZ", asins);
-            Assert.Contains("B0CSV7NJMB", asins);
+            Assert.Single(results);
+            Assert.Equal("B0CSV7NJMB", results[0].Asin, ignoreCase: true);
             audibleMock.Verify(
                 s => s.SearchByTitleAsync("Robots and Empire", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()),
                 Times.AtLeastOnce,
@@ -160,11 +166,54 @@ namespace Listenarr.Tests.Features.Api.Services
         [Fact]
         public async Task IntelligentSearch_AuthorTitle_SkipsFallback_WhenNarrowHasFiveOrMoreMatches()
         {
-            // When the narrow path returns >= 5 plausible matches, we trust the
-            // author-page filtering and do NOT call title-only — preserves the old
-            // behaviour for well-populated queries and avoids dumping unrelated
-            // other-author results into the candidate list for common titles like
-            // "Foundation" by Asimov.
+            // When the narrow path returns >= 5 candidates we trust the
+            // author-page filtering and do NOT call title-only (avoids
+            // dumping unrelated other-author results into the candidate
+            // list). Query is "Foundation"; the 6 candidates all contain
+            // the substring (so narrow's naive IndexOf passes them all)
+            // but none normalize-equal it, so the exact-match collapse
+            // also does not fire — the full 6-item list is returned.
+            var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
+            var asimov = new AudibleAuthor { Name = "Isaac Asimov" };
+            audibleMock
+                .Setup(s => s.SearchByAuthorAsync("Isaac Asimov", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse
+                {
+                    Results = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B0Found01", Title = "Foundation Trilogy", Authors = new() { asimov } },
+                        new() { Asin = "B0Found02", Title = "Foundation and Empire", Authors = new() { asimov } },
+                        new() { Asin = "B0Found03", Title = "Second Foundation", Authors = new() { asimov } },
+                        new() { Asin = "B0Found04", Title = "Foundation's Edge", Authors = new() { asimov } },
+                        new() { Asin = "B0Found05", Title = "Foundation and Earth", Authors = new() { asimov } },
+                        new() { Asin = "B0Found06", Title = "Prelude to Foundation", Authors = new() { asimov } }
+                    },
+                    TotalResults = 6
+                });
+
+            var service = CreateSearchService(audibleMock.Object);
+            var results = await service.IntelligentSearchAsync("AUTHOR:Isaac Asimov TITLE:Foundation");
+
+            Assert.NotNull(results);
+            Assert.Equal(6, results.Count);
+            audibleMock.Verify(
+                s => s.SearchByTitleAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()),
+                Times.Never,
+                "narrow path with >= 5 matches should not trigger the title-only supplement");
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // EXACT-MATCH COLLAPSE
+        // ──────────────────────────────────────────────────────────────────
+
+        [Fact]
+        public async Task IntelligentSearch_AuthorTitle_CollapsesToExactMatch_WhenOneCandidateExactlyMatches()
+        {
+            // Narrow path returns 6 Foundation-related titles for "Foundation"
+            // — one is an exact normalized match ("Foundation"), the others
+            // are series sequels / collections that share the word. Without
+            // the collapse the user would see all 6; with the collapse only
+            // the exact match remains.
             var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
             var asimov = new AudibleAuthor { Name = "Isaac Asimov" };
             audibleMock
@@ -187,11 +236,90 @@ namespace Listenarr.Tests.Features.Api.Services
             var results = await service.IntelligentSearchAsync("AUTHOR:Isaac Asimov TITLE:Foundation");
 
             Assert.NotNull(results);
-            Assert.Equal(6, results.Count);
-            audibleMock.Verify(
-                s => s.SearchByTitleAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()),
-                Times.Never,
-                "narrow path with >= 5 matches should not trigger the title-only supplement");
+            Assert.Single(results);
+            Assert.Equal("B0Found01", results[0].Asin, ignoreCase: true);
+        }
+
+        [Fact]
+        public async Task IntelligentSearch_AuthorTitle_KeepsAllExactMatches_WhenMultipleNarratorsExist()
+        {
+            // Same book, three different narrators / abridgements on Audible
+            // (real pattern for popular titles). All three normalize-equal
+            // "Foundation" and all are by Isaac Asimov — the user needs to
+            // see all three so they can pick the narrator they own. The
+            // collapse must NOT pick just one; it must keep every exact
+            // match. Adjacent series-titles are still filtered out.
+            var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
+            var asimov = new AudibleAuthor { Name = "Isaac Asimov" };
+            audibleMock
+                .Setup(s => s.SearchByAuthorAsync("Isaac Asimov", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse
+                {
+                    Results = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B0FoundN1", Title = "Foundation", Authors = new() { asimov } },
+                        new() { Asin = "B0FoundN2", Title = "Foundation", Authors = new() { asimov } },
+                        new() { Asin = "B0FoundN3", Title = "Foundation", Authors = new() { asimov } },
+                        new() { Asin = "B0FoundEE", Title = "Foundation's Edge", Authors = new() { asimov } },
+                        new() { Asin = "B0FoundFE", Title = "Foundation and Earth", Authors = new() { asimov } }
+                    },
+                    TotalResults = 5
+                });
+
+            var service = CreateSearchService(audibleMock.Object);
+            var results = await service.IntelligentSearchAsync("AUTHOR:Isaac Asimov TITLE:Foundation");
+
+            Assert.NotNull(results);
+            Assert.Equal(3, results.Count);
+            var asins = results.Select(r => r.Asin).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            Assert.Contains("B0FoundN1", asins);
+            Assert.Contains("B0FoundN2", asins);
+            Assert.Contains("B0FoundN3", asins);
+        }
+
+        [Fact]
+        public async Task IntelligentSearch_AuthorTitle_DoesNotCollapse_WhenTitleMatchesButAuthorDiffers()
+        {
+            // Title exactly matches, but the candidate's author is not the
+            // one the user typed. That's the wrong-book-with-shared-title
+            // case (e.g. "The Stand" by King vs by a different author). The
+            // collapse must NOT fire — return the full merged list so the
+            // user can spot the mismatch and disambiguate.
+            //
+            // Narrow returns one wrong-author match (1 < 5 → supplement
+            // fires), supplement adds an unrelated King book, neither passes
+            // exact-match (author mismatches), full merged list returned.
+            var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
+            audibleMock
+                .Setup(s => s.SearchByAuthorAsync("Stephen King", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse
+                {
+                    Results = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B0WrongAuth", Title = "The Stand", Authors = new() { new() { Name = "Some Other Author" } } }
+                    },
+                    TotalResults = 1
+                });
+            audibleMock
+                .Setup(s => s.SearchByTitleAsync("The Stand", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse
+                {
+                    Results = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B0OtherKing", Title = "Different King Book", Authors = new() { new() { Name = "Stephen King" } } }
+                    },
+                    TotalResults = 1
+                });
+
+            var service = CreateSearchService(audibleMock.Object);
+            var results = await service.IntelligentSearchAsync("AUTHOR:Stephen King TITLE:The Stand");
+
+            Assert.NotNull(results);
+            // Two distinct ASINs from the merge; the exact-match collapse
+            // did NOT trigger because the title-exact candidate has the
+            // wrong author. The full merged list is returned so the user
+            // can see both and disambiguate.
+            Assert.Equal(2, results.Count);
         }
 
         private static SearchService CreateSearchService(AudibleService audible)
