@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Per-file delete on the audiobook detail page:** Trash icon on each row of the Files tab removes a single tracked file from an audiobook, with a confirmation modal offering an "Also delete from disk" checkbox (default on). New endpoint `DELETE /api/v1/library/{id}/files/{fileId}?deleteFromDisk={bool}`.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
