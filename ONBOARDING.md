@@ -1,17 +1,17 @@
-# Listenarr session handoff — 2026-05-17 (post-rebase + feature-PR-drafting wave 1)
+# Listenarr session handoff — 2026-05-19 (per-file rename — first half of move/rename)
 
 Kevin's fork of [Listenarrs/Listenarr](https://github.com/Listenarrs/Listenarr). See `CLAUDE.md` for the project guide.
 
-The big multi-session rebase is done, deployed, and verified. Today's tail end shipped four small fixes triggered by browser-verification of the metadata-backfill modal, opened two upstream PRs from canary for the defensive ones, then started a **staggered wave of draft PRs** for the ~11 features that exist on `kevin/live` with no upstream visibility. Two of those drafts went out today; the rest are queued.
+The big multi-session rebase is done, deployed, and verified. This session cut the first of two move/rename feature PRs from canary — **per-file rename** on the audiobook detail page's Files tab. Branch `feat/per-file-rename` was merged into `kevin/live` and deployed as `listenarr:local-20260519-1108`. HTTP smoke passes; **browser verification still owed** before declaring the deploy done. The companion PR (one-step audiobook rename via Edit Audiobook modal) is the next chunk of move/rename and has not been started.
 
 ## Where things stand
 
 ### Live deploy
 
-- **Live image:** `listenarr:local-20260519-0817` (head `b5818ba9` on `kevin/live`, post-rebase onto v0.4.2 canary).
+- **Live image:** `listenarr:local-20260519-1108` (head `c201ddd2` on `kevin/live`, post-rebase onto v0.4.2 canary + per-file-rename merge).
 - **Live URL:** https://your-host.example.
-- **One-step rollback:** `listenarr:local-20260519-0720` (pre-rebase tree; same FE/BE behaviour but on the old v0.4.1 canary base).
-- **Two-step rollback:** `listenarr:local-20260518-1756` (no per-file-delete trash button on the Files tab).
+- **One-step rollback:** `listenarr:local-20260519-0817` (pre-rename tip — post-rebase but without the pencil action on the Files tab).
+- **Two-step rollback:** `listenarr:local-20260519-0720` (pre-rebase tree on v0.4.1 canary base; same FE/BE behaviour as `0817` but on the older canary).
 - Deploy chain since the rebase shipped:
 
   | Tag | Head | What it added |
@@ -32,17 +32,19 @@ The big multi-session rebase is done, deployed, and verified. Today's tail end s
   | `local-20260518-1756` | `60f87596` | Exact-match collapse for the backfill candidate search — when any merged candidate's normalized title equals the user's title AND the author overlaps, return only the exact matches (preserving multiple narrators / abridgements). Above the threshold or when no candidate exactly matches, return the full merged list unchanged. Second commit on `fix/backfill-search-fallback-to-title`; both upstream-bound. |
   | `local-20260519-0720` | `219703e1` (merge of `23430c7c`) | Per-file delete on the audiobook detail page — trash button per Files-tab row + confirm modal with "Also delete the file from disk" checkbox. Backend `DELETE /library/{id}/files/{fileId}?deleteFromDisk={bool}`; disk-delete failures non-fatal (DB row removed, warning surfaced); writes a "File Removed" history entry. 6 service + 4 controller tests. Cut from canary on `feat/per-file-delete`; merged into kevin/live. |
   | `local-20260519-0817` | `b5818ba9` (post-rebase) | **Rebase deploy** — kevin/live rebased onto upstream canary v0.4.2 (`02a029b2`, brings in #576 foundational refactor + ~18 stabilization fixes). All 12 PR / queued branches rebased onto the new canary cleanly. Tests 769/769 green. Same FE/BE behaviour as `0720`; this deploy is to verify the rebased base runs cleanly before opening any new PRs or starting move/rename work. |
+  | `local-20260519-1108` | `c201ddd2` (merge of `800657df`) | **Per-file rename** on the audiobook detail page — pencil action on each Files-tab row opens a single-file rename modal. Modal calls `POST /api/v1/library/{id}/rename/preview` to get the authoritative current path (so it works whether `f.Path` is stored relative or absolute), lets the user edit only the filename portion (extension preserved, path separators rejected), then issues a single-file `FileRenameOperation` through `POST /api/v1/library/{id}/rename`. No backend changes — `RenameService` already accepted arbitrary `NewPath` in per-file operations; the controller already exposed the per-audiobook endpoint. Cut from canary on `feat/per-file-rename`; merged into kevin/live. 5 FE tests added. Deployed with `--skip-tests` (FE-only diff; backend untouched). **Browser-verify pending.** |
 
 ### Branch state
 
 | Branch | Tip | Notes |
 |---|---|---|
 | `canary` | `02a029b2` v0.4.2 | Clean mirror of upstream. **Advanced 18 commits this session** — the foundational refactor (#576) and the post-refactor stabilization fixes are now in. |
-| `kevin/live` | `b5818ba9` (rebased) | Deployed. **68 commits above the new canary** (preserves the per-file-delete merge structure via `--rebase-merges`). Pushed to `fork/kevin/live`. |
-| `kevin/live-rebased` | `b5818ba9` | Kept in lockstep with `kevin/live` (same commit). The "rebased" distinction is no longer maintained — both branches always point at the same commit. |
+| `kevin/live` | `c201ddd2` (per-file-rename merge) | Deployed. **67 commits above canary** (preserves the per-file-delete and per-file-rename merge structure via `--rebase-merges`). Pushed to `fork/kevin/live`. |
+| `kevin/live-rebased` | `c201ddd2` | Kept in lockstep with `kevin/live` (same commit). The "rebased" distinction is no longer maintained — both branches always point at the same commit. |
 | `fix/audiobook-files-natural-sort` | `9b910948` | **Rebased onto v0.4.2 canary**, pushed. Ready to `gh pr create --draft`. |
 | `fix/backfill-search-fallback-to-title` | `11bbe264` | **Rebased onto v0.4.2 canary**, pushed. Two commits: broadening + exact-match collapse. Ready to `gh pr create --draft`. |
 | `feat/per-file-delete` | `a1ed8570` | **Rebased onto v0.4.2 canary**, pushed. Single commit. Ready to `gh pr create --draft`. |
+| `feat/per-file-rename` | `800657df` | **Cut fresh from v0.4.2 canary this session**, pushed. Single commit, FE-only. Ready to `gh pr create --draft` once the pacing window opens. |
 
 **Post-rebase note (this session):** the entire branch tree was rebased onto upstream canary v0.4.2 (`02a029b2`) at the end of this session, after the foundational refactor (#576) merged upstream. All 12 PR branches and `kevin/live` itself were rebased cleanly. The 9 open upstream PRs need a `git push fork --force-with-lease` if GitHub hasn't auto-detected the rebase yet — done in this session, see commits at the rebased tips below.
 
@@ -84,18 +86,20 @@ Bumped from 5 → 9 since the rebase shipped.
 | `fix/audiobook-files-natural-sort` | `9b910948` | queued, no PR yet |
 | `fix/backfill-search-fallback-to-title` | `11bbe264` | queued, no PR yet |
 | `feat/per-file-delete` | `a1ed8570` | queued, no PR yet |
+| `feat/per-file-rename` | `800657df` | queued, no PR yet — **cut fresh from v0.4.2 canary this session (2026-05-19), not part of the original rebase batch** |
 
-`kevin/live` was rebased with `--rebase-merges` to preserve the per-file-delete merge structure; tests 769/769 green on the rebased tip. **Watch for the green light to open the queue:** maintainer reply on #590 (no response yet to Kevin's 2026-05-17 rebase-done update), a draft review, or ~7 days of canary quiet after the last `[fix]` commit on 2026-05-17.
+`kevin/live` was rebased with `--rebase-merges` to preserve the per-file-delete (and now per-file-rename) merge structure; tests 769/769 green on the rebased tip, 353/353 FE tests green after adding per-file-rename. **Watch for the green light to open the queue:** maintainer reply on #590 (no response yet to Kevin's 2026-05-17 rebase-done update), a draft review, or ~7 days of canary quiet after the last `[fix]` commit on 2026-05-17.
 
 ### kevin/live features still without an upstream PR (queue)
 
-Wave 1 (today) shipped K + J as drafts (#604, #605). Eight more queued, plus two branches already pushed to fork that just need `gh pr create --draft`:
+Wave 1 (2026-05-17) shipped K + J as drafts (#604, #605). Eight more queued, plus three branches already pushed to fork that just need `gh pr create --draft` (the third — `feat/per-file-rename` — was cut this session):
 
 | Tier | # | Name | Branch / commits on `kevin/live` | Size | Notes |
 |---|---|---|---|---|---|
 | 2 (next session) | NS | Audiobook files natural-sort | `fix/audiobook-files-natural-sort` (`52aa1cf5`) — pushed; on `kevin/live` as `fef94958` | Small | Single shared `AudiobookFileOrdering.InNaturalOrder` helper applied at both `LibraryController.GetAudiobook` and `AudiobookDtoFactory`. Controller-level test exercising the actual API endpoint. Ready to `gh pr create --draft`. |
 | 2 (next session) | SF | Backfill search fallback + exact-match collapse | `fix/backfill-search-fallback-to-title` (`d67df4b9`) — two commits, pushed | Small/Medium | AUTHOR_TITLE branch in `IntelligentSearchAsync` (1) supplements with title-only Audible search when narrow returns < 5 candidates, merging deduped by ASIN, and (2) collapses the merged list to exact title+author matches when any exist (multi-narrator keeps all matches; no exact match → return full merged list). Six-test regression suite. Ready to `gh pr create --draft`. |
 | 2 (next session) | PFD | Per-file delete on audiobook detail page | `feat/per-file-delete` (`23430c7c`) — pushed; on `kevin/live` as `23430c7c` (merge `219703e1`) | Small | Trash button per Files-tab row + confirm modal with "Also delete the file from disk" checkbox (default on). Backend `DELETE /library/{id}/files/{fileId}?deleteFromDisk={bool}`; disk-delete failures non-fatal; writes "File Removed" history entry. 6 service + 4 controller tests. Ready to `gh pr create --draft`. |
+| 2 (next session) | PFR | Per-file rename on audiobook detail page | `feat/per-file-rename` (`800657df`) — pushed; on `kevin/live` as merge `c201ddd2` | Small | Pencil action per Files-tab row → modal that previews via `POST /library/{id}/rename/preview`, lets the user edit only the filename portion, then submits one `FileRenameOperation` through `POST /library/{id}/rename`. FE-only — backend already accepted arbitrary `NewPath` in per-file ops. 5 FE tests. Pairs with PFD on the same row UI. Ready to `gh pr create --draft`. |
 | 2 (next session) | H | Pre-ingest verification (music-shape) | `c65dd0f9` | Small | Single new file in `listenarr.application/Downloads/`. Defensive import-time check. |
 | 2 (next session) | F | Auto-cache Audible series catalogs | `b4370cdd` | Small | Single new background service + 1-method interface addition. |
 | 3 | B | In-browser audio preview | `46085a4d` + `d5e9a886` | Medium | New `FilePreviewModal` + streaming endpoint. **The feature today's modal-stacking saga was built around** — well exercised, ready to PR. |
