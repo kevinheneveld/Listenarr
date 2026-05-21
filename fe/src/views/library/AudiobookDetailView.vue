@@ -442,6 +442,15 @@
                 </button>
                 <button
                   type="button"
+                  class="file-action-btn"
+                  title="Move file to another audiobook"
+                  aria-label="Move file to another audiobook"
+                  @click.stop="openExtractFile(f)"
+                >
+                  <PhArrowSquareOut />
+                </button>
+                <button
+                  type="button"
                   class="file-delete-btn"
                   :title="`Delete ${getFileName(f.path)}`"
                   :aria-label="`Delete ${getFileName(f.path)}`"
@@ -723,6 +732,15 @@
     @close="closeRenameFile"
     @done="handleRenameFileDone"
   />
+
+  <ExtractFileModal
+    :visible="showExtractModal"
+    :audiobook-id="audiobook?.id ?? null"
+    :file-id="extractFileTarget?.id ?? null"
+    :source-audiobook-title="audiobook?.title ?? null"
+    @close="closeExtractFile"
+    @done="handleExtractDone"
+  />
 </template>
 
 <script setup lang="ts">
@@ -755,11 +773,13 @@ import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import RenameFileModal from '@/components/domain/organize/RenameFileModal.vue'
+import ExtractFileModal from '@/components/domain/organize/ExtractFileModal.vue'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { Pill } from '@/components/base'
 import {
   PhArrowLeft,
+  PhArrowSquareOut,
   PhArrowClockwise,
   PhBookmark,
   PhSpinner,
@@ -828,6 +848,8 @@ const showEditModal = ref(false)
 const showOrganizeModal = ref(false)
 const showRenameFileModal = ref(false)
 const renameFileTarget = ref<{ id: number } | null>(null)
+const showExtractModal = ref(false)
+const extractFileTarget = ref<{ id: number } | null>(null)
 const showMoreActions = ref(false)
 
 // History state
@@ -1742,6 +1764,21 @@ function closeEditModal() {
 
 async function handleEditSaved() {
   // Refresh the audiobook data after edit
+  await loadAudiobook()
+}
+
+function openExtractFile(file: { id: number }): void {
+  extractFileTarget.value = { id: file.id }
+  showExtractModal.value = true
+}
+
+function closeExtractFile(): void {
+  showExtractModal.value = false
+  extractFileTarget.value = null
+}
+
+async function handleExtractDone(): Promise<void> {
+  closeExtractFile()
   await loadAudiobook()
 }
 

@@ -76,6 +76,7 @@ namespace Listenarr.Api.Controllers
         private readonly ILibraryAddService? _libraryAddService;
         private readonly IRenameService? _renameService;
         private readonly IExternalCoverArtSweepService? _externalCoverArtSweepService;
+        private readonly IFileExtractionService? _fileExtractionService;
         /// <summary>Initializes a new instance of <see cref="LibraryController"/>.</summary>
         /// <param name="repo">Repository for audiobook persistence and queries.</param>
         /// <param name="imageCacheService">Service for caching and moving cover images.</param>
@@ -94,6 +95,7 @@ namespace Listenarr.Api.Controllers
         /// <param name="libraryAddService">Optional shared add-to-library service used by runtime requests and background syncs.</param>
         /// <param name="renameService">Optional organize/rename service used for previewing and executing library file organization.</param>
         /// <param name="externalCoverArtSweepService">Optional sweep service that downloads still-external cover URLs into local library storage on demand.</param>
+        /// <param name="fileExtractionService">Optional file-extraction service used to move a single tracked file onto a different (typically new) destination audiobook.</param>
         public LibraryController(
             IAudiobookRepository repo,
             IImageCacheService imageCacheService,
@@ -111,7 +113,8 @@ namespace Listenarr.Api.Controllers
             IRootFolderService? rootFolderService = null,
             ILibraryAddService? libraryAddService = null,
             IRenameService? renameService = null,
-            IExternalCoverArtSweepService? externalCoverArtSweepService = null)
+            IExternalCoverArtSweepService? externalCoverArtSweepService = null,
+            IFileExtractionService? fileExtractionService = null)
         {
             _repo = repo;
             _imageCacheService = imageCacheService;
@@ -130,6 +133,7 @@ namespace Listenarr.Api.Controllers
             _libraryAddService = libraryAddService;
             _renameService = renameService;
             _externalCoverArtSweepService = externalCoverArtSweepService;
+            _fileExtractionService = fileExtractionService;
         }
 
         private static bool ComputeWantedFlag(Audiobook audiobook)
@@ -4722,6 +4726,71 @@ namespace Listenarr.Api.Controllers
             }
 
             return Ok(result);
+        }
+
+        /// <summary>
+        /// Read the embedded container tags (ffprobe) for a single tracked file. Used by the
+        /// "extract file to another audiobook" UI to seed an Audible candidate search and to
+        /// display what the file actually claims to be alongside Audible's metadata.
+        /// </summary>
+        [HttpGet("{audiobookId}/files/{fileId}/embedded-metadata")]
+        public async Task<IActionResult> GetEmbeddedFileMetadata(int audiobookId, int fileId, CancellationToken ct)
+        {
+            if (_fileExtractionService == null)
+            {
+                return StatusCode(503, new { message = "File extraction service not available" });
+            }
+
+            var embedded = await _fileExtractionService.ReadEmbeddedAsync(audiobookId, fileId, ct);
+            if (embedded == null)
+            {
+                return NotFound(new { message = "File not found." });
+            }
+
+            return Ok(embedded);
+        }
+
+        /// <summary>
+        /// Move a single tracked file out of its current audiobook and onto a destination
+        /// audiobook constructed from the supplied Audible metadata. If an audiobook with
+        /// the same ASIN already exists, the request must include a <c>duplicateStrategy</c>
+        /// of "merge" or "duplicate"; otherwise a 409 is returned with the existing
+        /// audiobook details so the caller can re-ask the user.
+        /// </summary>
+        [HttpPost("{audiobookId}/files/{fileId}/extract")]
+        public async Task<IActionResult> ExtractFileToNewAudiobook(
+            int audiobookId,
+            int fileId,
+            [FromBody] ExtractFileRequest request,
+            CancellationToken ct)
+        {
+            if (_fileExtractionService == null)
+            {
+                return StatusCode(503, new { message = "File extraction service not available" });
+            }
+
+            if (request == null)
+            {
+                return BadRequest(new { message = "Extract request body is required." });
+            }
+
+            if (request.Metadata == null || string.IsNullOrWhiteSpace(request.Metadata.Title))
+            {
+                return BadRequest(new { message = "Destination metadata must include a title." });
+            }
+
+            var result = await _fileExtractionService.ExtractToNewAudiobookAsync(audiobookId, fileId, request, ct);
+            if (result.Success)
+            {
+                return Ok(result);
+            }
+
+            if (result.Conflict != null && request.DuplicateStrategy == DuplicateStrategy.None)
+            {
+                return Conflict(result);
+            }
+
+            return BadRequest(result);
         }
 
         public class AddToLibraryRequest

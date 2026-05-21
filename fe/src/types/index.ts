@@ -1215,3 +1215,63 @@ export interface LibraryStats {
   languages: LanguageCount[]
   generatedAt: string
 }
+
+export interface EmbeddedFileMetadata {
+  fileId: number
+  audiobookId: number
+  currentPath?: string
+  title?: string
+  subtitle?: string
+  author?: string
+  albumArtist?: string
+  narrator?: string
+  album?: string
+  description?: string
+  genre?: string
+  year?: number
+  asin?: string
+  isbn?: string
+  series?: string
+  seriesPosition?: number
+  durationSeconds?: number
+  bitRate?: number
+  format?: string
+}
+
+/**
+ * Wire format for the extract endpoint's duplicate-strategy field. The backend
+ * (`DuplicateStrategy` C# enum, serialized via JsonStringEnumConverter) reads
+ * case-insensitively — both 'merge' and 'Merge' deserialize correctly — but writes
+ * always emit the PascalCase form. The FE sends lowercase by convention; treat
+ * either as valid on read.
+ */
+export type ExtractDuplicateStrategy = 'none' | 'merge' | 'duplicate' | 'None' | 'Merge' | 'Duplicate'
+
+export interface ExtractFileRequest {
+  metadata: AudibleBookMetadata
+  duplicateStrategy?: ExtractDuplicateStrategy
+  qualityProfileId?: number
+  monitored?: boolean
+  cacheImageLocally?: boolean
+}
+
+export interface ExtractFileConflict {
+  existingAudiobookId: number
+  existingTitle?: string
+  existingAsin?: string
+  existingFileCount: number
+  recommendedStrategy: 'merge' | 'duplicate' | 'Merge' | 'Duplicate'
+  recommendationReason?: string
+}
+
+export interface ExtractFileResult {
+  success: boolean
+  error?: string
+  appliedStrategy: ExtractDuplicateStrategy
+  destinationAudiobookId?: number
+  destinationAudiobookTitle?: string
+  newFilePath?: string
+  sourceAudiobookId: number
+  sourceAudiobookEmpty: boolean
+  conflict?: ExtractFileConflict
+}
