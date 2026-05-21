@@ -99,6 +99,7 @@ namespace Listenarr.Infrastructure.Extensions
             ));
             services.AddScoped<IFileNamingService, FileNamingService>();
             services.AddScoped<IRenameService, RenameService>();
+            services.AddScoped<IFileExtractionService, FileExtractionService>();
             // Centralized import service: handles moving/copying, naming and audiobook registration
             services.AddScoped<IDownloadImportService, DownloadImportService>();
             // Centralized file mover for robust move/copy with retries and diagnostics
