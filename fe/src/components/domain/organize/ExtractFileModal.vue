@@ -181,15 +181,15 @@
         <p v-if="submitError" class="extract-error" role="alert">{{ submitError }}</p>
       </template>
 
-      <p v-if="step === 'submitting'" class="extract-loading">Moving file…</p>
+      <p v-if="isSubmitting" class="extract-loading">Moving file…</p>
     </ModalBody>
 
     <template #footer>
-      <button class="cancel-button btn" :disabled="step === 'submitting'" @click="onClose">Cancel</button>
+      <button class="cancel-button btn" :disabled="isSubmitting" @click="onClose">Cancel</button>
       <button
         v-if="step === 'confirming'"
         class="btn"
-        :disabled="step === 'submitting'"
+        :disabled="isSubmitting"
         @click="backToResults"
       >
         Back to results
@@ -197,10 +197,10 @@
       <button
         v-if="step === 'confirming'"
         class="btn btn-primary"
-        :disabled="step === 'submitting' || !canSubmit"
+        :disabled="isSubmitting || !canSubmit"
         @click="onSubmitClicked"
       >
-        <PhSpinner v-if="step === 'submitting'" class="spinner" /> Move file
+        <PhSpinner v-if="isSubmitting" class="spinner" /> Move file
       </button>
     </template>
   </Modal>
@@ -254,6 +254,10 @@ const canSearch = computed(() =>
 const canSubmit = computed(() =>
   !!selectedMetadata.value && !!props.audiobookId && !!props.fileId,
 )
+// Extract the comparison into a computed so vue-tsc doesn't narrow `step` inside a
+// `v-if="step === 'confirming'"` block and then complain that the inline
+// `step === 'submitting'` comparison has no overlap with the narrowed type.
+const isSubmitting = computed(() => step.value === 'submitting')
 
 watch(
   () => [props.visible, props.audiobookId, props.fileId] as const,
