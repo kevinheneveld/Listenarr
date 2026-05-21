@@ -16,7 +16,7 @@
   along with this program. If not, see <https://www.gnu.org/licenses/>.
 -->
 <template>
-  <Modal :visible="visible" size="lg" :title="title" @close="onClose">
+  <Modal :visible="visible" size="lg" :title="title" :overlay-z-index="3100" @close="onClose">
     <template #header>
       <ModalHeader :title="title" @close="onClose">
         <template #icon><PhArrowSquareOut /></template>
@@ -45,6 +45,12 @@
             >
               <PhPlay weight="fill" /> Preview
             </button>
+          </div>
+          <div v-if="embedded.narrator" class="extract-file-narrator">
+            <strong>Narrator (from file tags):</strong> {{ embedded.narrator }}
+            <span class="extract-file-narrator-hint">
+              — candidates whose narrator matches will be shown first.
+            </span>
           </div>
         </div>
 
@@ -89,11 +95,12 @@
 
         <p v-if="step === 'searching'" class="extract-loading">Searching Audible…</p>
 
-        <ul v-else-if="candidates.length" class="extract-candidate-list">
+        <ul v-else-if="rankedCandidates.length" class="extract-candidate-list">
           <li
-            v-for="candidate in candidates"
+            v-for="candidate in rankedCandidates"
             :key="candidate.asin || candidate.title"
             class="extract-candidate"
+            :class="{ 'extract-candidate--narrator-match': candidateMatchesEmbeddedNarrator(candidate) }"
             tabindex="0"
             role="button"
             @click="onPickCandidate(candidate)"
@@ -108,7 +115,12 @@
               loading="lazy"
             />
             <div class="extract-candidate-body">
-              <div class="extract-candidate-title">{{ candidate.title || '(untitled)' }}</div>
+              <div class="extract-candidate-title">
+                {{ candidate.title || '(untitled)' }}
+                <span v-if="candidateMatchesEmbeddedNarrator(candidate)" class="extract-candidate-badge">
+                  Narrator matches
+                </span>
+              </div>
               <div class="extract-candidate-meta">
                 <span v-if="candidateAuthorString(candidate)">{{ candidateAuthorString(candidate) }}</span>
                 <span v-if="candidateNarratorString(candidate)">· Narrated by {{ candidateNarratorString(candidate) }}</span>
@@ -278,6 +290,48 @@ const canSubmit = computed(() =>
 // `v-if="step === 'confirming'"` block and then complain that the inline
 // `step === 'submitting'` comparison has no overlap with the narrowed type.
 const isSubmitting = computed(() => step.value === 'submitting')
+
+// Sort search candidates so any whose narrator overlaps the file's embedded narrator
+// float to the top. Stable order preserved within each group so a non-match doesn't
+// jump above a non-match. Matching uses normalised substring (case- and
+// punctuation-insensitive) on either direction so "Rosamund Pike" matches
+// "rosamund pike" but also "Pike" alone if that's all the file tag has.
+const rankedCandidates = computed<AudibleSearchResult[]>(() => {
+  const list = candidates.value.slice()
+  const embeddedNarrator = embedded.value?.narrator?.trim()
+  if (!embeddedNarrator) return list
+  return list
+    .map((candidate, index) => ({
+      candidate,
+      index,
+      matches: candidateMatchesEmbeddedNarrator(candidate),
+    }))
+    .sort((a, b) => (b.matches ? 1 : 0) - (a.matches ? 1 : 0) || a.index - b.index)
+    .map((entry) => entry.candidate)
+})
+
+function candidateMatchesEmbeddedNarrator(candidate: AudibleSearchResult): boolean {
+  const embeddedNarrator = embedded.value?.narrator?.trim()
+  if (!embeddedNarrator) return false
+  const normalizedEmbedded = normalizeForMatch(embeddedNarrator)
+  if (!normalizedEmbedded) return false
+  const candidateNames = (candidate.narrators || [])
+    .map((n) => normalizeForMatch(n?.name))
+    .filter(Boolean) as string[]
+  return candidateNames.some(
+    (n) => n.includes(normalizedEmbedded) || normalizedEmbedded.includes(n),
+  )
+}
+
+function normalizeForMatch(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
 watch(
   () => [props.visible, props.audiobookId, props.fileId] as const,
@@ -560,6 +614,34 @@ function stripSubtitlePart(title: string): string {
   background: var(--brand-focus, #3b82f6);
   border-color: var(--brand-focus, #3b82f6);
   color: #fff;
+}
+
+.extract-file-narrator {
+  margin-top: 0.5rem;
+  font-family: var(--font-family, sans-serif);
+  font-size: 13px;
+}
+
+.extract-file-narrator-hint {
+  color: var(--text-muted, #888);
+  margin-left: 0.5rem;
+}
+
+.extract-candidate--narrator-match {
+  border-color: var(--brand-focus, #3b82f6);
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.extract-candidate-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.45rem;
+  background: var(--brand-focus, #3b82f6);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
 }
 
 .extract-search-row {
