@@ -94,7 +94,7 @@ namespace Listenarr.Application.Audiobooks
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(metadata.Asin))
+            if (!request.BypassDuplicateCheck && !string.IsNullOrWhiteSpace(metadata.Asin))
             {
                 var existingByAsin = await _repo.GetByAsinAsync(metadata.Asin);
                 if (existingByAsin != null)
@@ -110,7 +110,7 @@ namespace Listenarr.Application.Audiobooks
 
             var firstIsbn = (metadata.Isbn ?? Enumerable.Empty<string>())
                 .FirstOrDefault(i => !string.IsNullOrWhiteSpace(i));
-            if (!string.IsNullOrWhiteSpace(firstIsbn))
+            if (!request.BypassDuplicateCheck && !string.IsNullOrWhiteSpace(firstIsbn))
             {
                 var existingByIsbn = await _repo.GetByIsbnAsync(firstIsbn);
                 if (existingByIsbn != null)

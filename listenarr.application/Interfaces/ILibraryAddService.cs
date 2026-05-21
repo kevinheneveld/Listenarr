@@ -43,6 +43,15 @@ namespace Listenarr.Application.Interfaces
         public string HistorySource { get; set; } = "AddNew";
 
         public string? HistoryMessage { get; set; }
+
+        /// <summary>
+        /// When true, the service skips its ASIN/ISBN dedup check and creates a new audiobook
+        /// record even if one with the same identifiers already exists. Used by the file
+        /// extraction "Make a duplicate" flow where the caller has explicitly chosen to keep
+        /// both copies. Defaults to false so the standard add-to-library behaviour is
+        /// unchanged.
+        /// </summary>
+        public bool BypassDuplicateCheck { get; set; }
     }
 
     public sealed class LibraryAddOperationResult
