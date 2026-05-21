@@ -1090,6 +1090,7 @@ export interface EmbeddedFileMetadata {
   fileId: number
   audiobookId: number
   currentPath?: string
+  size?: number
   title?: string
   subtitle?: string
   author?: string

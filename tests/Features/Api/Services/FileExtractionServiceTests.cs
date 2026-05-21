@@ -265,6 +265,73 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
+        public async Task Extract_WithDuplicateStrategy_BypassesLibraryAddServiceDedup()
+        {
+            // Regression: previously, picking "Duplicate" still went through
+            // LibraryAddService's own ASIN/ISBN dedup check, which returned AlreadyExists
+            // and bounced the user back into the conflict step in a loop. The Duplicate
+            // path must forward BypassDuplicateCheck=true so the create proceeds.
+            var libraryRoot = Path.Join(_tempRoot, "library");
+            var sourceFolder = Path.Join(libraryRoot, "Source");
+            Directory.CreateDirectory(sourceFolder);
+            var sourcePath = Path.Join(sourceFolder, "Eye.m4b");
+            await File.WriteAllTextAsync(sourcePath, "audio");
+
+            var (service, db, repo, _, libraryAddMock) = BuildService();
+
+            db.Audiobooks.Add(new Audiobook
+            {
+                Id = 1,
+                Title = "Source",
+                BasePath = sourceFolder,
+                Files = new List<AudiobookFile>
+                {
+                    new() { Id = 11, AudiobookId = 1, Path = sourcePath, Format = "m4b" }
+                }
+            });
+            db.Audiobooks.Add(new Audiobook
+            {
+                Id = 2,
+                Title = "The Eye of the World",
+                Asin = "B002UZJBA8",
+                BasePath = Path.Join(libraryRoot, "Robert Jordan", "The Eye of the World"),
+                Files = new List<AudiobookFile>
+                {
+                    new() { Id = 21, AudiobookId = 2, Path = "existing.mp3", Format = "mp3" }
+                }
+            });
+            await db.SaveChangesAsync();
+
+            LibraryAddOperationRequest? capturedRequest = null;
+            libraryAddMock.Setup(s => s.AddToLibraryAsync(It.IsAny<LibraryAddOperationRequest>(), It.IsAny<CancellationToken>()))
+                .Returns<LibraryAddOperationRequest, CancellationToken>(async (request, _) =>
+                {
+                    capturedRequest = request;
+                    var created = request.Metadata.ToAudiobook();
+                    created.BasePath = request.DestinationPath;
+                    await repo.AddAsync(created);
+                    return new LibraryAddOperationResult { Added = true, Audiobook = created };
+                });
+
+            var result = await service.ExtractToNewAudiobookAsync(1, 11, new ExtractFileRequest
+            {
+                Metadata = new AudibleBookMetadata
+                {
+                    Title = "The Eye of the World",
+                    Authors = new List<string> { "Robert Jordan" },
+                    Asin = "B002UZJBA8",
+                },
+                DuplicateStrategy = DuplicateStrategy.Duplicate,
+            });
+
+            Assert.True(result.Success, result.Error);
+            Assert.NotNull(capturedRequest);
+            Assert.True(capturedRequest!.BypassDuplicateCheck, "Duplicate strategy must forward BypassDuplicateCheck=true to LibraryAddService.");
+            Assert.Equal(DuplicateStrategy.Duplicate, result.AppliedStrategy);
+            Assert.NotEqual(2, result.DestinationAudiobookId); // new record, not the existing match
+        }
+
+        [Fact]
         public async Task Extract_ConflictResponse_IncludesExistingFileSummary()
         {
             var libraryRoot = Path.Join(_tempRoot, "library");

@@ -85,6 +85,7 @@ namespace Listenarr.Application.Audiobooks
                 FileId = file.Id,
                 AudiobookId = audiobook.Id,
                 CurrentPath = absolutePath,
+                Size = file.Size > 0 ? file.Size : null,
             };
 
             if (meta != null)
@@ -192,6 +193,9 @@ namespace Listenarr.Application.Audiobooks
                     DestinationPath = destinationBasePath,
                     HistorySource = "FileExtraction",
                     HistoryMessage = $"Audiobook created by extracting '{Path.GetFileName(sourceAbsolutePath)}' from '{sourceAudiobook.Title}'.",
+                    // User explicitly chose Duplicate; bypass LibraryAddService's own ASIN/ISBN
+                    // dedup so we don't bounce them back to the conflict step in a loop.
+                    BypassDuplicateCheck = request.DuplicateStrategy == DuplicateStrategy.Duplicate,
                 }, ct);
 
                 if (addResult.AlreadyExists)

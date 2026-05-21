@@ -180,35 +180,52 @@
           Pick what you want to do.
         </p>
 
-        <details
-          v-if="conflict.existingFiles && conflict.existingFiles.length"
-          class="extract-conflict-existing-files"
-          open
-        >
-          <summary>
-            What's already in <em>{{ conflict.existingTitle || 'that audiobook' }}</em>
-          </summary>
-          <ul class="extract-existing-file-list">
-            <li
-              v-for="file in conflict.existingFiles"
-              :key="file.fileId"
-              class="extract-existing-file"
-            >
-              <code>{{ file.path || '(unknown path)' }}</code>
-              <span class="extract-existing-file-meta">
-                <span v-if="file.format">{{ file.format.toUpperCase() }}</span>
-                <span v-if="file.size">· {{ formatBytes(file.size) }}</span>
-                <span v-if="file.durationSeconds">· {{ formatDurationShort(file.durationSeconds) }}</span>
-              </span>
-            </li>
-            <li
-              v-if="conflict.existingFileCount > (conflict.existingFiles?.length ?? 0)"
-              class="extract-existing-file extract-existing-file--more"
-            >
-              … and {{ conflict.existingFileCount - (conflict.existingFiles?.length ?? 0) }} more
-            </li>
-          </ul>
-        </details>
+        <div class="extract-conflict-files-compare">
+          <details v-if="embedded?.currentPath" class="extract-conflict-existing-files" open>
+            <summary>What you're moving</summary>
+            <ul class="extract-existing-file-list">
+              <li class="extract-existing-file">
+                <code>{{ embedded.currentPath }}</code>
+                <span class="extract-existing-file-meta">
+                  <span v-if="embedded.format">{{ embedded.format.toUpperCase() }}</span>
+                  <span v-if="embedded.size">· {{ formatBytes(embedded.size) }}</span>
+                  <span v-if="embedded.durationSeconds">· {{ formatDurationShort(embedded.durationSeconds) }}</span>
+                  <span v-if="embedded.bitRate">· {{ embedded.bitRate }} kbps</span>
+                </span>
+              </li>
+            </ul>
+          </details>
+
+          <details
+            v-if="conflict.existingFiles && conflict.existingFiles.length"
+            class="extract-conflict-existing-files"
+            open
+          >
+            <summary>
+              What's already in <em>{{ conflict.existingTitle || 'that audiobook' }}</em>
+            </summary>
+            <ul class="extract-existing-file-list">
+              <li
+                v-for="file in conflict.existingFiles"
+                :key="file.fileId"
+                class="extract-existing-file"
+              >
+                <code>{{ file.path || '(unknown path)' }}</code>
+                <span class="extract-existing-file-meta">
+                  <span v-if="file.format">{{ file.format.toUpperCase() }}</span>
+                  <span v-if="file.size">· {{ formatBytes(file.size) }}</span>
+                  <span v-if="file.durationSeconds">· {{ formatDurationShort(file.durationSeconds) }}</span>
+                </span>
+              </li>
+              <li
+                v-if="conflict.existingFileCount > (conflict.existingFiles?.length ?? 0)"
+                class="extract-existing-file extract-existing-file--more"
+              >
+                … and {{ conflict.existingFileCount - (conflict.existingFiles?.length ?? 0) }} more
+              </li>
+            </ul>
+          </details>
+        </div>
 
         <div class="extract-conflict-options">
           <button

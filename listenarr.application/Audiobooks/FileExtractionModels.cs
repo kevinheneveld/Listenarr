@@ -49,6 +49,7 @@ namespace Listenarr.Application.Audiobooks
         public int FileId { get; set; }
         public int AudiobookId { get; set; }
         public string? CurrentPath { get; set; }
+        public long? Size { get; set; }
         public string? Title { get; set; }
         public string? Subtitle { get; set; }
         public string? Author { get; set; }
