@@ -1436,10 +1436,14 @@ class ApiService {
     // the caller hasn't picked a strategy yet, or 400 when the chosen strategy still can't
     // resolve the conflict. In both cases the response body is a populated ExtractFileResult
     // — surface it instead of throwing so the modal can render the duplicate-strategy step.
+    // Normalize the metadata first so isbn is sent as a string[] (FE type is a single
+    // string for ergonomics; the backend's AudibleBookMetadata.Isbn is List<string>).
+    const normalizedMetadata = this.normalizeMetadataForApi(request.metadata)
+    const normalizedRequest = { ...request, metadata: normalizedMetadata }
     try {
       return await this.request<ExtractFileResult>(
         `/library/${audiobookId}/files/${fileId}/extract`,
-        { method: 'POST', body: JSON.stringify(request) },
+        { method: 'POST', body: JSON.stringify(normalizedRequest) },
       )
     } catch (err) {
       const status = (err as { status?: number } | null)?.status
