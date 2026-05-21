@@ -738,8 +738,10 @@
     :audiobook-id="audiobook?.id ?? null"
     :file-id="extractFileTarget?.id ?? null"
     :source-audiobook-title="audiobook?.title ?? null"
+    :can-preview-file="true"
     @close="closeExtractFile"
     @done="handleExtractDone"
+    @preview-file="handleExtractPreviewFile"
   />
 </template>
 
@@ -1780,6 +1782,22 @@ function closeExtractFile(): void {
 async function handleExtractDone(): Promise<void> {
   closeExtractFile()
   await loadAudiobook()
+}
+
+// Opens FilePreviewModal from inside ExtractFileModal so the user can audition
+// the file before committing to an Audible candidate. We look up the file off
+// the loaded audiobook by id so the preview has the same path/format/duration
+// metadata as the row-level play button uses.
+function handleExtractPreviewFile(payload: { audiobookId: number; fileId: number }): void {
+  const file = audiobook.value?.files?.find((f) => f.id === payload.fileId)
+  if (!file) return
+  openFilePreview({
+    id: file.id,
+    path: file.path ?? null,
+    format: file.format ?? null,
+    durationSeconds: file.durationSeconds ?? null,
+    size: file.size ?? null,
+  })
 }
 
 async function handleOrganizeDone() {
