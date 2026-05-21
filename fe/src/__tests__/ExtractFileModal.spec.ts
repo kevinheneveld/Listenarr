@@ -76,6 +76,46 @@ describe('ExtractFileModal', () => {
     expect(wrapper.text()).toContain('Robert Jordan')
   })
 
+  it('unwraps the {metadata, source, sourceUrl} envelope from getAudibleMetadata and renders the inner fields', async () => {
+    // Regression: the controller returns an envelope, not raw AudibleBookMetadata. The
+    // inner shape uses AudibleAuthor/AudibleNarrator objects (not string[]). Validate
+    // that the modal merges the envelope + candidate into a populated destination view.
+    vi.mocked(apiService.getAudibleMetadata).mockResolvedValueOnce({
+      metadata: {
+        asin: 'B002UZJBA8',
+        title: 'The Eye of the World',
+        authors: [{ name: 'Robert Jordan' }],
+        narrators: [{ name: 'Rosamund Pike' }],
+        releaseDate: '2021-06-01T07:00:00Z',
+        imageUrl: 'https://example.com/inner-cover.jpg',
+        description: 'A fantasy epic.',
+        publisher: 'Audible Studios',
+        language: 'English',
+        lengthMinutes: 1971,
+        isbn: '9780765356147',
+      },
+      source: 'Audible',
+      sourceUrl: 'https://api.audible.com',
+    } as unknown as never)
+
+    const wrapper = mount(ExtractFileModal, {
+      props: { visible: true, audiobookId: 7, fileId: 71 },
+    })
+    await flushPromises()
+    await flushPromises()
+    await wrapper.find('.extract-candidate').trigger('click')
+    await flushPromises()
+
+    // The destination column should show populated values (not all "—") from the
+    // unwrapped envelope's inner metadata.
+    const destination = wrapper.findAll('.extract-confirm-col')[1]
+    expect(destination.text()).toContain('The Eye of the World')
+    expect(destination.text()).toContain('Robert Jordan')
+    expect(destination.text()).toContain('Rosamund Pike')
+    expect(destination.text()).toContain('2021')
+    expect(destination.text()).toContain('B002UZJBA8')
+  })
+
   it('on candidate pick, fetches full metadata and shows the side-by-side confirm view', async () => {
     const wrapper = mount(ExtractFileModal, {
       props: { visible: true, audiobookId: 7, fileId: 71 },
