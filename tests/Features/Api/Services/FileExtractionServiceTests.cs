@@ -259,8 +259,63 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.NotNull(result.Conflict);
             Assert.Equal(2, result.Conflict!.ExistingAudiobookId);
             Assert.Equal("merge", result.Conflict.RecommendedStrategy); // existing has 0 files → recommend merge
+            Assert.Empty(result.Conflict.ExistingFiles); // existing audiobook has no files yet
             libraryAddMock.Verify(s => s.AddToLibraryAsync(It.IsAny<LibraryAddOperationRequest>(), It.IsAny<CancellationToken>()), Times.Never);
             Assert.True(File.Exists(sourcePath)); // source file untouched
+        }
+
+        [Fact]
+        public async Task Extract_ConflictResponse_IncludesExistingFileSummary()
+        {
+            var libraryRoot = Path.Join(_tempRoot, "library");
+            var sourceFolder = Path.Join(libraryRoot, "Misfiled");
+            var destFolder = Path.Join(libraryRoot, "Robert Jordan", "The Eye of the World");
+            Directory.CreateDirectory(sourceFolder);
+            Directory.CreateDirectory(destFolder);
+            var sourcePath = Path.Join(sourceFolder, "Eye.m4b");
+            await File.WriteAllTextAsync(sourcePath, "audio");
+
+            var (service, db, _, _, _) = BuildService();
+
+            db.Audiobooks.Add(new Audiobook
+            {
+                Id = 1,
+                Title = "Wrong Parent",
+                BasePath = sourceFolder,
+                Files = new List<AudiobookFile>
+                {
+                    new() { Id = 11, AudiobookId = 1, Path = sourcePath, Format = "m4b" }
+                }
+            });
+            db.Audiobooks.Add(new Audiobook
+            {
+                Id = 2,
+                Title = "The Eye of the World",
+                Asin = "B002UZJBA8",
+                BasePath = destFolder,
+                Files = new List<AudiobookFile>
+                {
+                    new() { Id = 91, AudiobookId = 2, Path = Path.Join(destFolder, "Disc 01.mp3"), Format = "mp3", Size = 78643200, DurationSeconds = 4500 },
+                    new() { Id = 92, AudiobookId = 2, Path = Path.Join(destFolder, "Disc 02.mp3"), Format = "mp3", Size = 75497472, DurationSeconds = 4320 },
+                }
+            });
+            await db.SaveChangesAsync();
+
+            var result = await service.ExtractToNewAudiobookAsync(1, 11, new ExtractFileRequest
+            {
+                Metadata = new AudibleBookMetadata
+                {
+                    Title = "The Eye of the World",
+                    Asin = "B002UZJBA8",
+                },
+            });
+
+            Assert.False(result.Success);
+            Assert.NotNull(result.Conflict);
+            Assert.Equal(2, result.Conflict!.ExistingFileCount);
+            Assert.Equal("duplicate", result.Conflict.RecommendedStrategy); // existing has files → recommend duplicate
+            Assert.Equal(2, result.Conflict.ExistingFiles.Count);
+            Assert.Contains(result.Conflict.ExistingFiles, f => f.Format == "mp3" && f.Size == 78643200);
         }
 
         [Fact]

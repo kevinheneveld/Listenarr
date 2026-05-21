@@ -1262,6 +1262,18 @@ export interface ExtractFileConflict {
   existingFileCount: number
   recommendedStrategy: 'merge' | 'duplicate' | 'Merge' | 'Duplicate'
   recommendationReason?: string
+  /** A capped sample of the existing audiobook's tracked files (path / format / size /
+   *  duration) so the UI can show "what's already there" when the user is choosing
+   *  between merge and duplicate. */
+  existingFiles?: ExtractFileConflictExistingFile[]
+}
+
+export interface ExtractFileConflictExistingFile {
+  fileId: number
+  path?: string
+  format?: string
+  size?: number
+  durationSeconds?: number
 }
 
 export interface ExtractFileResult {
