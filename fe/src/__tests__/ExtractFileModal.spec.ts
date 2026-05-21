@@ -176,9 +176,25 @@ describe('ExtractFileModal', () => {
       conflict: {
         existingAudiobookId: 42,
         existingTitle: 'The Eye of the World',
-        existingFileCount: 0,
-        recommendedStrategy: 'merge',
-        recommendationReason: 'The existing audiobook has no files yet.',
+        existingFileCount: 2,
+        recommendedStrategy: 'duplicate',
+        recommendationReason: 'The existing audiobook already has files.',
+        existingFiles: [
+          {
+            fileId: 91,
+            path: 'Robert Jordan/The Eye of the World/Disc 01.mp3',
+            format: 'mp3',
+            size: 78_643_200,
+            durationSeconds: 4500,
+          },
+          {
+            fileId: 92,
+            path: 'Robert Jordan/The Eye of the World/Disc 02.mp3',
+            format: 'mp3',
+            size: 75_497_472,
+            durationSeconds: 4320,
+          },
+        ],
       },
     })
 
@@ -194,9 +210,14 @@ describe('ExtractFileModal', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('already in your library')
+    // Existing-files summary lets the user compare structure (monolithic m4b vs
+    // many chapter mp3s) before picking merge or duplicate.
+    expect(wrapper.text()).toContain("What's already in")
+    expect(wrapper.text()).toContain('Disc 01.mp3')
+    expect(wrapper.text()).toContain('Disc 02.mp3')
     const options = wrapper.findAll('.extract-conflict-option')
     expect(options).toHaveLength(2)
-    expect(options[0].classes()).toContain('recommended')
+    expect(options[1].classes()).toContain('recommended') // duplicate is recommended here
     expect(wrapper.emitted('done')).toBeFalsy()
   })
 

@@ -179,26 +179,57 @@
           ({{ conflict.existingFileCount }} file{{ conflict.existingFileCount === 1 ? '' : 's' }}).
           Pick what you want to do.
         </p>
+
+        <details
+          v-if="conflict.existingFiles && conflict.existingFiles.length"
+          class="extract-conflict-existing-files"
+          open
+        >
+          <summary>
+            What's already in <em>{{ conflict.existingTitle || 'that audiobook' }}</em>
+          </summary>
+          <ul class="extract-existing-file-list">
+            <li
+              v-for="file in conflict.existingFiles"
+              :key="file.fileId"
+              class="extract-existing-file"
+            >
+              <code>{{ file.path || '(unknown path)' }}</code>
+              <span class="extract-existing-file-meta">
+                <span v-if="file.format">{{ file.format.toUpperCase() }}</span>
+                <span v-if="file.size">· {{ formatBytes(file.size) }}</span>
+                <span v-if="file.durationSeconds">· {{ formatDurationShort(file.durationSeconds) }}</span>
+              </span>
+            </li>
+            <li
+              v-if="conflict.existingFileCount > (conflict.existingFiles?.length ?? 0)"
+              class="extract-existing-file extract-existing-file--more"
+            >
+              … and {{ conflict.existingFileCount - (conflict.existingFiles?.length ?? 0) }} more
+            </li>
+          </ul>
+        </details>
+
         <div class="extract-conflict-options">
           <button
             type="button"
             class="extract-conflict-option"
-            :class="{ recommended: conflict.recommendedStrategy === 'merge' }"
+            :class="{ recommended: normalizedRecommendation === 'merge' }"
             @click="onResolveConflict('merge')"
           >
-            <strong>Merge file into existing</strong>
+            <span class="extract-conflict-option-title">Merge file into existing</span>
             <span class="muted">Adds this file to the existing audiobook; physically moves it under that folder.</span>
-            <span v-if="conflict.recommendedStrategy === 'merge'" class="badge">Recommended</span>
+            <span v-if="normalizedRecommendation === 'merge'" class="badge">Recommended</span>
           </button>
           <button
             type="button"
             class="extract-conflict-option"
-            :class="{ recommended: conflict.recommendedStrategy === 'duplicate' }"
+            :class="{ recommended: normalizedRecommendation === 'duplicate' }"
             @click="onResolveConflict('duplicate')"
           >
-            <strong>Make a duplicate</strong>
+            <span class="extract-conflict-option-title">Make a duplicate</span>
             <span class="muted">Creates a separate audiobook record alongside the existing one.</span>
-            <span v-if="conflict.recommendedStrategy === 'duplicate'" class="badge">Recommended</span>
+            <span v-if="normalizedRecommendation === 'duplicate'" class="badge">Recommended</span>
           </button>
         </div>
         <p v-if="conflict.recommendationReason" class="extract-hint">{{ conflict.recommendationReason }}</p>
@@ -331,6 +362,34 @@ function normalizeForMatch(value: unknown): string {
     .replace(/[^\p{Letter}\p{Number}\s]/gu, '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+// Backend writes recommendedStrategy as a lowercase string today, but the wire
+// shape allows PascalCase too. Lower-case once for the equality checks in the
+// template so the "Recommended" badge survives a future serialisation change.
+const normalizedRecommendation = computed(() =>
+  (conflict.value?.recommendedStrategy ?? '').toLowerCase(),
+)
+
+function formatBytes(bytes: number | undefined): string {
+  if (!bytes || bytes <= 0) return ''
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = bytes
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit++
+  }
+  return `${size.toFixed(size >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+function formatDurationShort(seconds: number | undefined): string {
+  if (!seconds || seconds <= 0) return ''
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
 }
 
 watch(
@@ -783,18 +842,78 @@ function stripSubtitlePart(title: string): string {
   margin-bottom: 0.5rem;
 }
 
+.extract-conflict-existing-files {
+  margin: 0 0 1rem 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #333);
+}
+
+.extract-conflict-existing-files > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-muted, #aaa);
+}
+
+.extract-conflict-existing-files[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+.extract-existing-file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 35vh;
+  overflow-y: auto;
+}
+
+.extract-existing-file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 13px;
+}
+
+.extract-existing-file code {
+  font-family: var(--font-family-monospace, monospace);
+  word-break: break-all;
+}
+
+.extract-existing-file-meta {
+  color: var(--text-muted, #888);
+  font-size: 12px;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.extract-existing-file--more {
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+
 .extract-conflict-option {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
   align-items: flex-start;
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1rem;
   border: 1px solid var(--border-color, #333);
   border-radius: 6px;
   background: transparent;
   text-align: left;
   cursor: pointer;
   position: relative;
+}
+
+.extract-conflict-option-title {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text-primary, #fff);
 }
 
 .extract-conflict-option:hover,

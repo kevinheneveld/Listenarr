@@ -84,6 +84,22 @@ namespace Listenarr.Application.Audiobooks
         public int ExistingFileCount { get; set; }
         public string RecommendedStrategy { get; set; } = "merge";
         public string? RecommendationReason { get; set; }
+        /// <summary>
+        /// Summary of the existing audiobook's tracked files, returned alongside the conflict
+        /// so the UI can show "what's already in there" — file count, sizes, formats — to help
+        /// the user decide between merge and duplicate. Capped at a reasonable upper bound so
+        /// audiobooks with many chapter files don't bloat the response.
+        /// </summary>
+        public List<ExtractFileConflictExistingFile> ExistingFiles { get; set; } = new();
+    }
+
+    public class ExtractFileConflictExistingFile
+    {
+        public int FileId { get; set; }
+        public string? Path { get; set; }
+        public string? Format { get; set; }
+        public long? Size { get; set; }
+        public double? DurationSeconds { get; set; }
     }
 
     public class ExtractFileResult

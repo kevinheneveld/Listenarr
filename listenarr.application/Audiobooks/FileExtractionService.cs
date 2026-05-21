@@ -438,10 +438,25 @@ namespace Listenarr.Application.Audiobooks
 
         private static ExtractFileConflict BuildConflict(Audiobook existing)
         {
+            const int MaxFileSummaries = 20;
             var fileCount = existing.Files?.Count ?? 0;
             var (strategy, reason) = fileCount == 0
                 ? ("merge", "The existing audiobook has no files yet — merging would fill in the missing file.")
                 : ("duplicate", "The existing audiobook already has files; making a duplicate keeps both copies and lets you choose later.");
+
+            var existingFiles = (existing.Files ?? new List<AudiobookFile>())
+                .OrderBy(f => f.Path, StringComparer.OrdinalIgnoreCase)
+                .Take(MaxFileSummaries)
+                .Select(f => new ExtractFileConflictExistingFile
+                {
+                    FileId = f.Id,
+                    Path = f.Path,
+                    Format = f.Format,
+                    Size = f.Size > 0 ? f.Size : null,
+                    DurationSeconds = f.DurationSeconds,
+                })
+                .ToList();
+
             return new ExtractFileConflict
             {
                 ExistingAudiobookId = existing.Id,
@@ -450,6 +465,7 @@ namespace Listenarr.Application.Audiobooks
                 ExistingFileCount = fileCount,
                 RecommendedStrategy = strategy,
                 RecommendationReason = reason,
+                ExistingFiles = existingFiles,
             };
         }
 
