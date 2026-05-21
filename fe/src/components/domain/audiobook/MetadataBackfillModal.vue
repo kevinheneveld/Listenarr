@@ -51,6 +51,7 @@ import { logger } from '@/utils/logger'
 import type {
   Audiobook,
   AudibleSearchResult,
+  EmbeddedFileMetadata,
 } from '@/types'
 
 interface Props {
@@ -152,6 +153,12 @@ const overrideAuthor = ref('')
 const showPreview = ref(false)
 const previewFile = computed(() => props.audiobook?.files?.[0] ?? null)
 
+// Embedded ffprobe tags from the file's composer field — used to surface the
+// file's narrator near the search inputs and to rank candidates whose narrator
+// matches the file we actually own. Best-effort: failure to read embedded
+// metadata is non-fatal (the rest of the modal still works).
+const embedded = ref<EmbeddedFileMetadata | null>(null)
+
 // Direct ASIN / Audible-URL paste — escape hatch for cases where Audible's
 // search doesn't surface the right edition. Example from the wild:
 // "Robots and Empire" (B0CSV7NJMB) is fully accessible via the per-ASIN
@@ -208,12 +215,29 @@ async function start() {
     return
   }
 
+  // Kick off embedded-tag fetch in parallel with the candidate search.
+  // We don't await it: the narrator hint and ranking become available as
+  // soon as the request resolves, but the search shouldn't block on it.
+  void loadEmbeddedMetadata()
+
   const asin = (props.audiobook.asin || '').trim()
   if (asin) {
     chosenAsin.value = asin
     await fetchPreview(asin)
   } else {
     await searchCandidates()
+  }
+}
+
+async function loadEmbeddedMetadata() {
+  const book = props.audiobook
+  const file = previewFile.value
+  if (!book || !file) return
+  try {
+    embedded.value = await apiService.getFileEmbeddedMetadata(book.id, file.id)
+  } catch (err) {
+    // Non-fatal — the modal still works without the narrator hint or ranking.
+    logger.warn('MetadataBackfillModal: embedded metadata fetch failed', err)
   }
 }
 
@@ -232,6 +256,76 @@ function reset() {
   // value from a previous book doesn't surface when the modal reopens.
   pasteAsinInput.value = ''
   pasteAsinError.value = null
+  embedded.value = null
+}
+
+// ── Candidate ranking by narrator overlap ──────────────────────────────────
+//
+// Two sources contribute narrator info we can match against:
+//   1. The audiobook's current `narrators` DB field (set by a prior backfill,
+//      manual edit, or upstream metadata import).
+//   2. The file's embedded `composer` tag, surfaced as `embedded.narrator`.
+//
+// We combine both — a candidate matches if any of its narrators overlaps any
+// known narrator from either source. This is the conservative choice: it
+// catches the common case where the DB has been backfilled but the file tag
+// still differs, and vice versa. Matching is case- and punctuation-insensitive
+// with substring in either direction so "Pike" matches "Rosamund Pike".
+const sourceNarrators = computed<string[]>(() => {
+  const list: string[] = []
+  for (const n of props.audiobook?.narrators || []) {
+    if (typeof n === 'string' && n.trim()) list.push(n.trim())
+  }
+  const embeddedNarrator = embedded.value?.narrator?.trim()
+  if (embeddedNarrator) list.push(embeddedNarrator)
+  // De-dupe on the normalised form so a DB entry "Rosamund Pike" and an
+  // embedded "rosamund pike" don't both render.
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const n of list) {
+    const key = normalizeForMatch(n)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    unique.push(n)
+  }
+  return unique
+})
+
+const rankedCandidates = computed<AudibleSearchResult[]>(() => {
+  const list = candidates.value.slice()
+  if (sourceNarrators.value.length === 0) return list
+  return list
+    .map((candidate, index) => ({
+      candidate,
+      index,
+      matches: candidateMatchesNarrator(candidate),
+    }))
+    .sort((a, b) => (b.matches ? 1 : 0) - (a.matches ? 1 : 0) || a.index - b.index)
+    .map((entry) => entry.candidate)
+})
+
+function candidateMatchesNarrator(candidate: AudibleSearchResult): boolean {
+  const sources = sourceNarrators.value
+    .map(normalizeForMatch)
+    .filter(Boolean) as string[]
+  if (sources.length === 0) return false
+  const candidateNames = (candidate.narrators || [])
+    .map((n) => normalizeForMatch(n?.name))
+    .filter(Boolean) as string[]
+  if (candidateNames.length === 0) return false
+  return candidateNames.some((cn) =>
+    sources.some((sn) => cn.includes(sn) || sn.includes(cn)),
+  )
+}
+
+function normalizeForMatch(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 // ── Phase 1: candidate search ──────────────────────────────────────────────
@@ -634,6 +728,15 @@ function candidateYear(c: AudibleSearchResult): string {
               This book doesn't have an ASIN. Refine the title or author below if needed, then pick
               the matching result to load its metadata.
             </p>
+            <p v-if="sourceNarrators.length" class="narrator-hint">
+              <strong>Narrator:</strong> {{ sourceNarrators.join(', ') }}
+              <span class="narrator-hint-source muted">
+                ({{ embedded?.narrator ? (audiobook?.narrators?.length ? 'file tags + library' : 'from file tags') : 'from library' }})
+              </span>
+              <span class="narrator-hint-detail muted">
+                — candidates whose narrator matches will be shown first.
+              </span>
+            </p>
             <form
               class="candidate-search-form"
               @submit.prevent="searchCandidates"
@@ -707,19 +810,27 @@ function candidateYear(c: AudibleSearchResult): string {
 
           <!-- Phase 1: candidate picker -->
           <template v-if="phase === 'pick-candidate'">
-            <ul v-if="candidates.length" class="candidate-list">
+            <ul v-if="rankedCandidates.length" class="candidate-list">
               <li
-                v-for="c in candidates"
+                v-for="c in rankedCandidates"
                 :key="c.asin || c.title"
                 class="candidate-item"
-                :class="{ disabled: !c.asin }"
+                :class="{
+                  disabled: !c.asin,
+                  'candidate-item--narrator-match': candidateMatchesNarrator(c),
+                }"
                 @click="pickCandidate(c.asin)"
               >
                 <div class="candidate-cover-slot">
                   <img v-if="c.imageUrl" :src="c.imageUrl" :alt="c.title || ''" loading="lazy" />
                 </div>
                 <div class="candidate-meta">
-                  <div class="candidate-title">{{ c.title }}</div>
+                  <div class="candidate-title">
+                    {{ c.title }}
+                    <span v-if="candidateMatchesNarrator(c)" class="candidate-badge">
+                      Narrator matches
+                    </span>
+                  </div>
                   <div class="candidate-sub">
                     <span v-if="candidateAuthors(c)">{{ candidateAuthors(c) }}</span>
                     <span v-if="candidateNarrators(c)" class="muted">
@@ -953,6 +1064,47 @@ function candidateYear(c: AudibleSearchResult): string {
   color: #bbb;
   font-size: 0.9rem;
   margin: 0 0 0.75rem;
+}
+
+.narrator-hint {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  color: #ddd;
+}
+.narrator-hint strong {
+  color: #fff;
+}
+.narrator-hint-source {
+  margin-left: 0.35rem;
+  font-size: 0.85rem;
+}
+.narrator-hint-detail {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+}
+
+.candidate-item--narrator-match {
+  background: rgba(var(--brand-rgb), 0.08);
+  box-shadow: inset 3px 0 0 var(--brand-400, #3b82f6);
+}
+.candidate-item--narrator-match:hover:not(.disabled) {
+  background: rgba(var(--brand-rgb), 0.14);
+}
+.candidate-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  background: var(--brand-400, #3b82f6);
+  color: #fff;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  vertical-align: middle;
+  font-family: var(--font-family, sans-serif);
 }
 
 .candidate-list {
