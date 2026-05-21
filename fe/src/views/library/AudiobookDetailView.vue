@@ -722,6 +722,7 @@
     :audiobook-id="audiobook?.id ?? null"
     :file="previewFile"
     :audiobook-title="audiobook?.title ?? null"
+    :overlay-z-index="previewOverlayZIndex"
     @close="closeFilePreview"
   />
 
@@ -1787,10 +1788,12 @@ async function handleExtractDone(): Promise<void> {
 // Opens FilePreviewModal from inside ExtractFileModal so the user can audition
 // the file before committing to an Audible candidate. We look up the file off
 // the loaded audiobook by id so the preview has the same path/format/duration
-// metadata as the row-level play button uses.
+// metadata as the row-level play button uses. Boost the preview overlay above
+// the ExtractFileModal overlay (3100) so the audio controls render in front.
 function handleExtractPreviewFile(payload: { audiobookId: number; fileId: number }): void {
   const file = audiobook.value?.files?.find((f) => f.id === payload.fileId)
   if (!file) return
+  previewOverlayZIndex.value = 3200
   openFilePreview({
     id: file.id,
     path: file.path ?? null,
@@ -1959,6 +1962,11 @@ const previewFile = ref<{
   durationSeconds?: number | null
   size?: number | null
 } | null>(null)
+// Default overlay z-index for FilePreviewModal. When opened standalone (row-level
+// play button) the shared Modal default works fine. When opened from inside
+// ExtractFileModal (which raises its own overlay to 3100) we boost this to 3200
+// so the preview's audio controls render in front of the extract modal.
+const previewOverlayZIndex = ref<number | undefined>(undefined)
 
 function openFilePreview(file: {
   id: number
@@ -1973,6 +1981,8 @@ function openFilePreview(file: {
 
 function closeFilePreview(): void {
   previewVisible.value = false
+  // Reset the z-index boost so the next standalone open uses the default.
+  previewOverlayZIndex.value = undefined
   // Keep `previewFile` around for one tick so the modal can render its
   // closing animation without losing the bound file metadata. The next
   // `openFilePreview` will overwrite it.
