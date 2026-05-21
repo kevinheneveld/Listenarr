@@ -33,7 +33,19 @@
           the title and author below are pre-filled from the file's embedded tags.
         </p>
         <div class="extract-file-path" v-if="embedded?.currentPath">
-          <strong>File:</strong> {{ embedded.currentPath }}
+          <div class="extract-file-path-row">
+            <span><strong>File:</strong> {{ embedded.currentPath }}</span>
+            <button
+              v-if="canPreviewFile && props.audiobookId && props.fileId"
+              type="button"
+              class="extract-preview-btn"
+              title="Preview file"
+              aria-label="Preview file"
+              @click="onPreviewFile"
+            >
+              <PhPlay weight="fill" /> Preview
+            </button>
+          </div>
         </div>
 
         <div class="extract-search-row">
@@ -209,7 +221,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { Modal, ModalHeader, ModalBody } from '@/components/feedback'
-import { PhArrowSquareOut, PhMagnifyingGlass, PhSpinner } from '@phosphor-icons/vue'
+import { PhArrowSquareOut, PhMagnifyingGlass, PhPlay, PhSpinner } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import type {
   AudibleBookMetadata,
@@ -224,11 +236,19 @@ const props = defineProps<{
   audiobookId: number | null
   fileId: number | null
   sourceAudiobookTitle?: string | null
+  /** Parent sets this when it has an in-browser file-preview component wired up
+   *  (kevin/live has FilePreviewModal; canary doesn't yet). Controls whether the
+   *  "Preview file" button renders inside the modal. */
+  canPreviewFile?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'done', result: ExtractFileResult): void
+  /** Ask the parent to open the in-browser preview for this file. Parent should listen
+   *  only when it has a file-preview implementation available; the button renders only
+   *  when the parent has bound a listener. */
+  (e: 'preview-file', payload: { audiobookId: number; fileId: number }): void
 }>()
 
 const title = 'Move file to another audiobook'
@@ -330,13 +350,93 @@ async function onPickCandidate(candidate: AudibleSearchResult) {
   selectedCandidate.value = candidate
   submitError.value = null
   try {
-    const fetched = await apiService.getAudibleMetadata<AudibleBookMetadata>(candidate.asin)
-    selectedMetadata.value = fetched
+    // GET /metadata/{asin} returns an envelope { metadata, source, sourceUrl } where the
+    // inner shape is AudibleBookResponse (authors / narrators as objects, releaseDate as
+    // string, isbn as a single string, etc.) — not AudibleBookMetadata. Unwrap and then
+    // build an AudibleBookMetadata-shaped payload by combining the inner response with
+    // the picked candidate (search-side data fills in anything the per-ASIN call lacks).
+    const fetched = (await apiService.getAudibleMetadata<unknown>(candidate.asin)) as {
+      metadata?: unknown
+    } | null
+    const inner = (fetched && typeof fetched === 'object' && 'metadata' in fetched
+      ? (fetched as { metadata: unknown }).metadata
+      : fetched) as Record<string, unknown> | null
+    selectedMetadata.value = buildMetadataFromCandidate(candidate, inner)
     step.value = 'confirming'
   } catch (err) {
     searchError.value = err instanceof Error ? err.message : 'Failed to load Audible metadata.'
     selectedCandidate.value = null
   }
+}
+
+/**
+ * Build the AudibleBookMetadata payload we'll send to the backend by merging two
+ * sources: the picked AudibleSearchResult (always populated — comes from the search)
+ * and the unwrapped per-ASIN metadata (richer fields like description, isbn, but
+ * shaped differently — uses AudibleAuthor/AudibleNarrator objects).
+ *
+ * Preference order per field: the per-ASIN response wins when present, else fall back
+ * to the candidate. Authors and narrators are normalised to string[].
+ */
+function buildMetadataFromCandidate(
+  candidate: AudibleSearchResult,
+  inner: Record<string, unknown> | null,
+): AudibleBookMetadata {
+  const innerAuthors = extractNames(inner?.authors)
+  const innerNarrators = extractNames(inner?.narrators)
+  const candidateAuthors = (candidate.authors || []).map((a) => a?.name).filter(isNonEmptyString)
+  const candidateNarrators = (candidate.narrators || [])
+    .map((n) => n?.name)
+    .filter(isNonEmptyString)
+  const releaseDate = pickString(inner?.releaseDate, inner?.publishDate, candidate.releaseDate)
+  const publishYear = releaseDate ? releaseDate.slice(0, 4) : undefined
+  const innerIsbn = inner?.isbn
+  const isbnList = Array.isArray(innerIsbn)
+    ? (innerIsbn.filter(isNonEmptyString) as string[])
+    : isNonEmptyString(innerIsbn)
+      ? [innerIsbn]
+      : []
+
+  return {
+    asin: candidate.asin || pickString(inner?.asin) || '',
+    title: pickString(inner?.title, candidate.title) || '',
+    subtitle: pickString(inner?.subtitle),
+    authors: innerAuthors.length ? innerAuthors : candidateAuthors,
+    narrators: innerNarrators.length ? innerNarrators : candidateNarrators,
+    imageUrl: pickString(inner?.imageUrl, candidate.imageUrl),
+    publishedDate: releaseDate,
+    publishYear: publishYear && /^\d{4}$/.test(publishYear) ? publishYear : undefined,
+    description: pickString(inner?.description),
+    publisher: pickString(inner?.publisher, candidate.publisher),
+    language: pickString(inner?.language, candidate.language),
+    runtime: pickNumber(inner?.lengthMinutes, candidate.lengthMinutes),
+    isbn: isbnList.length ? isbnList[0] : undefined,
+  } as AudibleBookMetadata
+}
+
+function extractNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => (item && typeof item === 'object' ? (item as { name?: unknown }).name : item))
+    .filter(isNonEmptyString) as string[]
+}
+
+function pickString(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (isNonEmptyString(v)) return v
+  }
+  return undefined
+}
+
+function pickNumber(...values: unknown[]): number | undefined {
+  for (const v of values) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+  }
+  return undefined
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
 }
 
 function backToResults() {
@@ -348,6 +448,11 @@ function backToResults() {
 
 function onSubmitClicked() {
   void onSubmit('none')
+}
+
+function onPreviewFile() {
+  if (!props.audiobookId || !props.fileId) return
+  emit('preview-file', { audiobookId: props.audiobookId, fileId: props.fileId })
 }
 
 async function onSubmit(strategy: ExtractDuplicateStrategy = 'none') {
@@ -426,6 +531,35 @@ function stripSubtitlePart(title: string): string {
   font-family: monospace;
   font-size: 13px;
   word-break: break-all;
+}
+
+.extract-file-path-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.extract-preview-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--border-color, #3a3a3a);
+  border-radius: 4px;
+  color: #ddd;
+  cursor: pointer;
+  padding: 0.25rem 0.6rem;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.extract-preview-btn:hover,
+.extract-preview-btn:focus-visible {
+  background: var(--brand-focus, #3b82f6);
+  border-color: var(--brand-focus, #3b82f6);
+  color: #fff;
 }
 
 .extract-search-row {
