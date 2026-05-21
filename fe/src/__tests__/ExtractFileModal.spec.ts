@@ -200,6 +200,45 @@ describe('ExtractFileModal', () => {
     expect(wrapper.emitted('done')).toBeFalsy()
   })
 
+  it('sorts candidates whose narrator matches the embedded file tags to the top', async () => {
+    vi.mocked(apiService.searchAudibleByTitleAndAuthor).mockResolvedValue({
+      totalResults: 2,
+      results: [
+        {
+          asin: 'B0036NHZ10',
+          title: 'The Eye of the World',
+          authors: [{ name: 'Robert Jordan' }],
+          narrators: [{ name: 'Kate Reading' }, { name: 'Michael Kramer' }],
+          imageUrl: '',
+          releaseDate: '2006-01-01',
+        },
+        {
+          asin: 'B09JT4PH62',
+          title: 'The Eye of the World',
+          authors: [{ name: 'Robert Jordan' }],
+          narrators: [{ name: 'Rosamund Pike' }],
+          imageUrl: '',
+          releaseDate: '2021-06-01',
+        },
+      ],
+    })
+
+    const wrapper = mount(ExtractFileModal, {
+      props: { visible: true, audiobookId: 7, fileId: 71 },
+    })
+    await flushPromises()
+    await flushPromises()
+
+    // Embedded narrator is "Rosamund Pike"; the 2021 candidate should now lead even
+    // though it came back second from the search.
+    const rows = wrapper.findAll('.extract-candidate')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Rosamund Pike')
+    expect(rows[0].classes()).toContain('extract-candidate--narrator-match')
+    expect(rows[1].text()).toContain('Kate Reading')
+    expect(rows[1].classes()).not.toContain('extract-candidate--narrator-match')
+  })
+
   it('resolving the conflict by clicking Merge re-issues the request with strategy=merge', async () => {
     vi.mocked(apiService.extractFileToNewAudiobook)
       .mockResolvedValueOnce({
