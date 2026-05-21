@@ -422,6 +422,15 @@
               <div class="file-actions">
                 <span class="file-size" v-if="f.size">{{ formatFileSize(f.size) }}</span>
                 <span class="file-size" v-else>Unknown size</span>
+                <button
+                  class="file-action-btn"
+                  type="button"
+                  title="Move file to another audiobook"
+                  aria-label="Move file to another audiobook"
+                  @click.stop="openExtractFile(f)"
+                >
+                  <PhArrowSquareOut />
+                </button>
                 <PhCaretDown
                   class="accordion-toggle"
                   :class="{ rotated: isFileAccordionExpanded(f.id) }"
@@ -642,6 +651,15 @@
     @close="showOrganizeModal = false"
     @done="handleOrganizeDone"
   />
+
+  <ExtractFileModal
+    :visible="showExtractModal"
+    :audiobook-id="audiobook?.id ?? null"
+    :file-id="extractFileTarget?.id ?? null"
+    :source-audiobook-title="audiobook?.title ?? null"
+    @close="closeExtractFile"
+    @done="handleExtractDone"
+  />
 </template>
 
 <script setup lang="ts">
@@ -673,11 +691,13 @@ import { useProtectedImages } from '@/composables/useProtectedImages'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
+import ExtractFileModal from '@/components/domain/organize/ExtractFileModal.vue'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { Pill } from '@/components/base'
 import {
   PhArrowLeft,
+  PhArrowSquareOut,
   PhArrowClockwise,
   PhBookmark,
   PhSpinner,
@@ -737,6 +757,8 @@ const scanQueued = ref(false)
 const scanJobId = ref<string | null>(null)
 const showEditModal = ref(false)
 const showOrganizeModal = ref(false)
+const showExtractModal = ref(false)
+const extractFileTarget = ref<{ id: number } | null>(null)
 const showMoreActions = ref(false)
 
 // History state
@@ -1607,6 +1629,21 @@ function closeEditModal() {
 
 async function handleEditSaved() {
   // Refresh the audiobook data after edit
+  await loadAudiobook()
+}
+
+function openExtractFile(file: { id: number }): void {
+  extractFileTarget.value = { id: file.id }
+  showExtractModal.value = true
+}
+
+function closeExtractFile(): void {
+  showExtractModal.value = false
+  extractFileTarget.value = null
+}
+
+async function handleExtractDone(): Promise<void> {
+  closeExtractFile()
   await loadAudiobook()
 }
 
@@ -2780,6 +2817,26 @@ a.identifier-link:hover {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.file-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.file-action-btn:hover,
+.file-action-btn:focus-visible {
+  color: var(--text-primary, #fff);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .accordion-toggle {

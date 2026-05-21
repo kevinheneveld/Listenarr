@@ -60,6 +60,9 @@ import type {
   RenamePreview,
   RenameOperation,
   RenameResult,
+  EmbeddedFileMetadata,
+  ExtractFileRequest,
+  ExtractFileResult,
 } from '@/types'
 import {
   getStartupConfigCached,
@@ -1332,6 +1335,42 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(operation),
     })
+  }
+
+  async getFileEmbeddedMetadata(audiobookId: number, fileId: number): Promise<EmbeddedFileMetadata> {
+    return this.request<EmbeddedFileMetadata>(
+      `/library/${audiobookId}/files/${fileId}/embedded-metadata`,
+      { method: 'GET' },
+    )
+  }
+
+  async extractFileToNewAudiobook(
+    audiobookId: number,
+    fileId: number,
+    request: ExtractFileRequest,
+  ): Promise<ExtractFileResult> {
+    // The endpoint returns 409 when the chosen ASIN already matches an existing audiobook and
+    // the caller hasn't picked a strategy yet, or 400 when the chosen strategy still can't
+    // resolve the conflict. In both cases the response body is a populated ExtractFileResult
+    // — surface it instead of throwing so the modal can render the duplicate-strategy step.
+    try {
+      return await this.request<ExtractFileResult>(
+        `/library/${audiobookId}/files/${fileId}/extract`,
+        { method: 'POST', body: JSON.stringify(request) },
+      )
+    } catch (err) {
+      const status = (err as { status?: number } | null)?.status
+      const body = (err as { body?: string } | null)?.body
+      if ((status === 409 || status === 400) && typeof body === 'string' && body.length > 0) {
+        try {
+          const parsed = JSON.parse(body) as ExtractFileResult
+          if (typeof parsed?.success === 'boolean') return parsed
+        } catch {
+          /* fall through and rethrow */
+        }
+      }
+      throw err
+    }
   }
 
   // File System API

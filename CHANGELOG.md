@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Move a file to a different audiobook from the detail page:** Each row in the Files tab grows a "Move to another audiobook" action (arrow-out icon) that opens a modal pre-seeded with the file's embedded ffprobe tags (title / artist / composer-as-narrator). The modal runs an Audible search, lets the user pick the matching candidate, and on confirm physically moves the file under the chosen destination audiobook's pattern-conformant folder while reassigning the database row. Built for the "a file got grouped under the wrong parent during import" case (e.g. a Wheel of Time book misfiled under H.G. Wells). New endpoints: `GET /api/v1/library/{audiobookId}/files/{fileId}/embedded-metadata` returns the ffprobe tag bundle; `POST /api/v1/library/{audiobookId}/files/{fileId}/extract` orchestrates the move. When the chosen Audible candidate's ASIN already matches an existing audiobook the endpoint returns 409 with the existing audiobook's details and a recommended strategy (`merge` when the existing has no files, `duplicate` otherwise); the caller re-submits with the chosen `duplicateStrategy`. Disk move happens before any database write so a failed move leaves the source audiobook untouched, and a created destination audiobook is rolled back when the disk move fails. History entries land on both the source ("File Removed — extracted to X") and the destination ("File Added — extracted from Y").
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
