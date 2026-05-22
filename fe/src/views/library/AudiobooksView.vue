@@ -892,11 +892,35 @@ const sortOrder = computed({
     sortState[groupBy.value].order = val
   },
 })
-const filterMonitored = ref<'all' | 'monitored' | 'unmonitored'>('all')
-const filterStatus = ref<'all' | 'downloaded' | 'missing' | 'mismatch' | 'downloading'>('all')
-const filterQualityProfile = ref<string>('all')
-const filterLanguage = ref<string>('all')
-const filterYear = ref<string>('all')
+// Toolbar quick-filters. Each axis is mirrored into the URL (see the unified
+// query writer below) so the filter selection survives reload, bookmarks, and
+// the round-trip into AudiobookDetailView and back.
+function readEnumQuery<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : null
+}
+
+const filterMonitored = ref<'all' | 'monitored' | 'unmonitored'>(
+  readEnumQuery(route.query.monitored, ['monitored', 'unmonitored'] as const) ?? 'all',
+)
+const filterStatus = ref<'all' | 'downloaded' | 'missing' | 'mismatch' | 'downloading'>(
+  readEnumQuery(route.query.status, [
+    'downloaded',
+    'missing',
+    'mismatch',
+    'downloading',
+  ] as const) ?? 'all',
+)
+const filterQualityProfile = ref<string>(
+  typeof route.query.qp === 'string' && route.query.qp ? route.query.qp : 'all',
+)
+const filterLanguage = ref<string>(
+  typeof route.query.language === 'string' && route.query.language ? route.query.language : 'all',
+)
+const filterYear = ref<string>(
+  typeof route.query.year === 'string' && route.query.year ? route.query.year : 'all',
+)
 
 const availableLanguages = computed(() => {
   const langs = new Set<string>()
@@ -929,7 +953,13 @@ interface CustomFilter {
 }
 
 const customFilters = ref<CustomFilter[]>([])
-const selectedFilterId = ref<string | null>(null)
+// Built-in filter IDs (monitored / unmonitored / missing / recent) are stable
+// across installs; custom filter IDs are localStorage-scoped UUIDs, so a URL
+// referencing a custom filter only resolves on the device that created it. The
+// filter-application code falls through harmlessly if the ID isn't found.
+const selectedFilterId = ref<string | null>(
+  typeof route.query.filter === 'string' && route.query.filter ? route.query.filter : null,
+)
 const showCustomFilterModal = ref(false)
 const editingFilter = ref<CustomFilter | null>(null)
 
@@ -1268,8 +1298,11 @@ const imagesLoading = ref(false) // show loading overlay while images rerender w
 const showGroupMenu = ref(false)
 
 // --- GroupBy and SortKey Initialization ---
+// URL wins over localStorage so a shared link reproduces the sender's view.
+// The unified URL writer (set up later) keeps the URL in sync from here on —
+// no router.replace at init: it would wipe drill-down params (?missing=,
+// ?author=, etc.) carried in by dashboard links.
 try {
-  // Start with any stored preference
   const stored = localStorage.getItem(GROUP_BY_KEY)
   if (stored && ['books', 'authors', 'series'].includes(stored)) {
     groupBy.value = stored as 'books' | 'authors' | 'series'
@@ -1278,9 +1311,35 @@ try {
   if (initialQ && ['books', 'authors', 'series'].includes(initialQ) && initialQ !== groupBy.value) {
     groupBy.value = initialQ as 'books' | 'authors' | 'series'
   }
-  // No need to set sortKey/order here; handled per-group below
-  if (!initialQ) {
-    router.replace({ path: '/audiobooks', query: { group: groupBy.value } })
+} catch {}
+
+// Hydrate sort for the active group from the URL. We only seed the current
+// group's slot — other groups keep their defaults until the user switches.
+try {
+  const allowedKeys = (() => {
+    if (groupBy.value === 'books') {
+      return [
+        'title',
+        'author-last',
+        'author-first',
+        'narrator-last',
+        'narrator-first',
+        'publisher',
+        'year',
+        'monitored',
+        'status',
+      ]
+    }
+    if (groupBy.value === 'authors') return ['author-last', 'author-first', 'count']
+    return ['title', 'count']
+  })()
+  const qSort = route.query.sort
+  if (typeof qSort === 'string' && allowedKeys.includes(qSort)) {
+    sortState[groupBy.value].key = qSort
+  }
+  const qDir = route.query.dir
+  if (qDir === 'asc' || qDir === 'desc') {
+    sortState[groupBy.value].order = qDir
   }
 } catch {}
 
@@ -1603,6 +1662,146 @@ watch(
         void setGroupBy(mode)
       }
     } catch {}
+  },
+)
+
+// --- URL <-> filter-state sync -----------------------------------------------
+// Filter selection (the dropdown + toolbar quick-filters + sort) used to live
+// only in component state, so navigating into a book and back lost the user's
+// view. Everything below mirrors that state into `route.query` via
+// `router.replace`, and hydrates the refs back when the URL changes (e.g. when
+// the user uses the browser back button or follows a shared link).
+//
+// `router.replace` (not push) intentionally: one history entry per real
+// navigation, not per filter tweak.
+
+// Keys this view owns. Unknown keys (e.g. drill-down params like ?missing= or
+// ?author= introduced by other PRs) are passed through untouched.
+const MANAGED_QUERY_KEYS = [
+  'group',
+  'filter',
+  'monitored',
+  'status',
+  'qp',
+  'year',
+  'sort',
+  'dir',
+] as const
+
+function buildManagedQuery(): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (groupBy.value !== 'books') out.group = groupBy.value
+  if (selectedFilterId.value) out.filter = selectedFilterId.value
+  if (filterMonitored.value !== 'all') out.monitored = filterMonitored.value
+  if (filterStatus.value !== 'all') out.status = filterStatus.value
+  if (filterQualityProfile.value !== 'all') out.qp = filterQualityProfile.value
+  if (filterYear.value !== 'all') out.year = filterYear.value
+  const def = DEFAULT_SORTS[groupBy.value]
+  // Only emit sort if it differs from the group's default — keeps the URL
+  // tidy in the common case.
+  if (sortState[groupBy.value].key !== def.key) out.sort = sortState[groupBy.value].key
+  if (sortState[groupBy.value].order !== def.order) out.dir = sortState[groupBy.value].order
+  return out
+}
+
+function mergeManagedIntoRouteQuery(): Record<string, string> {
+  const next: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) {
+    if ((MANAGED_QUERY_KEYS as readonly string[]).includes(k)) continue
+    if (typeof v === 'string') next[k] = v
+  }
+  return { ...next, ...buildManagedQuery() }
+}
+
+function queriesEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ak = Object.keys(a)
+  const bk = Object.keys(b)
+  if (ak.length !== bk.length) return false
+  for (const k of ak) if (a[k] !== b[k]) return false
+  return true
+}
+
+function currentRouteQueryAsStringMap(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === 'string') out[k] = v
+  }
+  return out
+}
+
+watch(
+  () => [
+    groupBy.value,
+    selectedFilterId.value,
+    filterMonitored.value,
+    filterStatus.value,
+    filterQualityProfile.value,
+    filterYear.value,
+    sortState.books.key,
+    sortState.books.order,
+    sortState.authors.key,
+    sortState.authors.order,
+    sortState.series.key,
+    sortState.series.order,
+  ],
+  () => {
+    try {
+      const desired = mergeManagedIntoRouteQuery()
+      if (queriesEqual(desired, currentRouteQueryAsStringMap())) return
+      router.replace({ path: '/audiobooks', query: desired })
+    } catch (err) {
+      logger.debug('Failed to write filter state to URL:', err)
+    }
+  },
+  { flush: 'post' },
+)
+
+// URL -> ref: when the route changes externally (back/forward, shared link,
+// dashboard drill-down click), re-hydrate the corresponding refs. Same-value
+// ref assignment is a no-op for Vue's reactivity, so this won't loop with the
+// writer above.
+watch(
+  () => route.query.filter,
+  (v) => {
+    selectedFilterId.value = typeof v === 'string' && v ? v : null
+  },
+)
+watch(
+  () => route.query.monitored,
+  (v) => {
+    filterMonitored.value =
+      readEnumQuery(v, ['monitored', 'unmonitored'] as const) ?? 'all'
+  },
+)
+watch(
+  () => route.query.status,
+  (v) => {
+    filterStatus.value =
+      readEnumQuery(v, ['downloaded', 'missing', 'mismatch', 'downloading'] as const) ?? 'all'
+  },
+)
+watch(
+  () => route.query.qp,
+  (v) => {
+    filterQualityProfile.value = typeof v === 'string' && v ? v : 'all'
+  },
+)
+watch(
+  () => route.query.year,
+  (v) => {
+    filterYear.value = typeof v === 'string' && v ? v : 'all'
+  },
+)
+watch(
+  () => [route.query.sort, route.query.dir, groupBy.value] as const,
+  ([s, d]) => {
+    const slot = sortState[groupBy.value]
+    const def = DEFAULT_SORTS[groupBy.value]
+    const allowed = sortOptions.value.map((o) => o.value)
+    if (typeof s === 'string' && allowed.includes(s)) slot.key = s
+    else slot.key = def.key
+    if (d === 'asc' || d === 'desc') slot.order = d
+    else slot.order = def.order
   },
 )
 
@@ -1961,12 +2160,7 @@ async function setGroupBy(mode: 'books' | 'authors' | 'series') {
       metadata: { mode },
     })
   }
-  try {
-    // update route query so sidebar subnav and URL stay in sync
-    router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: mode } })
-  } catch (err) {
-    logger.debug('Failed to update route query for group:', err)
-  }
+  // URL sync happens via the unified query writer watching groupBy.
 
   // Show image loading overlay and ensure DOM settles and recalc visible range for the virtual scroller
   imagesLoading.value = mode !== 'authors'
