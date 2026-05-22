@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Library view filter selection persists in the URL:** The `AudiobooksView` toolbar dropdown filter (Monitored / Unmonitored / Missing / Recently Added / custom filters), the monitored / status / quality-profile / year quick-filters, and the sort key + direction are now mirrored into `route.query` (`?filter=`, `?monitored=`, `?status=`, `?qp=`, `?year=`, `?sort=`, `?dir=`). Hydrated on mount and updated via `router.replace` so back-button navigation produces one history entry per real navigation, not per filter tweak. This makes the view bookmarkable and lets the AudiobookDetailView "Back" button restore the exact filter state the user came from. Unknown query keys (e.g. drill-down params like `?missing=` or `?author=`) are passed through untouched.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
