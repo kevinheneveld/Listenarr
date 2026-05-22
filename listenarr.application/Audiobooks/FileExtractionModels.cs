@@ -83,6 +83,19 @@ namespace Listenarr.Application.Audiobooks
         public string? ExistingTitle { get; set; }
         public string? ExistingAsin { get; set; }
         public int ExistingFileCount { get; set; }
+        /// <summary>
+        /// The base folder the EXISTING conflicting audiobook lives in. Provided so the UI can
+        /// distinguish between "merge would dump the file alongside this existing folder" and
+        /// "duplicate would create a new folder over here".
+        /// </summary>
+        public string? ExistingBasePath { get; set; }
+        /// <summary>
+        /// The base folder the new audiobook would land in if the user picks Duplicate —
+        /// derived from the chosen Audible metadata and the file's existing root folder.
+        /// Surfacing this lets the UI describe what 'Duplicate' actually does, instead of
+        /// describing the matched (often pre-existing, possibly mislabeled) source.
+        /// </summary>
+        public string? ProposedDestinationFolder { get; set; }
         public string RecommendedStrategy { get; set; } = "merge";
         public string? RecommendationReason { get; set; }
         /// <summary>

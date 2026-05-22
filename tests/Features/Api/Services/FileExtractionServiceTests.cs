@@ -265,6 +265,78 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
+        public async Task Extract_DoesNotConflict_WhenAsinMatchIsTheSourceItself()
+        {
+            // Regression: the user has a misimported audiobook whose ASIN happens to be the
+            // ASIN of the Audible candidate they're picking to fix it (e.g. one record holds
+            // both a monolithic mp3 + a separate chapter-split version under one ASIN). The
+            // earlier behavior bounced the user to a confusing self-merge / self-duplicate
+            // prompt. The match against the source itself is not a conflict — extract just
+            // needs to move the file out from under the source's parent record.
+            var libraryRoot = Path.Join(_tempRoot, "library");
+            var sourceFolder = Path.Join(libraryRoot, "Brandon Sanderson", "Elantris (1 of 3) [Dramatized Adaptation]");
+            Directory.CreateDirectory(sourceFolder);
+            var sourcePath = Path.Join(sourceFolder, "Brandon Sanderson - Elantris (1 of 3) [Dramatized Adaptation].mp3");
+            await File.WriteAllTextAsync(sourcePath, "audio");
+
+            var settings = new ApplicationSettings
+            {
+                OutputPath = libraryRoot,
+                FolderNamingPattern = "{Author}/{Title}",
+                FileNamingPattern = "{Title}",
+            };
+
+            var (service, db, repo, _, libraryAddMock) = BuildService(settings, libraryRoot);
+
+            // Source audiobook already carries the chosen ASIN — common when the original
+            // import labelled the audiobook from the filename but a later backfill tagged it
+            // with an ASIN from Audible.
+            db.Audiobooks.Add(new Audiobook
+            {
+                Id = 1,
+                Title = "Brandon Sanderson - Elantris (1 of 3) [Dramatized Adaptation]",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B015YEFH40",
+                BasePath = sourceFolder,
+                Files = new List<AudiobookFile>
+                {
+                    new() { Id = 11, AudiobookId = 1, Path = sourcePath, Format = "mp3" }
+                }
+            });
+            await db.SaveChangesAsync();
+
+            libraryAddMock.Setup(s => s.AddToLibraryAsync(It.IsAny<LibraryAddOperationRequest>(), It.IsAny<CancellationToken>()))
+                .Returns<LibraryAddOperationRequest, CancellationToken>(async (request, _) =>
+                {
+                    var created = request.Metadata.ToAudiobook();
+                    created.BasePath = request.DestinationPath;
+                    await repo.AddAsync(created);
+                    return new LibraryAddOperationResult { Added = true, Audiobook = created };
+                });
+
+            var result = await service.ExtractToNewAudiobookAsync(1, 11, new ExtractFileRequest
+            {
+                Metadata = new AudibleBookMetadata
+                {
+                    Title = "Elantris",
+                    Authors = new List<string> { "Brandon Sanderson" },
+                    Asin = "B015YEFH40",
+                },
+                // No DuplicateStrategy: the user shouldn't be forced to pick one here because
+                // there is no real cross-record conflict.
+            });
+
+            Assert.True(result.Success, result.Error);
+            Assert.Null(result.Conflict);
+            Assert.NotNull(result.DestinationAudiobookId);
+            Assert.NotEqual(1, result.DestinationAudiobookId); // new record was created
+            Assert.False(File.Exists(sourcePath)); // file moved out of source folder
+            Assert.NotNull(result.NewFilePath);
+            Assert.Contains("Elantris.mp3", result.NewFilePath); // new clean name
+            Assert.DoesNotContain("Dramatized", result.NewFilePath); // not the old name
+        }
+
+        [Fact]
         public async Task Extract_WithDuplicateStrategy_BypassesLibraryAddServiceDedup()
         {
             // Regression: previously, picking "Duplicate" still went through

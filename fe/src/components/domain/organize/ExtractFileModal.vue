@@ -174,9 +174,12 @@
 
       <template v-else-if="step === 'conflict' && conflict">
         <p class="extract-intro">
-          An audiobook with this ASIN is already in your library:
+          Another audiobook in your library already uses ASIN
+          <code>{{ conflict.existingAsin || '—' }}</code>:
           <strong>{{ conflict.existingTitle || 'Untitled' }}</strong>
-          ({{ conflict.existingFileCount }} file{{ conflict.existingFileCount === 1 ? '' : 's' }}).
+          ({{ conflict.existingFileCount }} file{{ conflict.existingFileCount === 1 ? '' : 's' }})
+          <span v-if="conflict.existingBasePath">
+            at <code>{{ conflict.existingBasePath }}</code></span>.
           Pick what you want to do.
         </p>
 
@@ -202,7 +205,9 @@
             open
           >
             <summary>
-              What's already in <em>{{ conflict.existingTitle || 'that audiobook' }}</em>
+              What's already in
+              <em>{{ conflict.existingBasePath || conflict.existingTitle || 'that audiobook' }}</em>
+              <span class="muted"> (if you Merge, this is where the file lands)</span>
             </summary>
             <ul class="extract-existing-file-list">
               <li
@@ -235,7 +240,10 @@
             @click="onResolveConflict('merge')"
           >
             <span class="extract-conflict-option-title">Merge file into existing</span>
-            <span class="muted">Adds this file to the existing audiobook; physically moves it under that folder.</span>
+            <span class="muted">
+              Adds this file to <em>{{ conflict.existingTitle || 'that audiobook' }}</em>
+              <span v-if="conflict.existingBasePath">at <code>{{ conflict.existingBasePath }}</code></span>.
+            </span>
             <span v-if="normalizedRecommendation === 'merge'" class="badge">Recommended</span>
           </button>
           <button
@@ -245,7 +253,11 @@
             @click="onResolveConflict('duplicate')"
           >
             <span class="extract-conflict-option-title">Make a duplicate</span>
-            <span class="muted">Creates a separate audiobook record alongside the existing one.</span>
+            <span class="muted">
+              Creates a separate audiobook record
+              <span v-if="conflict.proposedDestinationFolder">
+                at <code>{{ conflict.proposedDestinationFolder }}</code></span>.
+            </span>
             <span v-if="normalizedRecommendation === 'duplicate'" class="badge">Recommended</span>
           </button>
         </div>

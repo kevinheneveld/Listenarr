@@ -1261,6 +1261,11 @@ export interface ExtractFileConflict {
   existingTitle?: string
   existingAsin?: string
   existingFileCount: number
+  /** Folder the existing (conflicting) audiobook lives in on disk. */
+  existingBasePath?: string
+  /** Folder a new audiobook would land in if the user picks Duplicate — derived from
+   *  the chosen Audible metadata. */
+  proposedDestinationFolder?: string
   recommendedStrategy: 'merge' | 'duplicate' | 'Merge' | 'Duplicate'
   recommendationReason?: string
   /** A capped sample of the existing audiobook's tracked files (path / format / size /
