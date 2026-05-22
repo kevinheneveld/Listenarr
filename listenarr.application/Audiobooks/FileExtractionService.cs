@@ -146,25 +146,31 @@ namespace Listenarr.Application.Audiobooks
                 return result;
             }
 
-            // Duplicate detection — only meaningful when the user has provided an ASIN to match against
+            // Compute the proposed destination folder up front so we can both detect real
+            // conflicts (a different audiobook record claiming the same ASIN) and describe
+            // the destination on the conflict screen.
+            var sourceRootFolder = await ResolveSourceRootFolderAsync(sourceAbsolutePath);
+            var proposedDestinationFolder = await ComputeBasePathAsync(sourceRootFolder, request.Metadata);
+
+            // Duplicate detection. Only meaningful when the user has provided an ASIN to
+            // match against, and only a real conflict when the matching record is a
+            // DIFFERENT audiobook than the source. Source ASIN == chosen ASIN is a non-
+            // conflict for extract — the file just needs to move out from under that source
+            // and into a new (or specified-existing) destination.
             Audiobook? existingMatch = null;
             if (!string.IsNullOrWhiteSpace(request.Metadata.Asin))
             {
                 var shallow = await _audiobookRepository.GetByAsinAsync(request.Metadata.Asin!);
-                if (shallow != null)
+                if (shallow != null && shallow.Id != sourceAudiobookId)
                 {
                     // GetByAsinAsync doesn't eager-load Files; reload by id so BuildConflict has
                     // the file count and Merge has the existing file list to number against.
                     existingMatch = await _audiobookRepository.GetByIdAsync(shallow.Id);
                 }
-                // (Note: if existingMatch.Id == sourceAudiobookId the user is trying to "extract"
-                // the file back onto its own audiobook via the same ASIN — pathological but not a
-                // crash. It still surfaces as a conflict and the user picks merge to no-op or
-                // duplicate to create a second record.)
 
                 if (existingMatch != null && request.DuplicateStrategy == DuplicateStrategy.None)
                 {
-                    result.Conflict = BuildConflict(existingMatch);
+                    result.Conflict = BuildConflict(existingMatch, proposedDestinationFolder);
                     result.Error = "An audiobook with this ASIN already exists.";
                     return result;
                 }
@@ -182,15 +188,12 @@ namespace Listenarr.Application.Audiobooks
             else
             {
                 // Either no existing match, or user explicitly chose Duplicate. Either way, create new.
-                var rootFolderPath = await ResolveSourceRootFolderAsync(sourceAbsolutePath);
-                var destinationBasePath = await ComputeBasePathAsync(rootFolderPath, request.Metadata);
-
                 var addResult = await _libraryAddService.AddToLibraryAsync(new LibraryAddOperationRequest
                 {
                     Metadata = request.Metadata,
                     Monitored = request.Monitored,
                     QualityProfileId = request.QualityProfileId,
-                    DestinationPath = destinationBasePath,
+                    DestinationPath = proposedDestinationFolder,
                     HistorySource = "FileExtraction",
                     HistoryMessage = $"Audiobook created by extracting '{Path.GetFileName(sourceAbsolutePath)}' from '{sourceAudiobook.Title}'.",
                     // User explicitly chose Duplicate; bypass LibraryAddService's own ASIN/ISBN
@@ -204,7 +207,7 @@ namespace Listenarr.Application.Audiobooks
                     // explicitly want a second record, so this is unexpected. Treat as conflict.
                     if (addResult.Audiobook != null)
                     {
-                        result.Conflict = BuildConflict(addResult.Audiobook);
+                        result.Conflict = BuildConflict(addResult.Audiobook, proposedDestinationFolder);
                     }
                     result.Error = "Library refused to create a duplicate. Pick Merge instead.";
                     return result;
@@ -440,7 +443,7 @@ namespace Listenarr.Application.Audiobooks
             if (primary.Size > 0) audiobook.FileSize = primary.Size;
         }
 
-        private static ExtractFileConflict BuildConflict(Audiobook existing)
+        private static ExtractFileConflict BuildConflict(Audiobook existing, string? proposedDestinationFolder)
         {
             const int MaxFileSummaries = 20;
             var fileCount = existing.Files?.Count ?? 0;
@@ -467,6 +470,8 @@ namespace Listenarr.Application.Audiobooks
                 ExistingTitle = existing.Title,
                 ExistingAsin = existing.Asin,
                 ExistingFileCount = fileCount,
+                ExistingBasePath = existing.BasePath,
+                ProposedDestinationFolder = proposedDestinationFolder,
                 RecommendedStrategy = strategy,
                 RecommendationReason = reason,
                 ExistingFiles = existingFiles,

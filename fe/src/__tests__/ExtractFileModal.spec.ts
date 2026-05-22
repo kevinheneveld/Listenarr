@@ -176,7 +176,10 @@ describe('ExtractFileModal', () => {
       conflict: {
         existingAudiobookId: 42,
         existingTitle: 'The Eye of the World',
+        existingAsin: 'B002UZJBA8',
         existingFileCount: 2,
+        existingBasePath: '/library/Robert Jordan/The Eye of the World (different folder)',
+        proposedDestinationFolder: '/library/Robert Jordan/The Eye of the World',
         recommendedStrategy: 'duplicate',
         recommendationReason: 'The existing audiobook already has files.',
         existingFiles: [
@@ -209,12 +212,16 @@ describe('ExtractFileModal', () => {
     await wrapper.find('.btn.btn-primary').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('already in your library')
+    expect(wrapper.text()).toContain('Another audiobook in your library already uses ASIN')
     // Existing-files summary lets the user compare structure (monolithic m4b vs
     // many chapter mp3s) before picking merge or duplicate.
     expect(wrapper.text()).toContain("What's already in")
     expect(wrapper.text()).toContain('Disc 01.mp3')
     expect(wrapper.text()).toContain('Disc 02.mp3')
+    // The proposed-destination path is shown under the Duplicate option so the user
+    // can see where a new audiobook would land — distinct from the existing record's
+    // current folder.
+    expect(wrapper.text()).toContain('/library/Robert Jordan/The Eye of the World')
     const options = wrapper.findAll('.extract-conflict-option')
     expect(options).toHaveLength(2)
     expect(options[1].classes()).toContain('recommended') // duplicate is recommended here
