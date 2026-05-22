@@ -134,6 +134,7 @@ Wave 1 (2026-05-17) shipped K + J as drafts (#604, #605). Eight more queued, plu
 - **Push targets:** `fork` only. Never `origin`.
 - **Pacing:** stagger draft PRs ~1-2/day across the queue above. Convert ready PRs back to draft if the maintainer raises pacing again.
 - **Wave 1 schedule:** today shipped K (#604) + J (#605). Per Kevin: H + F tomorrow, B + I day +2, D + E day +3, A day +4, C day +5.
+- **Local pre-commit guard at `.git/hooks/pre-commit`** (added 2026-05-22 after the `.deploy-local.env` leak in b2080af5). Three layers: any staged file `.gitignore` matches; a name blocklist for deploy/secret files; content patterns for the media host's private IP, SSH-alias env vars with non-empty values, and the author's local hostname. Read the hook itself for the exact patterns. Not version-controlled — re-install on fresh clones. Root cause was a feature branch predating the gitignore line; the name + content layers catch that case even when `.gitignore` on the branch is silent.
 
 ## When in doubt
 
