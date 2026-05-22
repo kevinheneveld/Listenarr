@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Autocomplete on the Edit Audiobook modal's tag-style fields:** The Authors, Narrators, Genres, and Tags inputs now show a filtered dropdown of values already present elsewhere in the library while the user types. Picking a suggestion (click or Enter on the highlighted row) commits the canonical spelling — useful for keeping "Brandon Sanderson" / "brandon sanderson" / "B. Sanderson" from drifting apart. Pressing Enter with nothing highlighted still commits the raw typed value so brand-new tags work. Matching is case- and punctuation-insensitive (so typing `Obrien` surfaces `O'Brien` as a suggestion); already-added values are filtered out of the dropdown to avoid duplicate entries. Suggestions are aggregated client-side from the in-memory library store, so no new backend endpoint is needed and they update reactively as the library changes.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
