@@ -1291,6 +1291,7 @@ let audiobookUpdateUnsub: (() => void) | null = null
 onMounted(async () => {
   syncActiveTabFromRoute()
   document.addEventListener('click', handleClickOutside)
+  captureSourceListingUrl()
 
   await loadAudiobook()
 
@@ -1456,8 +1457,45 @@ async function loadIdentifiersForDetail() {
   }
 }
 
+/**
+ * URL of the listing page (Books, or a Collection page) that the user came from when
+ * they navigated into this detail view. Captured once on mount from
+ * `window.history.state.back`, which Vue Router 4 populates with the previous full
+ * path (including query string) on every internal navigation.
+ *
+ * Used by goBack() and post-delete navigation so the user is returned to their
+ * filtered listing instead of the bare /audiobooks page. Falls back to /audiobooks
+ * when the user arrived here via direct URL / refresh (no prior history) or from
+ * an unrelated page (e.g. dashboard drill-down without a listing in between).
+ */
+const sourceListingUrl = ref<string | null>(null)
+
+function captureSourceListingUrl(): void {
+  try {
+    const backPath = (window.history.state?.back as string | null | undefined) ?? null
+    if (typeof backPath === 'string' && isSourceListingPath(backPath)) {
+      sourceListingUrl.value = backPath
+    }
+  } catch {
+    /* defensive: history.state access can fail in unusual environments */
+  }
+}
+
+function isSourceListingPath(path: string): boolean {
+  const stripped = path.split('?')[0]
+  return stripped === '/audiobooks' || stripped.startsWith('/collection/')
+}
+
+function returnToSourceListing(): void {
+  if (sourceListingUrl.value) {
+    router.push(sourceListingUrl.value)
+  } else {
+    router.push('/audiobooks')
+  }
+}
+
 function goBack() {
-  router.push('/audiobooks')
+  returnToSourceListing()
 }
 
 function goToAuthorCollection(author: string | undefined | null) {
@@ -1677,8 +1715,9 @@ async function executeDelete() {
       } else {
         toast.success('Audiobook deleted', 'The audiobook was removed from the library.')
       }
-      // Navigate back to library after successful deletion
-      router.push('/audiobooks')
+      // Navigate back to wherever the user came from (Books with filters / a Collection
+      // page) so their listing state isn't lost.
+      returnToSourceListing()
     } else {
       const toast = useToast()
       toast.error('Delete failed', libraryStore.error || 'Failed to delete audiobook')
