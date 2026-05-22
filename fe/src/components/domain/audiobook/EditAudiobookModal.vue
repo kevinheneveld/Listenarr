@@ -109,26 +109,14 @@
                         No authors added yet
                       </span>
                     </div>
-                    <div class="tag-input-group">
-                      <input
-                        id="metadata-authors"
-                        v-model="newAuthor"
-                        type="text"
-                        class="tag-input"
-                        placeholder="Add an author..."
-                        @keypress.enter.prevent="addAuthor"
-                      />
-                      <button
-                        type="button"
-                        @click="addAuthor"
-                        class="icon-btn btn-primary btn-add-tag"
-                        :disabled="!newAuthor.trim()"
-                        title="Add author"
-                        aria-label="Add author"
-                      >
-                        <PhPlus :size="16"></PhPlus>
-                      </button>
-                    </div>
+                    <TagAutocompleteInput
+                      input-id="metadata-authors"
+                      placeholder="Add an author..."
+                      add-button-title="Add author"
+                      :suggestions="libraryAuthors"
+                      :excluded="formData.authors"
+                      @add="addAuthor"
+                    />
                   </div>
                 </div>
                 <div class="metadata-field metadata-field--wide">
@@ -154,26 +142,14 @@
                         No narrators added yet
                       </span>
                     </div>
-                    <div class="tag-input-group">
-                      <input
-                        id="metadata-narrators"
-                        v-model="newNarrator"
-                        type="text"
-                        class="tag-input"
-                        placeholder="Add a narrator..."
-                        @keypress.enter.prevent="addNarrator"
-                      />
-                      <button
-                        type="button"
-                        @click="addNarrator"
-                        class="icon-btn btn-primary btn-add-tag"
-                        :disabled="!newNarrator.trim()"
-                        title="Add narrator"
-                        aria-label="Add narrator"
-                      >
-                        <PhPlus :size="16"></PhPlus>
-                      </button>
-                    </div>
+                    <TagAutocompleteInput
+                      input-id="metadata-narrators"
+                      placeholder="Add a narrator..."
+                      add-button-title="Add narrator"
+                      :suggestions="libraryNarrators"
+                      :excluded="formData.narrators"
+                      @add="addNarrator"
+                    />
                   </div>
                 </div>
                 <div class="metadata-field metadata-field--full">
@@ -359,26 +335,14 @@
                         No genres added yet
                       </span>
                     </div>
-                    <div class="tag-input-group">
-                      <input
-                        id="metadata-genres"
-                        v-model="newGenre"
-                        type="text"
-                        class="tag-input"
-                        placeholder="Add a genre..."
-                        @keypress.enter.prevent="addGenre"
-                      />
-                      <button
-                        type="button"
-                        @click="addGenre"
-                        class="icon-btn btn-primary btn-add-tag"
-                        :disabled="!newGenre.trim()"
-                        title="Add genre"
-                        aria-label="Add genre"
-                      >
-                        <PhPlus :size="16"></PhPlus>
-                      </button>
-                    </div>
+                    <TagAutocompleteInput
+                      input-id="metadata-genres"
+                      placeholder="Add a genre..."
+                      add-button-title="Add genre"
+                      :suggestions="libraryGenres"
+                      :excluded="formData.genres"
+                      @add="addGenre"
+                    />
                   </div>
                 </div>
                 <div class="metadata-field metadata-field--wide">
@@ -557,25 +521,13 @@
                     No tags added yet
                   </span>
                 </div>
-                <div class="tag-input-group">
-                  <input
-                    type="text"
-                    v-model="newTag"
-                    @keypress.enter.prevent="addTag"
-                    placeholder="Add a tag..."
-                    class="tag-input"
-                  />
-                  <button
-                    type="button"
-                    @click="addTag"
-                    class="icon-btn btn-primary btn-add-tag"
-                    :disabled="!newTag.trim()"
-                    title="Add tag"
-                    aria-label="Add tag"
-                  >
-                    <PhPlus :size="16"></PhPlus>
-                  </button>
-                </div>
+                <TagAutocompleteInput
+                  placeholder="Add a tag..."
+                  add-button-title="Add tag"
+                  :suggestions="libraryTags"
+                  :excluded="formData.tags"
+                  @add="addTag"
+                />
               </div>
               <p class="help-text">Custom tags for organizing and filtering audiobooks</p>
             </div>
@@ -803,6 +755,8 @@ import MoveAudiobookModal from '@/components/feedback/MoveAudiobookModal.vue'
 // FormRow and CheckboxCard not used in this component script; UI uses local markup
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { usePathLengthCheck } from '@/composables/usePathLengthCheck'
+import { useLibraryFieldSuggestions } from '@/composables/useLibraryFieldSuggestions'
+import TagAutocompleteInput from '@/components/form/TagAutocompleteInput.vue'
 
 // Diagnostic: surface undefined imports that can cause `Invalid vnode type` warnings
 if (typeof window !== 'undefined') {
@@ -887,10 +841,15 @@ const isUsingCustomPath = computed(() => {
 })
 const rootPath = ref<string | null>(null)
 const saving = ref(false)
-const newAuthor = ref('')
-const newNarrator = ref('')
-const newTag = ref('')
-const newGenre = ref('')
+// Aggregated tag-field suggestions from the user's library. Drive the autocomplete
+// dropdowns on each of the four tag-style fields (Authors, Narrators, Genres, Tags)
+// so spelling and punctuation match the values already used elsewhere.
+const {
+  authors: libraryAuthors,
+  narrators: libraryNarrators,
+  genres: libraryGenres,
+  tags: libraryTags,
+} = useLibraryFieldSuggestions()
 const editingDestination = ref(false)
 const toast = useToast()
 const originalIdentifierRows = ref<EditableIdentifierRow[]>([])
@@ -1097,10 +1056,6 @@ function hydrateFormFromAudiobook(audiobook: Audiobook) {
     relativePath: null,
   }
 
-  newAuthor.value = ''
-  newNarrator.value = ''
-  newGenre.value = ''
-  newTag.value = ''
 }
 
 watch(
@@ -1922,11 +1877,10 @@ function toIdentifierWritePayload(row: EditableIdentifierRow): AudiobookExternal
   }
 }
 
-function addTag() {
-  const tag = newTag.value.trim()
-  if (tag && !formData.value.tags.includes(tag)) {
+function addTag(value: string) {
+  const tag = value.trim()
+  if (tag && !formData.value.tags.some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
     formData.value.tags.push(tag)
-    newTag.value = ''
   }
 }
 
@@ -1942,27 +1896,24 @@ function pushUniqueValues(target: string[], rawValue: string) {
   }
 }
 
-function addAuthor() {
-  pushUniqueValues(formData.value.authors, newAuthor.value)
-  newAuthor.value = ''
+function addAuthor(value: string) {
+  pushUniqueValues(formData.value.authors, value)
 }
 
 function removeAuthor(index: number) {
   formData.value.authors.splice(index, 1)
 }
 
-function addNarrator() {
-  pushUniqueValues(formData.value.narrators, newNarrator.value)
-  newNarrator.value = ''
+function addNarrator(value: string) {
+  pushUniqueValues(formData.value.narrators, value)
 }
 
 function removeNarrator(index: number) {
   formData.value.narrators.splice(index, 1)
 }
 
-function addGenre() {
-  pushUniqueValues(formData.value.genres, newGenre.value)
-  newGenre.value = ''
+function addGenre(value: string) {
+  pushUniqueValues(formData.value.genres, value)
 }
 
 function removeGenre(index: number) {
