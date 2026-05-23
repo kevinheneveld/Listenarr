@@ -366,6 +366,8 @@
           <div class="col-select"></div>
           <div class="col-cover">Cover</div>
           <div class="col-title">Title / Author</div>
+          <div class="col-series">Series</div>
+          <div class="col-narrator">Narrator</div>
           <div class="col-status">Status</div>
           <div class="col-actions">Actions</div>
         </div>
@@ -440,20 +442,22 @@
               </div>
               <div v-if="showItemDetails" class="list-extra-details">
                 <div class="detail-line small">
-                  {{
-                    (audiobook.narrators || [])
-                      .slice(0, 1)
-                      .map((n) => safeText(n))
-                      .join(', ') || ''
-                  }}
-                  <span
-                    v-if="
-                      audiobook.narrators &&
-                      audiobook.narrators.length &&
-                      (audiobook.publisher || audiobook.publishYear)
-                    "
-                  >
-                    •
+                  <span class="list-narrow-only-inline">
+                    {{
+                      (audiobook.narrators || [])
+                        .slice(0, 1)
+                        .map((n) => safeText(n))
+                        .join(', ') || ''
+                    }}
+                    <span
+                      v-if="
+                        audiobook.narrators &&
+                        audiobook.narrators.length &&
+                        (audiobook.publisher || audiobook.publishYear)
+                      "
+                    >
+                      •
+                    </span>
                   </span>
                   {{ safeText(audiobook.publisher)
                   }}<span v-if="audiobook.publishYear">
@@ -461,6 +465,40 @@
                   >
                 </div>
               </div>
+            </div>
+
+            <div class="col-series-cell">
+              <template v-if="getPrimarySeries(audiobook)">
+                <span class="series-name" :title="formatAllSeriesTooltip(getPrimarySeries(audiobook))">
+                  {{ formatSeriesDisplay(getPrimarySeries(audiobook)) }}
+                </span>
+                <span
+                  v-if="(getPrimarySeries(audiobook)?.extraCount ?? 0) > 0"
+                  class="extra-count"
+                  :title="formatAllSeriesTooltip(getPrimarySeries(audiobook))"
+                >
+                  +{{ getPrimarySeries(audiobook)?.extraCount }}
+                </span>
+              </template>
+              <span v-else class="muted">—</span>
+            </div>
+            <div class="col-narrator-cell">
+              <template v-if="audiobook.narrators && audiobook.narrators.length">
+                <span
+                  class="narrator-name"
+                  :title="audiobook.narrators.length > 1 ? audiobook.narrators.join('\n') : ''"
+                >
+                  {{ safeText(audiobook.narrators[0]) }}
+                </span>
+                <span
+                  v-if="audiobook.narrators.length > 1"
+                  class="extra-count"
+                  :title="audiobook.narrators.join('\n')"
+                >
+                  +{{ audiobook.narrators.length - 1 }}
+                </span>
+              </template>
+              <span v-else class="muted">—</span>
             </div>
 
             <div class="list-badges">
@@ -822,6 +860,11 @@ import type {
 } from '@/types'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
 import { safeText, stripHtmlAndNormalize } from '@/utils/textUtils'
+import {
+  getPrimarySeries,
+  formatSeriesDisplay,
+  formatAllSeriesTooltip,
+} from '@/utils/seriesDisplay'
 import { useProtectedImages } from '@/composables/useProtectedImages'
 import {
   getPreferredSearchLanguageFilter,
@@ -4211,7 +4254,7 @@ defineExpose({
 
 .audiobook-list-item {
   display: grid;
-  grid-template-columns: 40px 64px 1fr auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 260px 120px;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -4281,7 +4324,7 @@ defineExpose({
 
 .list-header {
   display: grid;
-  grid-template-columns: 40px 64px 1fr auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 260px 120px;
   gap: 12px;
   padding: 8px 12px;
   color: #aaa;
@@ -4297,6 +4340,10 @@ defineExpose({
 .list-header .col-title {
   opacity: 0.9;
 }
+.list-header .col-series,
+.list-header .col-narrator {
+  opacity: 0.9;
+}
 .list-header .col-status {
   opacity: 0.9;
 }
@@ -4308,8 +4355,65 @@ defineExpose({
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-left: 12px;
   justify-self: start;
+}
+
+/* Series + narrator cell content */
+.col-series-cell,
+.col-narrator-cell {
+  font-size: 13px;
+  color: #ddd;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.col-series-cell .series-name,
+.col-narrator-cell .narrator-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.col-series-cell .extra-count,
+.col-narrator-cell .extra-count {
+  font-size: 11px;
+  color: #888;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.col-series-cell .muted,
+.col-narrator-cell .muted {
+  color: #555;
+}
+
+/* Hide the narrator line in the extra-details sub-row when the dedicated
+   column is visible. Unhidden at the same breakpoint where the columns
+   collapse. */
+.list-narrow-only-inline {
+  display: none;
+}
+
+/* Below 1100px the Series and Narrator columns collapse — restore the old
+   5-column layout and surface the narrator in the extra-details sub-row. */
+@media (max-width: 1099px) {
+  .audiobook-list-item {
+    grid-template-columns: 40px 64px 1fr auto 120px;
+  }
+  .list-header {
+    grid-template-columns: 40px 64px 1fr auto 120px;
+  }
+  .list-header .col-series,
+  .list-header .col-narrator,
+  .col-series-cell,
+  .col-narrator-cell {
+    display: none;
+  }
+  .list-narrow-only-inline {
+    display: inline;
+  }
 }
 
 @media (max-width: 978px) {
