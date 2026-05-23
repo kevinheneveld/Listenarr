@@ -240,6 +240,15 @@ namespace Listenarr.Api.Controllers
                 }
             }
 
+            // Serialize the check-existing + insert critical section per ASIN so
+            // concurrent /library/add requests for the same ASIN cannot both
+            // pass the dedup check and create duplicate rows. See
+            // kevinheneveld/Listenarr#6 for the bug this prevents. The handle
+            // is a no-op when ASIN is missing.
+            using var asinAddLock = await AudiobookAddLockManager.AcquireAsync(
+                metadata.Asin,
+                HttpContext.RequestAborted);
+
             // Check if audiobook already exists in library
             if (!string.IsNullOrEmpty(metadata.Asin))
             {

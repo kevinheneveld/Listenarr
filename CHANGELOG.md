@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Duplicate audiobook rows on bulk-add races:** `POST /library/add` did a `GetByAsinAsync` dedup check and then later called `AddAsync`, with the image-move and quality-profile work running in between. Two concurrent requests for the same ASIN could both pass the check and both insert. A new per-ASIN `SemaphoreSlim` (`AudiobookAddLockManager`) serializes the check + insert critical section per normalized ASIN, so concurrent adds for the same ASIN now queue and the second sees the first's row via the dedup check. Different ASINs lock independently. Applied to both the legacy in-controller add path and `LibraryAddService.AddToLibraryAsync` for defense-in-depth. Single-process protection only; a DB-level UNIQUE partial index on `UPPER(Asin)` is tracked as the follow-up for the multi-process case (see kevinheneveld/Listenarr#6).
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
