@@ -864,6 +864,7 @@ import {
   getPrimarySeries,
   formatSeriesDisplay,
   formatAllSeriesTooltip,
+  getSeriesSortKey,
 } from '@/utils/seriesDisplay'
 import { useProtectedImages } from '@/composables/useProtectedImages'
 import {
@@ -1158,7 +1159,7 @@ function getSortValue(book: CollectionDisplayItem): string {
     case 'author':
       return book.authors?.[0] || ''
     case 'series':
-      return book.series || ''
+      return getSeriesSortKey(book)
     case 'added':
       return book.inLibrary ? String(book.id).padStart(12, '0') : 'zzzzzzzzzzzz'
     default:
