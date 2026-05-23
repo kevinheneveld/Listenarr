@@ -3795,7 +3795,7 @@ defineExpose({
 
 .audiobook-list-item {
   display: grid;
-  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 260px 120px;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -3857,7 +3857,7 @@ defineExpose({
 /* Header row to mimic table columns */
 .list-header {
   display: grid;
-  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 260px 120px;
   gap: 12px;
   padding: 8px 12px;
   color: #aaa;
@@ -3978,7 +3978,6 @@ defineExpose({
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-left: 12px;
   justify-self: start;
 }
 
