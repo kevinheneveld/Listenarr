@@ -94,6 +94,17 @@ namespace Listenarr.Application.Audiobooks
                 }
             }
 
+            // Serialize the check-existing + insert critical section per ASIN
+            // so concurrent calls for the same ASIN cannot both pass the dedup
+            // check and create duplicate rows. See kevinheneveld/Listenarr#6.
+            // The handle is a no-op when ASIN is missing. We acquire the lock
+            // even when BypassDuplicateCheck is set so a second concurrent
+            // request that DOES want the dedup check still sees the first
+            // request's row.
+            using var asinAddLock = await AudiobookAddLockManager.AcquireAsync(
+                metadata.Asin,
+                cancellationToken);
+
             if (!request.BypassDuplicateCheck && !string.IsNullOrWhiteSpace(metadata.Asin))
             {
                 var existingByAsin = await _repo.GetByAsinAsync(metadata.Asin);
