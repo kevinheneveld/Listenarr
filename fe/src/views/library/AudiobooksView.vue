@@ -511,6 +511,48 @@
             <div class="col-select"></div>
             <div class="col-cover">Cover</div>
             <div class="col-title">Title / Author</div>
+            <div
+              class="col-series sortable"
+              :class="{ 'sort-active': isSeriesSortActive }"
+              role="button"
+              tabindex="0"
+              :aria-sort="
+                isSeriesSortActive ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'
+              "
+              @click="toggleListHeaderSort('series')"
+              @keydown.enter.prevent="toggleListHeaderSort('series')"
+              @keydown.space.prevent="toggleListHeaderSort('series')"
+            >
+              <span>Series</span>
+              <component
+                v-if="isSeriesSortActive"
+                :is="sortOrder === 'asc' ? PhCaretUp : PhCaretDown"
+                class="sort-caret"
+              />
+            </div>
+            <div
+              class="col-narrator sortable"
+              :class="{ 'sort-active': isNarratorSortActive }"
+              role="button"
+              tabindex="0"
+              :aria-sort="
+                isNarratorSortActive
+                  ? sortOrder === 'asc'
+                    ? 'ascending'
+                    : 'descending'
+                  : 'none'
+              "
+              @click="toggleListHeaderSort('narrator')"
+              @keydown.enter.prevent="toggleListHeaderSort('narrator')"
+              @keydown.space.prevent="toggleListHeaderSort('narrator')"
+            >
+              <span>Narrator</span>
+              <component
+                v-if="isNarratorSortActive"
+                :is="sortOrder === 'asc' ? PhCaretUp : PhCaretDown"
+                class="sort-caret"
+              />
+            </div>
             <div class="col-status">Status</div>
             <div class="col-actions">Actions</div>
           </div>
@@ -563,25 +605,27 @@
                 }}
               </div>
               <div v-if="showItemDetails" class="list-extra-details">
-                <div v-if="audiobook.series" class="detail-line small">
+                <div v-if="audiobook.series" class="detail-line small list-narrow-only-block">
                   Series: {{ safeText(audiobook.series)
                   }}<span v-if="audiobook.seriesNumber"> #{{ audiobook.seriesNumber }}</span>
                 </div>
                 <div class="detail-line small">
-                  {{
-                    (audiobook.narrators || [])
-                      .slice(0, 1)
-                      .map((n) => safeText(n))
-                      .join(', ') || ''
-                  }}
-                  <span
-                    v-if="
-                      audiobook.narrators &&
-                      audiobook.narrators.length &&
-                      (audiobook.publisher || audiobook.publishYear)
-                    "
-                  >
-                    •
+                  <span class="list-narrow-only-inline">
+                    {{
+                      (audiobook.narrators || [])
+                        .slice(0, 1)
+                        .map((n) => safeText(n))
+                        .join(', ') || ''
+                    }}
+                    <span
+                      v-if="
+                        audiobook.narrators &&
+                        audiobook.narrators.length &&
+                        (audiobook.publisher || audiobook.publishYear)
+                      "
+                    >
+                      •
+                    </span>
                   </span>
                   {{ safeText(audiobook.publisher)
                   }}<span v-if="audiobook.publishYear">
@@ -589,6 +633,39 @@
                   >
                 </div>
               </div>
+            </div>
+            <div class="col-series-cell">
+              <template v-if="getPrimarySeries(audiobook)">
+                <span class="series-name" :title="formatAllSeriesTooltip(getPrimarySeries(audiobook))">
+                  {{ formatSeriesDisplay(getPrimarySeries(audiobook)) }}
+                </span>
+                <span
+                  v-if="(getPrimarySeries(audiobook)?.extraCount ?? 0) > 0"
+                  class="extra-count"
+                  :title="formatAllSeriesTooltip(getPrimarySeries(audiobook))"
+                >
+                  +{{ getPrimarySeries(audiobook)?.extraCount }}
+                </span>
+              </template>
+              <span v-else class="muted">—</span>
+            </div>
+            <div class="col-narrator-cell">
+              <template v-if="audiobook.narrators && audiobook.narrators.length">
+                <span
+                  class="narrator-name"
+                  :title="audiobook.narrators.length > 1 ? audiobook.narrators.join('\n') : ''"
+                >
+                  {{ safeText(audiobook.narrators[0]) }}
+                </span>
+                <span
+                  v-if="audiobook.narrators.length > 1"
+                  class="extra-count"
+                  :title="audiobook.narrators.join('\n')"
+                >
+                  +{{ audiobook.narrators.length - 1 }}
+                </span>
+              </template>
+              <span v-else class="muted">—</span>
             </div>
             <div class="list-badges">
               <div
@@ -778,6 +855,7 @@ import {
   PhWarningCircle,
   PhInfo,
   PhCaretDown,
+  PhCaretUp,
   PhBookOpen,
   PhX,
   PhUser,
@@ -810,6 +888,12 @@ import { getPlaceholderUrl } from '@/utils/placeholder'
 import { observeLazyImages } from '@/utils/lazyLoad'
 import { errorTracking } from '@/services/errorTracking'
 import { isLikelyBackendImageUrl, useProtectedImages } from '@/composables/useProtectedImages'
+import {
+  getPrimarySeries,
+  formatSeriesDisplay,
+  formatAllSeriesTooltip,
+  getSeriesSortKey,
+} from '@/utils/seriesDisplay'
 
 function getAuthorSortKey(author: string): string {
   const parts = author.trim().split(/\s+/)
@@ -1114,6 +1198,10 @@ const filteredAndSortedAudiobooks = computed(() => {
         const bNarratorLast = b.narrators && b.narrators[0] ? b.narrators[0] : ''
         av = getNarratorSortKey(aNarratorLast)
         bv = getNarratorSortKey(bNarratorLast)
+        break
+      case 'series':
+        av = getSeriesSortKey(a)
+        bv = getSeriesSortKey(b)
         break
       case 'narrator-first':
         const aNarratorFirst = a.narrators && a.narrators[0] ? a.narrators[0] : ''
@@ -1467,6 +1555,7 @@ const sortOptions = computed(() => {
       { value: 'author-first', label: 'Author First Name' },
       { value: 'narrator-last', label: 'Narrator Last Name' },
       { value: 'narrator-first', label: 'Narrator First Name' },
+      { value: 'series', label: 'Series' },
       { value: 'publisher', label: 'Publisher' },
       { value: 'year', label: 'Release Year' },
       { value: 'monitored', label: 'Monitored' },
@@ -1502,6 +1591,31 @@ const sortKeyProxy = computed<string>({
     }
   },
 })
+
+// Narrator column maps to two toolbar options (last- and first-name); treat both
+// as "narrator is active" so clicking the column toggles whichever is selected.
+const isNarratorSortActive = computed(
+  () => sortKey.value === 'narrator-last' || sortKey.value === 'narrator-first',
+)
+const isSeriesSortActive = computed(() => sortKey.value === 'series')
+
+function toggleListHeaderSort(key: 'series' | 'narrator') {
+  if (key === 'series') {
+    if (isSeriesSortActive.value) {
+      sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortKey.value = 'series'
+      sortOrder.value = 'asc'
+    }
+    return
+  }
+  if (isNarratorSortActive.value) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = 'narrator-last'
+    sortOrder.value = 'asc'
+  }
+}
 
 // toolbar select option helpers were removed in favor of CustomSelect usage per control
 
@@ -3681,7 +3795,7 @@ defineExpose({
 
 .audiobook-list-item {
   display: grid;
-  grid-template-columns: 40px 64px 1fr auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) auto 120px;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -3743,7 +3857,7 @@ defineExpose({
 /* Header row to mimic table columns */
 .list-header {
   display: grid;
-  grid-template-columns: 40px 64px 1fr auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) auto 120px;
   gap: 12px;
   padding: 8px 12px;
   color: #aaa;
@@ -3759,11 +3873,104 @@ defineExpose({
 .list-header .col-title {
   opacity: 0.9;
 }
+.list-header .col-series,
+.list-header .col-narrator {
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.list-header .col-series.sortable,
+.list-header .col-narrator.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.list-header .col-series.sortable:hover,
+.list-header .col-narrator.sortable:hover {
+  color: #fff;
+}
+.list-header .col-series.sort-active,
+.list-header .col-narrator.sort-active {
+  color: #fff;
+  opacity: 1;
+}
+.list-header .col-series.sortable:focus-visible,
+.list-header .col-narrator.sortable:focus-visible {
+  outline: 2px solid rgba(140, 180, 255, 0.6);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.list-header .sort-caret {
+  width: 12px;
+  height: 12px;
+}
 .list-header .col-status {
   opacity: 0.9;
 }
 .list-header .col-actions {
   text-align: right;
+}
+
+/* Series + narrator cell content */
+.col-series-cell,
+.col-narrator-cell {
+  font-size: 13px;
+  color: #ddd;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.col-series-cell .series-name,
+.col-narrator-cell .narrator-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.col-series-cell .extra-count,
+.col-narrator-cell .extra-count {
+  font-size: 11px;
+  color: #888;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.col-series-cell .muted,
+.col-narrator-cell .muted {
+  color: #555;
+}
+
+/* Hide the Series/Narrator lines in the extra-details sub-row when the
+   dedicated columns are visible. The .list-narrow-only* classes are unhidden
+   at the same breakpoint where the columns collapse. */
+.list-narrow-only-block,
+.list-narrow-only-inline {
+  display: none;
+}
+
+/* Below 1100px the Series and Narrator columns collapse — surface them in
+   the existing extra-details sub-row instead. */
+@media (max-width: 1099px) {
+  .audiobook-list-item {
+    grid-template-columns: 40px 64px 1fr auto 120px;
+  }
+  .list-header {
+    grid-template-columns: 40px 64px 1fr auto 120px;
+  }
+  .list-header .col-series,
+  .list-header .col-narrator,
+  .col-series-cell,
+  .col-narrator-cell {
+    display: none;
+  }
+  .list-narrow-only-block {
+    display: block;
+  }
+  .list-narrow-only-inline {
+    display: inline;
+  }
 }
 
 /* Position badges between details and actions */

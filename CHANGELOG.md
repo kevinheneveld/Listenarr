@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Library list mode — Series and Narrator columns:** The audiobook list view now exposes dedicated Series and Narrator columns alongside Title/Author and Status. Each is sortable by clicking the header (toggles asc/desc; the column also reflects the toolbar sort dropdown's state). The Series cell prefers the primary `seriesMemberships` entry, falls back to the next by `sortOrder`, and finally to the legacy `series` field; multi-series books show a `+N` badge with a tooltip listing all memberships. The Narrator cell shows the first narrator with a `+N` badge and full-list tooltip. Series sorting is numeric-aware so `2 < 10` and `1.5` slots between `1` and `2`; standalone books sort to the end. Below 1100px the columns collapse and the existing extra-details sub-row regains the series/narrator lines to keep the info visible.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
