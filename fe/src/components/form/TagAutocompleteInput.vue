@@ -230,13 +230,74 @@ function normalize(value: string): string {
   flex: 1;
 }
 
+/* The .tag-input-group / .tag-input / .btn-add-tag styles below are intentional
+ * copies of EditAudiobookModal's scoped styles for the same class names. We
+ * can't rely on the parent's scoped CSS reaching into this child component, so
+ * the component carries its own copy and renders correctly anywhere it's used.
+ * Long-term these belong in a shared stylesheet (e.g. styles/components/tag-
+ * input.css) so both sites stay in lockstep — captured as a follow-up. */
 .tag-input-group {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .tag-input {
   flex: 1;
+  padding: 0.75rem 1rem;
+  background-color: #1a1a1a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  color: white;
+  font-size: 0.95rem;
+  transition: all 0.2s ease;
+}
+
+.tag-input:hover {
+  border-color: #555;
+}
+
+.tag-input:focus {
+  outline: none;
+  border-color: var(--brand-focus);
+  background-color: #2d2d2d;
+  box-shadow: 0 0 0 3px rgba(var(--brand-rgb), 0.1);
+}
+
+.tag-input::placeholder {
+  color: #666;
+}
+
+.btn-add-tag {
+  /* icon-only variant: use compact square size — matches EditAudiobookModal's
+   * scoped style so the plus icon renders centered against a square button. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem;
+  background-color: var(--brand-focus);
+  color: white;
+  border: none;
+  border-radius: var(--btn-radius);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: var(--control-height);
+  height: var(--control-height);
+}
+
+.btn-add-tag:hover:not(:disabled) {
+  background-color: #005fa3;
+  transform: translateY(-1px);
+}
+
+.btn-add-tag:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-add-tag:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .tag-autocomplete-list {
