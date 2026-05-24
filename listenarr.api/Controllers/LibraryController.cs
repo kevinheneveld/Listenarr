@@ -2328,17 +2328,30 @@ namespace Listenarr.Api.Controllers
                         })
                         .ToList();
 
+                    // Compute a "does this row's folder look like it actually
+                    // belongs to this book" score per row. Captures the
+                    // common "wrong ASIN got stamped on this row" symptom
+                    // where the same ASIN ends up on rows whose BasePath
+                    // points at totally different authors/books — the row
+                    // whose folder name matches the title and/or author is
+                    // the one we want.
+                    var audiobooksById = g.ToDictionary(a => a.Id);
+                    var pathScoreById = rows.ToDictionary(
+                        r => r.Id,
+                        r => PathMetadataMatchScore(audiobooksById[r.Id]));
+
                     // Winner-selection rule: prefer rows with files; among
                     // those, prefer single-file copies (one whole .m4b/.mp3)
                     // over chapter-file imports of the same book; then fall
-                    // back to file count, then real book folder, then lowest
-                    // Id. Exactly one row is flagged per group, and we
-                    // explain why.
+                    // back to file count, then real book folder, then
+                    // path-metadata alignment, then lowest Id. Exactly one
+                    // row is flagged per group, and we explain why.
                     var orderedForWinner = rows
                         .OrderByDescending(r => r.HasAnyFile)
                         .ThenByDescending(r => r.FileCount == 1)
                         .ThenByDescending(r => r.FileCount)
                         .ThenByDescending(r => r.HasBookFolder)
+                        .ThenByDescending(r => pathScoreById[r.Id])
                         .ThenBy(r => r.Id)
                         .ToList();
                     var winner = orderedForWinner.First();
@@ -2348,7 +2361,7 @@ namespace Listenarr.Api.Controllers
                     {
                         NormalizedAsin = g.Key,
                         Rows = rows.OrderBy(r => r.Id).ToList(),
-                        RecommendationReason = ExplainRecommendation(winner, rows),
+                        RecommendationReason = ExplainRecommendation(winner, rows, pathScoreById),
                     };
                 })
                 .ToList();
@@ -2362,7 +2375,10 @@ namespace Listenarr.Api.Controllers
         /// the ordering rules in <see cref="GetDuplicates"/> so the UI shows
         /// truth rather than a generic blurb.
         /// </summary>
-        private static string ExplainRecommendation(DuplicateRowDto winner, List<DuplicateRowDto> rows)
+        private static string ExplainRecommendation(
+            DuplicateRowDto winner,
+            List<DuplicateRowDto> rows,
+            Dictionary<int, int> pathScoreById)
         {
             var others = rows.Where(r => r.Id != winner.Id).ToList();
             if (winner.HasAnyFile && others.All(r => !r.HasAnyFile))
@@ -2383,11 +2399,68 @@ namespace Listenarr.Api.Controllers
             {
                 return "Only row with a real book folder; others have just an author or root folder.";
             }
+            // Path-metadata alignment: the row whose BasePath actually
+            // contains the title/author wins when others tie on the earlier
+            // signals. Common case: ASIN got cross-stamped onto a row whose
+            // folder belongs to a totally different book.
+            var winnerScore = pathScoreById[winner.Id];
+            var bestOtherScore = others.Any() ? others.Max(r => pathScoreById[r.Id]) : 0;
+            if (winnerScore > 0 && winnerScore > bestOtherScore)
+            {
+                return "Folder path matches the book's title/author metadata; the other rows' folders don't.";
+            }
             if (!winner.HasAnyFile && !winner.HasBookFolder)
             {
                 return "All rows are file-less and lack a real book folder; falling back to lowest Id.";
             }
-            return "Tied on files and folder shape; falling back to lowest Id.";
+            return "Tied on every signal; falling back to lowest Id.";
+        }
+
+        /// <summary>
+        /// Score how well <paramref name="audiobook"/>'s BasePath aligns with
+        /// its title/authors metadata. Used as a tiebreaker in
+        /// <see cref="GetDuplicates"/> so when two same-ASIN rows have
+        /// different folder shapes (one whose folder name matches the book,
+        /// one whose folder name belongs to a different author entirely), the
+        /// one that "belongs there" wins.
+        /// </summary>
+        /// <returns>0 = no match; 1 = author match; 2 = title match; 3 = both.</returns>
+        private static int PathMetadataMatchScore(Audiobook audiobook)
+        {
+            if (string.IsNullOrWhiteSpace(audiobook.BasePath)) return 0;
+            var pathNorm = NormalizeForPathMatch(audiobook.BasePath);
+            if (string.IsNullOrEmpty(pathNorm)) return 0;
+
+            var score = 0;
+            var titleNorm = NormalizeForPathMatch(audiobook.Title ?? string.Empty);
+            if (titleNorm.Length >= 5 && pathNorm.Contains(titleNorm, StringComparison.Ordinal))
+            {
+                score += 2;
+            }
+            if (audiobook.Authors != null)
+            {
+                foreach (var author in audiobook.Authors)
+                {
+                    var authorNorm = NormalizeForPathMatch(author ?? string.Empty);
+                    if (authorNorm.Length >= 3 && pathNorm.Contains(authorNorm, StringComparison.Ordinal))
+                    {
+                        score += 1;
+                        break;
+                    }
+                }
+            }
+            return score;
+        }
+
+        private static string NormalizeForPathMatch(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            var sb = new StringBuilder(s.Length);
+            foreach (var ch in s)
+            {
+                if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
+            }
+            return sb.ToString();
         }
 
         /// <summary>
@@ -2520,7 +2593,51 @@ namespace Listenarr.Api.Controllers
                 }
             }
 
-            // Execute everything inside one transaction. Reassignments are
+            var result = new MergeDuplicatesResultDto();
+
+            // Pre-transaction: filesystem cleanup for every Discard target.
+            // The DeleteAudiobookFilesystemAsync helper is best-effort —
+            // failures (missing folder, perms, etc.) become warnings and the
+            // DB delete still proceeds, matching how the single-row
+            // DeleteAudiobook endpoint behaves. We do this BEFORE the DB
+            // transaction because filesystem ops aren't transactional anyway;
+            // partial filesystem state is acceptable, but a DB-only delete
+            // that leaves orphan files would be worse.
+            var allLoserIds = nonEmptyMerges
+                .SelectMany(p => (p.LoserIds ?? new List<int>())
+                    .Distinct()
+                    .Where(id => id != (p.WinnerId ?? -1)))
+                .Distinct()
+                .ToList();
+            if (allLoserIds.Count > 0)
+            {
+                var loserAudiobooks = await db.Audiobooks
+                    .AsNoTracking()
+                    .Include(a => a.Files)
+                    .Where(a => allLoserIds.Contains(a.Id))
+                    .ToListAsync(ct);
+                foreach (var loser in loserAudiobooks)
+                {
+                    try
+                    {
+                        var fsResult = await DeleteAudiobookFilesystemAsync(loser, deleteFolder: true);
+                        result.DiskFilesDeleted += fsResult.DeletedFiles;
+                        if (fsResult.DeletedFolder) result.DiskFoldersDeleted++;
+                        if (fsResult.DeletedParentFolder) result.DiskParentFoldersDeleted++;
+                        foreach (var w in fsResult.Warnings)
+                        {
+                            result.Warnings.Add($"audiobook id {loser.Id}: {w}");
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        _logger.LogWarning(ex, "Filesystem cleanup failed for discarded audiobook {Id}", loser.Id);
+                        result.Warnings.Add($"audiobook id {loser.Id}: filesystem cleanup failed: {ex.Message}");
+                    }
+                }
+            }
+
+            // Execute DB ops inside one transaction. Reassignments are
             // simple UPDATE on plain FK columns (no DB constraint); the
             // audiobook delete cascades to AudiobookFiles,
             // AudiobookExternalIdentifiers, and AudiobookSeriesMemberships per
@@ -2534,8 +2651,6 @@ namespace Listenarr.Api.Controllers
             Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? tx = supportsTransactions
                 ? await db.Database.BeginTransactionAsync(ct)
                 : null;
-
-            var result = new MergeDuplicatesResultDto();
             try
             {
                 foreach (var pair in nonEmptyMerges)
@@ -2603,8 +2718,9 @@ namespace Listenarr.Api.Controllers
             }
 
             _logger.LogInformation(
-                "Resolved {Groups} duplicate audiobook groups: deleted {Deleted} rows, cleared {Cleared} ASINs, reassigned {Downloads} downloads / {History} history / {MoveJobs} move jobs",
+                "Resolved {Groups} duplicate audiobook groups: deleted {Deleted} rows, cleared {Cleared} ASINs, removed {DiskFiles} files / {DiskFolders} folders from disk, reassigned {Downloads} downloads / {History} history / {MoveJobs} move jobs",
                 result.GroupsProcessed, result.RowsDeleted, result.AsinsCleared,
+                result.DiskFilesDeleted, result.DiskFoldersDeleted,
                 result.DownloadsReassigned, result.HistoryReassigned, result.MoveJobsReassigned);
 
             return Ok(result);

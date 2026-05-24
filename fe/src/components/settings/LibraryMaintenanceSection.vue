@@ -23,8 +23,10 @@
       <div class="action-text">
         <div class="action-label">Find duplicate audiobooks</div>
         <p class="action-help">
-          Find audiobook rows that share the same ASIN. Pick which row to keep per group;
-          the rest are removed (files on disk are not touched).
+          Find audiobook rows that share the same ASIN and resolve each group: keep one,
+          discard the rest (deletes their files and folders from disk), or just clear the
+          ASIN on a row that got it stamped by mistake. Confirmation panel before anything
+          is applied.
         </p>
         <p v-if="lastResultMessage" class="action-result">{{ lastResultMessage }}</p>
       </div>
@@ -53,7 +55,13 @@ function onMerged(result: MergeDuplicatesResult) {
   const parts: string[] = []
   parts.push(`Resolved ${result.groupsProcessed} group${result.groupsProcessed === 1 ? '' : 's'}`)
   if (result.rowsDeleted > 0) {
-    parts.push(`removed ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+    parts.push(`discarded ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+  }
+  if (result.diskFilesDeleted > 0) {
+    parts.push(`deleted ${result.diskFilesDeleted} file${result.diskFilesDeleted === 1 ? '' : 's'} from disk`)
+  }
+  if (result.diskFoldersDeleted > 0) {
+    parts.push(`removed ${result.diskFoldersDeleted} folder${result.diskFoldersDeleted === 1 ? '' : 's'}`)
   }
   if (result.asinsCleared > 0) {
     parts.push(`cleared ${result.asinsCleared} ASIN${result.asinsCleared === 1 ? '' : 's'}`)
@@ -63,6 +71,11 @@ function onMerged(result: MergeDuplicatesResult) {
   }
   if (result.historyReassigned > 0) {
     parts.push(`reassigned ${result.historyReassigned} history entries`)
+  }
+  if (result.warnings && result.warnings.length > 0) {
+    parts.push(
+      `${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'} (see server logs)`,
+    )
   }
   lastResultMessage.value = parts.join(', ') + '.'
 }
