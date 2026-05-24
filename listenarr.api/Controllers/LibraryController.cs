@@ -2294,11 +2294,12 @@ namespace Listenarr.Api.Controllers
                     var rows = g
                         .Select(a =>
                         {
-                            // Sort files naturally so "Part 01" precedes "Part 10" — same
-                            // helper that the audiobook detail page uses, keeping the dedup
-                            // modal's file list in the order a user would actually expect.
+                            // Sort files by path so chapters list in a stable order.
+                            // Zero-padded numeric prefixes (01, 02, ... 10) sort correctly
+                            // alphabetically; the audiobook detail view does richer natural
+                            // sort, but for a preview modal alphabetical is fine.
                             var files = filesByAudiobookId.TryGetValue(a.Id, out var fs)
-                                ? AudiobookFileOrdering.InNaturalOrder(fs).ToList()
+                                ? fs.OrderBy(f => f.Path ?? string.Empty, StringComparer.Ordinal).ToList()
                                 : new List<AudiobookFile>();
                             var fileCount = files.Count;
                             var hasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath);
@@ -2329,6 +2330,7 @@ namespace Listenarr.Api.Controllers
                                     Bitrate = f.Bitrate,
                                 }).ToList(),
                                 TotalSize = files.Sum(f => f.Size ?? 0L),
+                                LikelyDuplicateFileCount = CountIntraRowDuplicates(files),
                             };
                         })
                         .ToList();
@@ -2352,6 +2354,16 @@ namespace Listenarr.Api.Controllers
                         r => r.Id,
                         r => r.Files.Where(f => f.Bitrate.HasValue).Select(f => f.Bitrate!.Value).DefaultIfEmpty(0).Max());
 
+                    // Effective unique file count: total files minus the count
+                    // of files that look like duplicate naming variants of
+                    // another file on the same row. Two rows that both
+                    // represent a 57-chapter book — one of them with each
+                    // chapter imported twice in different naming styles —
+                    // should be treated as equally complete, not 114 > 57.
+                    var effectiveFileCountById = rows.ToDictionary(
+                        r => r.Id,
+                        r => r.FileCount - r.LikelyDuplicateFileCount);
+
                     // Winner-selection rule, in order of importance:
                     //  1. Has any file (a row with no playable file is never
                     //     a winner unless every row is fileless).
@@ -2360,18 +2372,23 @@ namespace Listenarr.Api.Controllers
                     //     single file of the same book.
                     //  3. Single-file (FileCount == 1) — Kevin's stated
                     //     preference among rows of equal quality.
-                    //  4. More tracked files (when neither is single-file,
-                    //     a more-complete import wins).
-                    //  5. Real book folder shape.
-                    //  6. Path-metadata alignment (folder name matches the
+                    //  4. More unique tracked files (FileCount minus
+                    //     LikelyDuplicateFileCount). A 114-file row whose
+                    //     filenames pair up as 57×2 naming variants is
+                    //     effectively 57, not 114.
+                    //  5. Fewer intra-row dupes (cleaner content beats a
+                    //     row that needs deduping after merge).
+                    //  6. Real book folder shape.
+                    //  7. Path-metadata alignment (folder name matches the
                     //     book's title/author — catches stray ASINs that
                     //     landed on the wrong row).
-                    //  7. Lowest Id (stable tiebreaker).
+                    //  8. Lowest Id (stable tiebreaker).
                     var orderedForWinner = rows
                         .OrderByDescending(r => r.HasAnyFile)
                         .ThenByDescending(r => maxBitrateById[r.Id])
                         .ThenByDescending(r => r.FileCount == 1)
-                        .ThenByDescending(r => r.FileCount)
+                        .ThenByDescending(r => effectiveFileCountById[r.Id])
+                        .ThenBy(r => r.LikelyDuplicateFileCount)
                         .ThenByDescending(r => r.HasBookFolder)
                         .ThenByDescending(r => pathScoreById[r.Id])
                         .ThenBy(r => r.Id)
@@ -2421,6 +2438,15 @@ namespace Listenarr.Api.Controllers
             if (winner.HasAnyFile && winner.FileCount == 1 && others.Any(r => r.FileCount > 1))
             {
                 return "Single-file copy (preferred over chapter-file imports of equal bitrate).";
+            }
+            // Two rows might "tie" on raw count but the winner has cleaner
+            // content (fewer naming-variant duplicates of the same chapter).
+            if (winner.HasAnyFile && others.Any(r => r.HasAnyFile)
+                && winner.LikelyDuplicateFileCount == 0
+                && others.Any(r => r.LikelyDuplicateFileCount > 0))
+            {
+                var dirtiest = others.OrderByDescending(r => r.LikelyDuplicateFileCount).First();
+                return $"Cleaner file list (no naming-variant duplicates; other rows have up to {dirtiest.LikelyDuplicateFileCount} likely dupes).";
             }
             if (winner.HasAnyFile && others.Any(r => r.HasAnyFile) && winner.FileCount > others.Max(r => r.FileCount))
             {
@@ -2492,6 +2518,46 @@ namespace Listenarr.Api.Controllers
                 if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
             }
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Count files on a row that look like they're paired up as the same
+        /// chapter imported in two naming styles (e.g.
+        /// <c>"01 Prologue_ Fortress of the Light.mp3"</c> and
+        /// <c>"01. Prologue -  Fortress of the Light.mp3"</c>). Returns the
+        /// count of "extra" files — i.e. <c>totalFiles - distinctSignatures</c>,
+        /// so a row of 114 files with 57 unique normalized filenames reports
+        /// 57 likely duplicates.
+        /// </summary>
+        private static int CountIntraRowDuplicates(IReadOnlyCollection<AudiobookFile> files)
+        {
+            if (files == null || files.Count <= 1) return 0;
+            var signatures = new HashSet<string>(StringComparer.Ordinal);
+            var counted = 0;
+            foreach (var f in files)
+            {
+                var sig = NormalizeForFilenameMatch(System.IO.Path.GetFileNameWithoutExtension(f.Path ?? string.Empty));
+                if (string.IsNullOrEmpty(sig)) { counted++; continue; }
+                if (!signatures.Add(sig)) counted++;
+            }
+            return counted;
+
+            static string NormalizeForFilenameMatch(string s)
+            {
+                if (string.IsNullOrEmpty(s)) return string.Empty;
+                // Lowercase, strip non-alphanumeric (so "_", "-", ".", " " all
+                // collapse to the same separator), then collapse runs of
+                // letters/digits. The two naming styles
+                //   "01 Prologue_ Fortress of the Light"
+                //   "01. Prologue -  Fortress of the Light"
+                // both collapse to "01prologuefortressofthelight".
+                var sb = new StringBuilder(s.Length);
+                foreach (var ch in s)
+                {
+                    if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
+                }
+                return sb.ToString();
+            }
         }
 
         /// <summary>

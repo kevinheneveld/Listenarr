@@ -1114,6 +1114,9 @@ export interface DuplicateRow {
   runtime: number | null
   files: DuplicateFile[]
   totalSize: number
+  /** Files on this row that pair up with another file as likely naming-variant
+   *  duplicates of the same chapter (e.g. "01 X.mp3" and "01. X.mp3"). */
+  likelyDuplicateFileCount: number
 }
 
 export interface DuplicateGroup {
