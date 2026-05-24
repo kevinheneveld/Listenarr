@@ -2266,12 +2266,23 @@ namespace Listenarr.Api.Controllers
         public async Task<IActionResult> GetDuplicates()
         {
             var allAudiobooks = await _repo.GetAllAsync();
-            // Pre-compute a single-pass file-count map for every audiobook so
-            // the response can show how much disk content each candidate has.
+            // Find the in-scope audiobook ids first so we only load files for
+            // rows that actually appear in a duplicate group.
+            var dupeAudiobookIds = allAudiobooks
+                .Where(a => !string.IsNullOrWhiteSpace(a.Asin))
+                .GroupBy(a => a.Asin!.Trim().ToUpperInvariant())
+                .Where(g => g.Count() > 1)
+                .SelectMany(g => g.Select(a => a.Id))
+                .ToHashSet();
+
+            // Pre-compute the file map for the in-scope ids so the response
+            // can surface per-row size / bitrate / format for verifying
+            // "is this really the same book?" before merging.
             var allFiles = await _audioFileRepository.GetAllAsync();
-            var fileCountByAudiobookId = allFiles
+            var filesByAudiobookId = allFiles
+                .Where(f => dupeAudiobookIds.Contains(f.AudiobookId))
                 .GroupBy(f => f.AudiobookId)
-                .ToDictionary(g => g.Key, g => g.Count());
+                .ToDictionary(g => g.Key, g => g.ToList());
 
             var groups = allAudiobooks
                 .Where(a => !string.IsNullOrWhiteSpace(a.Asin))
@@ -2283,7 +2294,9 @@ namespace Listenarr.Api.Controllers
                     var rows = g
                         .Select(a =>
                         {
-                            var fileCount = fileCountByAudiobookId.TryGetValue(a.Id, out var fc) ? fc : 0;
+                            var files = filesByAudiobookId.TryGetValue(a.Id, out var fs) ? fs : new List<AudiobookFile>();
+                            var fileCount = files.Count;
+                            var hasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath);
                             return new DuplicateRowDto
                             {
                                 Id = a.Id,
@@ -2295,31 +2308,76 @@ namespace Listenarr.Api.Controllers
                                 FilePath = a.FilePath,
                                 ImageUrl = a.ImageUrl,
                                 FileCount = fileCount,
-                                HasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath),
+                                HasAnyFile = hasAnyFile,
                                 HasBookFolder = HasRealBookFolder(a.BasePath),
+                                Authors = a.Authors ?? new List<string>(),
+                                Narrators = a.Narrators ?? new List<string>(),
+                                Runtime = a.Runtime,
+                                Files = files.Select(f => new DuplicateFileDto
+                                {
+                                    Id = f.Id,
+                                    Path = f.Path,
+                                    Size = f.Size,
+                                    DurationSeconds = f.DurationSeconds,
+                                    Format = f.Format,
+                                    Codec = f.Codec,
+                                    Bitrate = f.Bitrate,
+                                }).ToList(),
+                                TotalSize = files.Sum(f => f.Size ?? 0L),
                             };
                         })
                         .ToList();
 
                     // Same winner-selection rule as the SQL cleanup: files > real
                     // book folder > lowest Id. Exactly one row is flagged per
-                    // group.
-                    var winner = rows
+                    // group, and we explain why.
+                    var orderedForWinner = rows
                         .OrderByDescending(r => r.HasAnyFile)
+                        .ThenByDescending(r => r.FileCount)
                         .ThenByDescending(r => r.HasBookFolder)
                         .ThenBy(r => r.Id)
-                        .First();
+                        .ToList();
+                    var winner = orderedForWinner.First();
                     winner.RecommendedWinner = true;
 
                     return new DuplicateGroupDto
                     {
                         NormalizedAsin = g.Key,
                         Rows = rows.OrderBy(r => r.Id).ToList(),
+                        RecommendationReason = ExplainRecommendation(winner, rows),
                     };
                 })
                 .ToList();
 
             return Ok(new { groups, totalGroups = groups.Count });
+        }
+
+        /// <summary>
+        /// Produce a short, user-facing reason describing why
+        /// <paramref name="winner"/> was preferred over the other rows. Mirrors
+        /// the ordering rules in <see cref="GetDuplicates"/> so the UI shows
+        /// truth rather than a generic blurb.
+        /// </summary>
+        private static string ExplainRecommendation(DuplicateRowDto winner, List<DuplicateRowDto> rows)
+        {
+            var others = rows.Where(r => r.Id != winner.Id).ToList();
+            if (winner.HasAnyFile && others.All(r => !r.HasAnyFile))
+            {
+                return "Only row with tracked files.";
+            }
+            if (winner.HasAnyFile && others.Any(r => r.HasAnyFile) && winner.FileCount > others.Max(r => r.FileCount))
+            {
+                return $"Most tracked files ({winner.FileCount} vs {others.Max(r => r.FileCount)}).";
+            }
+            if (winner.HasBookFolder && others.All(r => !r.HasBookFolder))
+            {
+                return "Only row with a real book folder; others have just an author or root folder.";
+            }
+            if (!winner.HasAnyFile && !winner.HasBookFolder)
+            {
+                return "All rows are file-less and lack a real book folder; falling back to lowest Id.";
+            }
+            return "Tied on files and folder shape; falling back to lowest Id.";
         }
 
         /// <summary>
@@ -2343,25 +2401,31 @@ namespace Listenarr.Api.Controllers
                 return BadRequest(new { message = "No merges provided" });
             }
 
-            // Strip out trivially-empty merges first so we don't open a DB
+            // Strip out trivially-empty pairs first so we don't open a DB
             // transaction just to do nothing.
             var nonEmptyMerges = request.Merges
-                .Where(m => m.LoserIds != null && m.LoserIds.Any(id => id != m.WinnerId))
+                .Where(m =>
+                    (m.LoserIds != null && m.LoserIds.Any(id => id != (m.WinnerId ?? -1))) ||
+                    (m.ClearAsinIds != null && m.ClearAsinIds.Count > 0))
                 .ToList();
             if (nonEmptyMerges.Count == 0)
             {
-                return BadRequest(new { message = "All merges had no losers" });
+                return BadRequest(new { message = "No actionable merges or clear-ASIN entries" });
             }
 
             var ct = HttpContext?.RequestAborted ?? CancellationToken.None;
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<ListenArrDbContext>();
 
-            // Validation pass: every winner + losers tuple must share the same
-            // normalized ASIN. Aborts the whole request on first mismatch so
-            // the user can fix their selection before retrying.
+            // Validation pass: every winner + losers + clearAsinIds tuple must
+            // share the same normalized ASIN. Aborts the whole request on
+            // first mismatch so the user can fix their selection before
+            // retrying.
             var allIds = nonEmptyMerges
-                .SelectMany(m => new[] { m.WinnerId }.Concat(m.LoserIds))
+                .SelectMany(m =>
+                    (m.WinnerId.HasValue ? new[] { m.WinnerId.Value } : Array.Empty<int>())
+                    .Concat(m.LoserIds ?? new List<int>())
+                    .Concat(m.ClearAsinIds ?? new List<int>()))
                 .Distinct()
                 .ToList();
             var rowsById = await db.Audiobooks
@@ -2372,40 +2436,87 @@ namespace Listenarr.Api.Controllers
 
             foreach (var pair in nonEmptyMerges)
             {
-                if (!rowsById.TryGetValue(pair.WinnerId, out var winner))
+                var losers = (pair.LoserIds ?? new List<int>()).Distinct().Where(id => id != (pair.WinnerId ?? -1)).ToList();
+                var clears = (pair.ClearAsinIds ?? new List<int>()).Distinct().ToList();
+
+                // Pick a reference ASIN: the winner's if present, otherwise any
+                // loser's, otherwise any clear's. All other ids in the pair
+                // must agree with it.
+                string referenceAsin = string.Empty;
+                int referenceId = 0;
+                if (pair.WinnerId.HasValue)
                 {
-                    return BadRequest(new { message = $"Winner id {pair.WinnerId} not found" });
+                    if (!rowsById.TryGetValue(pair.WinnerId.Value, out var w))
+                    {
+                        return BadRequest(new { message = $"Winner id {pair.WinnerId} not found" });
+                    }
+                    referenceAsin = (w.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                    if (string.IsNullOrEmpty(referenceAsin))
+                    {
+                        return BadRequest(new { message = $"Winner id {pair.WinnerId} has no ASIN — refusing to merge without one" });
+                    }
+                    referenceId = pair.WinnerId.Value;
                 }
-                var winnerAsin = (winner.Asin ?? string.Empty).Trim().ToUpperInvariant();
-                if (string.IsNullOrEmpty(winnerAsin))
+                else if (losers.Count > 0)
                 {
-                    return BadRequest(new { message = $"Winner id {pair.WinnerId} has no ASIN — refusing to merge without one" });
+                    return BadRequest(new { message = "Pair has losers but no winnerId — losers must merge into a winner" });
                 }
-                foreach (var loserId in pair.LoserIds.Distinct())
+                else if (clears.Count > 0)
                 {
-                    if (loserId == pair.WinnerId) continue;
+                    // ASIN-clear-only pair: any clear id supplies the reference
+                    // ASIN, every other must match.
+                    var firstClearId = clears[0];
+                    if (!rowsById.TryGetValue(firstClearId, out var c))
+                    {
+                        return BadRequest(new { message = $"Clear-ASIN id {firstClearId} not found" });
+                    }
+                    referenceAsin = (c.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                    if (string.IsNullOrEmpty(referenceAsin))
+                    {
+                        return BadRequest(new { message = $"Clear-ASIN id {firstClearId} already has no ASIN" });
+                    }
+                    referenceId = firstClearId;
+                }
+
+                foreach (var loserId in losers)
+                {
                     if (!rowsById.TryGetValue(loserId, out var loser))
                     {
                         return BadRequest(new { message = $"Loser id {loserId} not found" });
                     }
                     var loserAsin = (loser.Asin ?? string.Empty).Trim().ToUpperInvariant();
-                    if (loserAsin != winnerAsin)
+                    if (loserAsin != referenceAsin)
                     {
                         return BadRequest(new
                         {
-                            message = $"Loser id {loserId} ASIN {loserAsin} does not match winner id {pair.WinnerId} ASIN {winnerAsin}"
+                            message = $"Loser id {loserId} ASIN {loserAsin} does not match reference id {referenceId} ASIN {referenceAsin}"
+                        });
+                    }
+                }
+                foreach (var clearId in clears)
+                {
+                    if (!rowsById.TryGetValue(clearId, out var c))
+                    {
+                        return BadRequest(new { message = $"Clear-ASIN id {clearId} not found" });
+                    }
+                    var clearAsin = (c.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                    if (clearAsin != referenceAsin)
+                    {
+                        return BadRequest(new
+                        {
+                            message = $"Clear-ASIN id {clearId} ASIN {clearAsin} does not match reference id {referenceId} ASIN {referenceAsin}"
                         });
                     }
                 }
             }
 
-            // Execute the merges inside one transaction. Each FK column on
-            // Downloads / History / MoveJobs is a plain column (no DB-side
-            // constraint), so the reassignment is an UPDATE; the audiobook
-            // delete cascades to AudiobookFiles, AudiobookExternalIdentifiers,
-            // and AudiobookSeriesMemberships per their FK definitions.
-            // EF Core's InMemory provider doesn't support transactions; skip
-            // the wrapper there so the unit tests can exercise the merge logic.
+            // Execute everything inside one transaction. Reassignments are
+            // simple UPDATE on plain FK columns (no DB constraint); the
+            // audiobook delete cascades to AudiobookFiles,
+            // AudiobookExternalIdentifiers, and AudiobookSeriesMemberships per
+            // their FK definitions. Clear-ASIN nulls the column on the row.
+            // The InMemory test provider doesn't support transactions; skip
+            // the wrapper there so the unit tests can exercise the logic.
             var supportsTransactions = !string.Equals(
                 db.Database.ProviderName,
                 "Microsoft.EntityFrameworkCore.InMemory",
@@ -2419,36 +2530,49 @@ namespace Listenarr.Api.Controllers
             {
                 foreach (var pair in nonEmptyMerges)
                 {
-                    var losers = pair.LoserIds.Distinct().Where(id => id != pair.WinnerId).ToList();
-                    if (losers.Count == 0) continue;
+                    var losers = (pair.LoserIds ?? new List<int>()).Distinct().Where(id => id != (pair.WinnerId ?? -1)).ToList();
+                    var clears = (pair.ClearAsinIds ?? new List<int>()).Distinct().Except(losers).ToList();
+                    if (losers.Count == 0 && clears.Count == 0) continue;
 
-                    // Load + update + save instead of ExecuteUpdateAsync so the
-                    // logic works against both SQLite (production) and the
-                    // in-memory test provider, which doesn't support
-                    // ExecuteUpdate.
-                    var downloads = await db.Downloads
-                        .Where(d => d.AudiobookId != null && losers.Contains(d.AudiobookId.Value))
-                        .ToListAsync(ct);
-                    foreach (var d in downloads) d.AudiobookId = pair.WinnerId;
-                    result.DownloadsReassigned += downloads.Count;
+                    // Reassign FK refs from losers to winner, then delete.
+                    if (losers.Count > 0 && pair.WinnerId.HasValue)
+                    {
+                        var winnerId = pair.WinnerId.Value;
 
-                    var historyRows = await db.History
-                        .Where(h => h.AudiobookId != null && losers.Contains(h.AudiobookId.Value))
-                        .ToListAsync(ct);
-                    foreach (var h in historyRows) h.AudiobookId = pair.WinnerId;
-                    result.HistoryReassigned += historyRows.Count;
+                        var downloads = await db.Downloads
+                            .Where(d => d.AudiobookId != null && losers.Contains(d.AudiobookId.Value))
+                            .ToListAsync(ct);
+                        foreach (var d in downloads) d.AudiobookId = winnerId;
+                        result.DownloadsReassigned += downloads.Count;
 
-                    var moveJobs = await db.MoveJobs
-                        .Where(j => losers.Contains(j.AudiobookId))
-                        .ToListAsync(ct);
-                    foreach (var j in moveJobs) j.AudiobookId = pair.WinnerId;
-                    result.MoveJobsReassigned += moveJobs.Count;
+                        var historyRows = await db.History
+                            .Where(h => h.AudiobookId != null && losers.Contains(h.AudiobookId.Value))
+                            .ToListAsync(ct);
+                        foreach (var h in historyRows) h.AudiobookId = winnerId;
+                        result.HistoryReassigned += historyRows.Count;
 
-                    var loserRows = await db.Audiobooks
-                        .Where(a => losers.Contains(a.Id))
-                        .ToListAsync(ct);
-                    db.Audiobooks.RemoveRange(loserRows);
-                    result.RowsDeleted += loserRows.Count;
+                        var moveJobs = await db.MoveJobs
+                            .Where(j => losers.Contains(j.AudiobookId))
+                            .ToListAsync(ct);
+                        foreach (var j in moveJobs) j.AudiobookId = winnerId;
+                        result.MoveJobsReassigned += moveJobs.Count;
+
+                        var loserRows = await db.Audiobooks
+                            .Where(a => losers.Contains(a.Id))
+                            .ToListAsync(ct);
+                        db.Audiobooks.RemoveRange(loserRows);
+                        result.RowsDeleted += loserRows.Count;
+                    }
+
+                    // Clear ASIN on rows the user wants to keep but un-dupe.
+                    if (clears.Count > 0)
+                    {
+                        var clearRows = await db.Audiobooks
+                            .Where(a => clears.Contains(a.Id))
+                            .ToListAsync(ct);
+                        foreach (var c in clearRows) c.Asin = null;
+                        result.AsinsCleared += clearRows.Count;
+                    }
 
                     await db.SaveChangesAsync(ct);
 
@@ -2469,8 +2593,8 @@ namespace Listenarr.Api.Controllers
             }
 
             _logger.LogInformation(
-                "Merged {Groups} duplicate audiobook groups: deleted {Deleted} rows, reassigned {Downloads} downloads / {History} history / {MoveJobs} move jobs",
-                result.GroupsProcessed, result.RowsDeleted,
+                "Resolved {Groups} duplicate audiobook groups: deleted {Deleted} rows, cleared {Cleared} ASINs, reassigned {Downloads} downloads / {History} history / {MoveJobs} move jobs",
+                result.GroupsProcessed, result.RowsDeleted, result.AsinsCleared,
                 result.DownloadsReassigned, result.HistoryReassigned, result.MoveJobsReassigned);
 
             return Ok(result);
