@@ -139,7 +139,7 @@
           </template>
         </div>
 
-        <footer class="modal-footer">
+        <footer v-if="!results" class="modal-footer">
           <template v-if="!pendingConfirm">
             <div class="footer-summary">
               <span v-if="!loading && preview">
@@ -158,6 +158,33 @@
               >
                 Apply…
               </button>
+            </div>
+          </template>
+
+          <template v-else-if="results">
+            <div class="results-panel">
+              <div class="results-title">Move queue status</div>
+              <div class="results-tally">
+                <span class="pill pill-action">{{ runningCount }} in flight</span>
+                <span class="pill pill-ok">{{ completedCount }} completed</span>
+                <span class="pill pill-err">{{ failedCount }} failed</span>
+                <span class="results-meta">{{ queuedCount }} queued · {{ skippedCount }} skipped · {{ failedToQueueCount }} failed to queue</span>
+              </div>
+              <ul v-if="failedJobs.length > 0" class="results-failures">
+                <li v-for="job in failedJobs" :key="job.jobId">
+                  <strong>{{ jobTitleFor(job.jobId) || `id ${jobAudiobookFor(job.jobId)}` }}</strong>
+                  <span class="results-error">{{ jobErrorFor(job.jobId) || '(no error text)' }}</span>
+                </li>
+              </ul>
+              <ul v-if="skippedDetails.length > 0" class="results-failures">
+                <li v-for="(s, i) in skippedDetails" :key="`skip-${i}`">
+                  <strong>id {{ s.audiobookId }}</strong>
+                  <span class="results-error">{{ s.reason }}</span>
+                </li>
+              </ul>
+              <div class="confirm-actions">
+                <button type="button" class="btn" @click="onClose">Close</button>
+              </div>
             </div>
           </template>
 
@@ -201,12 +228,21 @@ import { ref, computed, watch, reactive } from 'vue'
 import { PhX } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
+import { signalRService } from '@/services/signalr'
 import { errorTracking } from '@/services/errorTracking'
 import type {
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
   OrganizePreviewRow,
 } from '@/types'
+
+interface JobState {
+  audiobookId: number
+  audiobookTitle: string | null
+  targetPath: string | null
+  status: string
+  error: string | null
+}
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{
@@ -223,6 +259,38 @@ const selected = reactive<Record<number, boolean>>({})
 const applying = ref(false)
 const applyError = ref<string | null>(null)
 const pendingConfirm = ref(false)
+const results = ref<OrganizeLibraryApplyResult | null>(null)
+const jobs = reactive<Record<string, JobState>>({})
+let unsubMoveJob: (() => void) | null = null
+
+const queuedCount = computed(() => results.value?.queued ?? 0)
+const skippedCount = computed(() => results.value?.skipped ?? 0)
+const failedToQueueCount = computed(() => results.value?.failedToQueue ?? 0)
+const skippedDetails = computed(() => results.value?.skippedDetails ?? [])
+
+const failedJobs = computed(() => {
+  if (!results.value) return []
+  return results.value.queuedJobs.filter((j) => jobs[j.jobId]?.status === 'Failed')
+})
+const completedCount = computed(() => {
+  if (!results.value) return 0
+  return results.value.queuedJobs.filter((j) => jobs[j.jobId]?.status === 'Completed').length
+})
+const failedCount = computed(() => failedJobs.value.length)
+const runningCount = computed(() => {
+  if (!results.value) return 0
+  return results.value.queuedJobs.length - completedCount.value - failedCount.value
+})
+
+function jobTitleFor(jobId: string): string | null {
+  return jobs[jobId]?.audiobookTitle || null
+}
+function jobAudiobookFor(jobId: string): number | null {
+  return jobs[jobId]?.audiobookId ?? null
+}
+function jobErrorFor(jobId: string): string | null {
+  return jobs[jobId]?.error || null
+}
 
 const willMoveRows = computed(() => preview.value?.rows.filter((r) => r.status === 'will_move') ?? [])
 const invalidRows = computed(() => preview.value?.rows.filter((r) => r.status === 'invalid_target') ?? [])
@@ -266,6 +334,9 @@ async function load() {
   loadError.value = null
   applyError.value = null
   for (const k of Object.keys(selected)) delete selected[Number(k)]
+  for (const k of Object.keys(jobs)) delete jobs[k]
+  results.value = null
+  unsubscribeMoveJobs()
   pendingConfirm.value = false
   try {
     const resp = await apiService.getOrganizeLibraryPreview()
@@ -296,6 +367,21 @@ async function executeApply() {
   try {
     const result = await apiService.applyOrganizeLibrary(ids)
     emit('organized', result)
+    // Seed jobs state from the apply response so the results panel can
+    // render immediately; SignalR MoveJobUpdate then fills in error text
+    // as each background move finishes (Completed or Failed).
+    for (const k of Object.keys(jobs)) delete jobs[k]
+    for (const j of result.queuedJobs) {
+      jobs[j.jobId] = {
+        audiobookId: j.audiobookId,
+        audiobookTitle: j.audiobookTitle,
+        targetPath: j.targetPath,
+        status: 'Queued',
+        error: null,
+      }
+    }
+    subscribeMoveJobs()
+    results.value = result
     const parts: string[] = [`Queued ${result.queued} move${result.queued === 1 ? '' : 's'}`]
     if (result.skipped > 0) parts.push(`${result.skipped} skipped`)
     if (result.failedToQueue > 0) parts.push(`${result.failedToQueue} failed to queue`)
@@ -305,7 +391,6 @@ async function executeApply() {
     } else {
       toast.success('Organize library', summary)
     }
-    onClose()
   } catch (err) {
     applyError.value = err instanceof Error ? err.message : 'Unknown error'
     errorTracking.captureException(err as Error, {
@@ -317,8 +402,27 @@ async function executeApply() {
   }
 }
 
+function subscribeMoveJobs() {
+  if (unsubMoveJob) return
+  unsubMoveJob = signalRService.onMoveJobUpdate((job) => {
+    if (!job || !job.jobId) return
+    const existing = jobs[job.jobId]
+    if (!existing) return // not one of ours
+    existing.status = job.status
+    existing.error = job.error || null
+  })
+}
+
+function unsubscribeMoveJobs() {
+  if (unsubMoveJob) {
+    try { unsubMoveJob() } catch { /* ignore */ }
+    unsubMoveJob = null
+  }
+}
+
 function onClose() {
   if (applying.value) return
+  unsubscribeMoveJobs()
   emit('close')
 }
 
@@ -456,6 +560,57 @@ watch(
   background: rgba(240, 176, 96, 0.12);
   color: #e8b070;
   border-color: rgba(176, 128, 64, 0.3);
+}
+.pill-err {
+  background: rgba(240, 96, 96, 0.12);
+  color: #f06060;
+  border-color: rgba(176, 64, 64, 0.3);
+}
+.results-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.results-title {
+  font-size: 13px;
+  color: #fff;
+  font-weight: 600;
+}
+.results-tally {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.results-meta {
+  font-size: 11px;
+  color: #999;
+}
+.results-failures {
+  margin: 0;
+  padding-left: 16px;
+  color: #ddd;
+  font-size: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.results-failures li {
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.results-failures strong {
+  color: #fff;
+  font-size: 12px;
+}
+.results-error {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #f06060;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .section {
   margin-bottom: 18px;

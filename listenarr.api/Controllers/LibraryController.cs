@@ -3333,7 +3333,13 @@ namespace Listenarr.Api.Controllers
                     var sourcePath = NormalizeOrganizePath(audiobook.BasePath);
                     var jobId = await _moveQueueService.EnqueueMoveAsync(audiobook.Id, target, sourcePath);
                     result.Queued++;
-                    result.JobIds.Add(jobId.ToString());
+                    result.QueuedJobs.Add(new OrganizeQueuedJobDto
+                    {
+                        JobId = jobId.ToString(),
+                        AudiobookId = audiobook.Id,
+                        AudiobookTitle = audiobook.Title,
+                        TargetPath = target,
+                    });
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                 {

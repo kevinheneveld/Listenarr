@@ -226,7 +226,9 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.Equal(2, result.Queued);
             Assert.Equal(0, result.Skipped);
             Assert.Equal(0, result.FailedToQueue);
-            Assert.Equal(2, result.JobIds.Count);
+            Assert.Equal(2, result.QueuedJobs.Count);
+            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab1.Id && j.TargetPath == $"{Root}/Author X/Move Me");
+            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab2.Id && j.TargetPath == $"{Root}/Author Y/Move Me Too");
 
             var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
             Assert.Equal(2, jobs.Count);
