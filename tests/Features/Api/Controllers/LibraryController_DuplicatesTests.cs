@@ -415,6 +415,78 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task GetDuplicates_DetectsIntraRowDuplicatesAndPrefersTheCleanerRow()
+        {
+            // Same ASIN, same author/title. Row A is 4 files, each chapter
+            // imported twice in different naming styles (so really 2 unique
+            // chapters). Row B is 2 files of the same chapters with no
+            // intra-row duplication.
+            //
+            // The raw FileCount says A=4 > B=2, but the effective unique
+            // count is the same (2 each); the cleaner row should win.
+            var dirty = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Book", Asin = "B00DUPE0001",
+                BasePath = "/audiobooks/Author/Book dirty",
+            });
+            foreach (var name in new[]
+            {
+                "01 Prologue_ Fortress of the Light.mp3",
+                "01. Prologue -  Fortress of the Light.mp3",
+                "02 Chapter 1_ Waiting.mp3",
+                "02. Chapter 1 -  Waiting.mp3",
+            })
+            {
+                await _audiobookFileRepository.AddAsync(new AudiobookFile
+                {
+                    AudiobookId = dirty.Id,
+                    Path = $"/audiobooks/Author/Book dirty/{name}",
+                    Bitrate = 128_000,
+                    CreatedAt = DateTime.UtcNow,
+                });
+            }
+
+            var clean = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Book", Asin = "B00DUPE0001",
+                BasePath = "/audiobooks",
+            });
+            foreach (var name in new[]
+            {
+                "Book-01.mp3",
+                "Book-02.mp3",
+            })
+            {
+                await _audiobookFileRepository.AddAsync(new AudiobookFile
+                {
+                    AudiobookId = clean.Id,
+                    Path = $"/audiobooks/{name}",
+                    Bitrate = 128_000,
+                    CreatedAt = DateTime.UtcNow,
+                });
+            }
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var payload = ok!.Value!;
+            var groupsObj = payload.GetType().GetProperty("groups")!.GetValue(payload);
+            var groupList = new List<DuplicateGroupDto>();
+            foreach (var g in (System.Collections.IEnumerable)groupsObj!) groupList.Add((DuplicateGroupDto)g);
+
+            Assert.Single(groupList);
+
+            var dirtyDto = groupList[0].Rows.Single(r => r.Id == dirty.Id);
+            var cleanDto = groupList[0].Rows.Single(r => r.Id == clean.Id);
+            Assert.Equal(2, dirtyDto.LikelyDuplicateFileCount);
+            Assert.Equal(0, cleanDto.LikelyDuplicateFileCount);
+
+            var winner = groupList[0].Rows.Single(r => r.RecommendedWinner);
+            Assert.Equal(clean.Id, winner.Id);
+            Assert.Contains("Cleaner", groupList[0].RecommendationReason);
+        }
+
+        [Fact]
         public async Task GetDuplicates_PrefersHigherBitrateOverSingleFile()
         {
             // Same ASIN, both rows have files. One is a single low-bitrate

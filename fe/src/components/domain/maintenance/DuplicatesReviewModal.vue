@@ -104,6 +104,13 @@
                       <span class="meta-chip" :class="{ on: row.hasAnyFile }">
                         {{ row.fileCount }} file{{ row.fileCount === 1 ? '' : 's' }}
                       </span>
+                      <span
+                        v-if="row.likelyDuplicateFileCount > 0"
+                        class="meta-chip warn"
+                        :title="`${row.likelyDuplicateFileCount} file${row.likelyDuplicateFileCount === 1 ? '' : 's'} on this row look like naming-variant duplicates of another file on the same row (e.g. ‘01 Title.mp3’ and ‘01. Title.mp3’).`"
+                      >
+                        {{ row.likelyDuplicateFileCount }} dupe{{ row.likelyDuplicateFileCount === 1 ? '' : 's' }}
+                      </span>
                       <span class="meta-chip" :class="{ on: row.hasBookFolder }">
                         {{ row.hasBookFolder ? 'real folder' : 'no book folder' }}
                       </span>
@@ -828,6 +835,11 @@ watch(
 .meta-chip.on {
   background: rgba(80, 180, 100, 0.12);
   color: #6fc080;
+}
+.meta-chip.warn {
+  background: rgba(232, 170, 60, 0.12);
+  color: #e8aa3c;
+  cursor: help;
 }
 .row-actions {
   display: flex;
