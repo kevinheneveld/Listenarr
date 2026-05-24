@@ -1149,5 +1149,11 @@ export interface MergeDuplicatesResult {
   downloadsReassigned: number
   historyReassigned: number
   moveJobsReassigned: number
+  /** Files deleted from disk by the Discard cleanup. */
+  diskFilesDeleted: number
+  /** Book folders deleted from disk by Discard. */
+  diskFoldersDeleted: number
+  /** Empty parent (e.g. author) folders cleaned up after Discard. */
+  diskParentFoldersDeleted: number
   warnings: string[]
 }

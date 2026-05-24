@@ -23,6 +23,7 @@ using Listenarr.Api.Controllers;
 using Listenarr.Api.Dtos;
 using Listenarr.Domain.Models;
 using Listenarr.Tests.Common;
+using Listenarr.Tests.Builders;
 using Listenarr.Application.Common;
 
 namespace Listenarr.Tests.Features.Api.Controllers
@@ -411,6 +412,136 @@ namespace Listenarr.Tests.Features.Api.Controllers
             var recommended = groupList[0].Rows.Single(r => r.RecommendedWinner);
             Assert.Equal(singleFile.Id, recommended.Id);
             Assert.Contains("Single-file", groupList[0].RecommendationReason);
+        }
+
+        [Fact]
+        public async Task GetDuplicates_PrefersPathThatMatchesTitleAndAuthor()
+        {
+            // Same-ASIN trio where every row has 1 file, every row has a real
+            // book folder — only differentiator is whether the BasePath
+            // contains the actual book's title/author. The row whose folder
+            // is "/audiobooks/A. American/Charlie's Requiem" should win over
+            // the rows whose folders point at completely different books.
+            var wrongDeanKoontz = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Charlie's Requiem: A Novella",
+                Asin = "B00PATHM001",
+                Authors = new List<string> { "A. American", "Walt Browning" },
+                BasePath = "/audiobooks/Dean Koontz/A Big Little Life - A Memoir of a Joyful Dog",
+                FilePath = "/audiobooks/Dean Koontz/A Big Little Life - A Memoir of a Joyful Dog/x.m4b",
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = wrongDeanKoontz.Id,
+                Path = "/audiobooks/Dean Koontz/A Big Little Life - A Memoir of a Joyful Dog/x.m4b",
+                CreatedAt = DateTime.UtcNow,
+            });
+            var wrongStephenKing = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Charlie's Requiem: A Novella",
+                Asin = "B00PATHM001",
+                Authors = new List<string> { "A. American", "Walt Browning" },
+                BasePath = "/audiobooks/Stephen King/A Good Marriage",
+                FilePath = "/audiobooks/Stephen King/A Good Marriage/y.m4b",
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = wrongStephenKing.Id,
+                Path = "/audiobooks/Stephen King/A Good Marriage/y.m4b",
+                CreatedAt = DateTime.UtcNow,
+            });
+            var correct = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Charlie's Requiem: A Novella",
+                Asin = "B00PATHM001",
+                Authors = new List<string> { "A. American", "Walt Browning" },
+                BasePath = "/audiobooks/A. American/Charlie's Requiem - A Novella",
+                FilePath = "/audiobooks/A. American/Charlie's Requiem - A Novella/z.m4b",
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = correct.Id,
+                Path = "/audiobooks/A. American/Charlie's Requiem - A Novella/z.m4b",
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var payload = ok!.Value!;
+            var groupsObj = payload.GetType().GetProperty("groups")!.GetValue(payload);
+            var groupList = new List<DuplicateGroupDto>();
+            foreach (var g in (System.Collections.IEnumerable)groupsObj!) groupList.Add((DuplicateGroupDto)g);
+
+            Assert.Single(groupList);
+            var winner = groupList[0].Rows.Single(r => r.RecommendedWinner);
+            Assert.Equal(correct.Id, winner.Id);
+            Assert.Contains("Folder path matches", groupList[0].RecommendationReason);
+        }
+
+        [Fact]
+        public async Task MergeDuplicates_DiscardRemovesFilesAndFolderFromDisk()
+        {
+            // Set up real on-disk files for a loser; after Discard, the
+            // folder should be gone and the result should count what was
+            // removed. Failure to touch disk surfaces as a warning, not an
+            // error, but happy path is fully observable.
+            var tempRoot = FileService.GetTempDirectory("listenarr-dedup-disk");
+            var loserFolder = Path.Combine(tempRoot, "Author", "Loser Book");
+            Directory.CreateDirectory(loserFolder);
+            var loserFilePath = Path.Combine(loserFolder, "loser.mp3");
+            await File.WriteAllTextAsync(loserFilePath, "fake mp3 data");
+
+            // Pre-seed a root folder so the safety-net in
+            // DeleteAudiobookFilesystemAsync recognizes loserFolder as
+            // belonging to a configured root.
+            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
+                .WithPath(tempRoot)
+                .Build());
+
+            var winner = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Winner", Asin = "B00DISK0001",
+                BasePath = Path.Combine(tempRoot, "Author", "Winner Book"),
+                FilePath = Path.Combine(tempRoot, "Author", "Winner Book", "w.m4b"),
+            });
+            var loser = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Loser", Asin = "B00DISK0001",
+                BasePath = loserFolder,
+                FilePath = loserFilePath,
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = loser.Id,
+                Path = loserFilePath,
+                CreatedAt = DateTime.UtcNow,
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var actionResult = await controller.MergeDuplicates(new MergeDuplicatesRequest
+            {
+                Merges =
+                {
+                    new MergePairDto
+                    {
+                        WinnerId = winner.Id,
+                        LoserIds = new List<int> { loser.Id },
+                    }
+                }
+            });
+
+            var ok = actionResult as OkObjectResult;
+            Assert.True(ok != null, $"Expected Ok, got {actionResult?.GetType().Name}: {(actionResult as ObjectResult)?.Value}");
+            var result = (MergeDuplicatesResultDto)ok!.Value!;
+
+            Assert.Equal(1, result.RowsDeleted);
+            Assert.True(result.DiskFilesDeleted >= 1, $"Expected at least 1 file deleted from disk, got {result.DiskFilesDeleted}");
+            Assert.True(result.DiskFoldersDeleted >= 1, $"Expected the loser's book folder to be deleted, got {result.DiskFoldersDeleted}");
+
+            // Folder is gone on disk too.
+            Assert.False(Directory.Exists(loserFolder), $"Expected {loserFolder} to be deleted but it still exists");
+            Assert.False(File.Exists(loserFilePath));
         }
 
         [Fact]
