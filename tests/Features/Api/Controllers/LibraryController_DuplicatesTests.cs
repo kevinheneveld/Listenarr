@@ -415,6 +415,56 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task GetDuplicates_PrefersHigherBitrateOverSingleFile()
+        {
+            // Same ASIN, both rows have files. One is a single low-bitrate
+            // file; the other is multi-file at higher bitrate. Bitrate is
+            // the dominant quality signal, so the multi-file high-bitrate
+            // row should win.
+            var lowBitrateSingle = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Book", Asin = "B00BITRATE01",
+                BasePath = "/audiobooks/A/Book single",
+                FilePath = "/audiobooks/A/Book single/Book.mp3",
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = lowBitrateSingle.Id,
+                Path = "/audiobooks/A/Book single/Book.mp3",
+                Bitrate = 32_000,
+                CreatedAt = DateTime.UtcNow,
+            });
+            var highBitrateMulti = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Book", Asin = "B00BITRATE01",
+                BasePath = "/audiobooks/A/Book chunked",
+            });
+            for (var i = 1; i <= 5; i++)
+            {
+                await _audiobookFileRepository.AddAsync(new AudiobookFile
+                {
+                    AudiobookId = highBitrateMulti.Id,
+                    Path = $"/audiobooks/A/Book chunked/part-{i:00}.mp3",
+                    Bitrate = 192_000,
+                    CreatedAt = DateTime.UtcNow,
+                });
+            }
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var payload = ok!.Value!;
+            var groupsObj = payload.GetType().GetProperty("groups")!.GetValue(payload);
+            var groupList = new List<DuplicateGroupDto>();
+            foreach (var g in (System.Collections.IEnumerable)groupsObj!) groupList.Add((DuplicateGroupDto)g);
+
+            Assert.Single(groupList);
+            var recommended = groupList[0].Rows.Single(r => r.RecommendedWinner);
+            Assert.Equal(highBitrateMulti.Id, recommended.Id);
+            Assert.Contains("bitrate", groupList[0].RecommendationReason, StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
         public async Task GetDuplicates_PrefersPathThatMatchesTitleAndAuthor()
         {
             // Same-ASIN trio where every row has 1 file, every row has a real
