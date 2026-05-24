@@ -1085,3 +1085,32 @@ export interface RenameResult {
   error?: string
   renamedFiles: FileRenameResultItem[]
 }
+
+export interface DuplicateRow {
+  id: number
+  title: string | null
+  series: string | null
+  seriesNumber: string | null
+  asin: string | null
+  basePath: string | null
+  filePath: string | null
+  imageUrl: string | null
+  fileCount: number
+  hasAnyFile: boolean
+  hasBookFolder: boolean
+  recommendedWinner: boolean
+}
+
+export interface DuplicateGroup {
+  normalizedAsin: string
+  rows: DuplicateRow[]
+}
+
+export interface MergeDuplicatesResult {
+  groupsProcessed: number
+  rowsDeleted: number
+  downloadsReassigned: number
+  historyReassigned: number
+  moveJobsReassigned: number
+  warnings: string[]
+}

@@ -60,6 +60,8 @@ import type {
   RenamePreview,
   RenameOperation,
   RenameResult,
+  DuplicateGroup,
+  MergeDuplicatesResult,
 } from '@/types'
 import {
   getStartupConfigCached,
@@ -1264,6 +1266,24 @@ class ApiService {
     return this.request<{ message: string; jobId?: string }>(`/library/${id}/move`, {
       method: 'POST',
       body: JSON.stringify(body),
+    })
+  }
+
+  async getDuplicateAudiobooks(): Promise<{
+    groups: DuplicateGroup[]
+    totalGroups: number
+  }> {
+    return this.request<{ groups: DuplicateGroup[]; totalGroups: number }>(`/library/duplicates`, {
+      method: 'GET',
+    })
+  }
+
+  async mergeDuplicateAudiobooks(
+    merges: { winnerId: number; loserIds: number[] }[],
+  ): Promise<MergeDuplicatesResult> {
+    return this.request<MergeDuplicatesResult>(`/library/duplicates/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ merges }),
     })
   }
 
