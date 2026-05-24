@@ -41,10 +41,10 @@
             <p class="help-text">
               Every row starts as <strong>Skip</strong>. Pick an action per row:
               <strong>Keep</strong> (this row survives) →
-              <strong>Discard</strong> (delete the row; its Downloads/History/MoveJobs references move to the Keep row) →
-              <strong>Clear ASIN</strong> (keep the row but un-dupe it).
-              <strong>Files on disk are not touched</strong> — move them yourself first if the
-              Keep row's folder isn't the one you want.
+              <strong>Discard</strong> (delete the row, its files, and its folder from disk; references move to the Keep row) →
+              <strong>Clear ASIN</strong> (keep the row and its files — just un-dupe it).
+              The summary below tracks what'll be deleted; you'll get one final confirmation
+              before anything is applied.
             </p>
 
             <div v-for="group in groups" :key="group.normalizedAsin" class="group">
@@ -86,7 +86,7 @@
                       </span>
                       <a
                         class="row-link"
-                        :href="`/audiobook/${row.id}`"
+                        :href="`/audiobooks/${row.id}`"
                         target="_blank"
                         rel="noopener"
                         title="Open audiobook detail in a new tab"
@@ -187,24 +187,66 @@
         </div>
 
         <footer class="modal-footer">
-          <div class="footer-summary">
-            <span v-if="!loading && groups.length > 0">
-              {{ plannedDeletions }} to delete · {{ plannedClears }} ASIN clear{{ plannedClears === 1 ? '' : 's' }}
-              · {{ skippedCount }} group{{ skippedCount === 1 ? '' : 's' }} fully skipped
-            </span>
-            <span v-if="mergeError" class="error">{{ mergeError }}</span>
-          </div>
-          <div class="footer-actions">
-            <button type="button" class="btn" :disabled="merging" @click="onClose">Cancel</button>
-            <button
-              type="button"
-              class="btn btn-primary"
-              :disabled="merging || loading || !canApply"
-              @click="executeMerge"
-            >
-              {{ merging ? 'Applying…' : 'Apply' }}
-            </button>
-          </div>
+          <!-- Default state: summary + Apply button -->
+          <template v-if="!pendingConfirm">
+            <div class="footer-summary">
+              <span v-if="!loading && groups.length > 0">
+                {{ plannedDeletions }} to discard · {{ plannedClears }} ASIN clear{{ plannedClears === 1 ? '' : 's' }}
+                · {{ skippedCount }} group{{ skippedCount === 1 ? '' : 's' }} fully skipped
+              </span>
+              <span v-if="mergeError" class="error">{{ mergeError }}</span>
+            </div>
+            <div class="footer-actions">
+              <button type="button" class="btn" :disabled="merging" @click="onClose">Cancel</button>
+              <button
+                type="button"
+                class="btn btn-primary"
+                :disabled="merging || loading || !canApply"
+                @click="pendingConfirm = true"
+              >
+                Apply…
+              </button>
+            </div>
+          </template>
+
+          <!-- Confirmation state: surface the disk-impact summary explicitly
+               so a misclick on Apply doesn't quietly nuke files. -->
+          <template v-else>
+            <div class="confirm-panel">
+              <div class="confirm-title">About to apply these changes:</div>
+              <ul class="confirm-list">
+                <li v-if="plannedDeletions > 0">
+                  <strong>{{ plannedDeletions }}</strong> row{{ plannedDeletions === 1 ? '' : 's' }} will be discarded —
+                  {{ discardFileCount }} file{{ discardFileCount === 1 ? '' : 's' }}
+                  ({{ formatBytes(discardTotalBytes) }}) and their folders will be deleted from disk.
+                </li>
+                <li v-if="plannedClears > 0">
+                  <strong>{{ plannedClears }}</strong> row{{ plannedClears === 1 ? '' : 's' }} will have their ASIN cleared
+                  (files on disk untouched).
+                </li>
+                <li v-if="skippedCount > 0">
+                  <strong>{{ skippedCount }}</strong> group{{ skippedCount === 1 ? '' : 's' }} fully skipped.
+                </li>
+              </ul>
+              <div class="confirm-warning">
+                Disk deletions cannot be undone from the app. Make sure your backups are current.
+              </div>
+              <div class="confirm-actions">
+                <button type="button" class="btn" :disabled="merging" @click="pendingConfirm = false">
+                  Back
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-danger"
+                  :disabled="merging"
+                  @click="executeMerge"
+                >
+                  {{ merging ? 'Applying…' : 'Confirm and apply' }}
+                </button>
+              </div>
+              <div v-if="mergeError" class="error confirm-error">{{ mergeError }}</div>
+            </div>
+          </template>
         </footer>
       </div>
     </div>
@@ -237,6 +279,7 @@ const loadError = ref<string | null>(null)
 const merging = ref(false)
 const mergeError = ref<string | null>(null)
 const groups = ref<DuplicateGroup[]>([])
+const pendingConfirm = ref(false)
 // Per-row action keyed by audiobook id.
 const rowActions = reactive<Record<number, DuplicateRowAction>>({})
 const expanded = reactive<Record<number, boolean>>({})
@@ -273,6 +316,27 @@ const skippedCount = computed(() => {
 })
 
 const canApply = computed(() => plannedDeletions.value > 0 || plannedClears.value > 0)
+
+// Sum of files / bytes across rows currently marked for Discard. Surfaced in
+// the confirmation panel so the user sees the disk impact before committing.
+const discardFileCount = computed(() => {
+  let n = 0
+  for (const g of groups.value) {
+    for (const r of g.rows) {
+      if (rowActions[r.id] === 'merge') n += r.fileCount
+    }
+  }
+  return n
+})
+const discardTotalBytes = computed(() => {
+  let n = 0
+  for (const g of groups.value) {
+    for (const r of g.rows) {
+      if (rowActions[r.id] === 'merge') n += r.totalSize
+    }
+  }
+  return n
+})
 
 function protectedSrc(row: DuplicateRow): string {
   if (!row.imageUrl) return ''
@@ -321,7 +385,7 @@ function actionOptions(row: DuplicateRow, group: DuplicateGroup): ActionOption[]
       disabled: noKeepSelected,
       tooltip: noKeepSelected
         ? 'Pick a Keep row in this group first.'
-        : `Delete this row. Its Downloads/History/MoveJobs references move to id ${keepRow!.id}. Files on disk are NOT deleted.`,
+        : `Delete this row, its files, and its folder from disk. Downloads/History/MoveJobs references move to id ${keepRow!.id}. Empty parent folders are cleaned up too.`,
     },
     {
       value: 'clearAsin',
@@ -464,6 +528,8 @@ watch(
       groups.value = []
       for (const k of Object.keys(rowActions)) delete rowActions[Number(k)]
       for (const k of Object.keys(expanded)) delete expanded[Number(k)]
+      pendingConfirm.value = false
+      mergeError.value = null
       void load()
     }
   },
@@ -564,6 +630,52 @@ watch(
 }
 .btn-primary:hover:not(:disabled) {
   background: #3380e5;
+}
+.btn-danger {
+  background: #b03030;
+  border-color: #b03030;
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #c84545;
+}
+.confirm-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.confirm-title {
+  font-size: 13px;
+  color: #fff;
+  font-weight: 600;
+}
+.confirm-list {
+  margin: 0;
+  padding-left: 18px;
+  color: #ddd;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.confirm-list li {
+  margin-bottom: 2px;
+}
+.confirm-warning {
+  font-size: 12px;
+  color: #f0b060;
+  padding: 6px 10px;
+  background: rgba(240, 176, 96, 0.08);
+  border-left: 3px solid #b08040;
+  border-radius: 3px;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.confirm-error {
+  font-size: 12px;
 }
 .state-msg {
   padding: 24px 8px;

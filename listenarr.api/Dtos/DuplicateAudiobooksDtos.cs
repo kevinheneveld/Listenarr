@@ -134,6 +134,12 @@ namespace Listenarr.Api.Dtos
         public int DownloadsReassigned { get; set; }
         public int HistoryReassigned { get; set; }
         public int MoveJobsReassigned { get; set; }
+        /// <summary>Files deleted from disk during Discard cleanup.</summary>
+        public int DiskFilesDeleted { get; set; }
+        /// <summary>Book folders deleted from disk during Discard cleanup.</summary>
+        public int DiskFoldersDeleted { get; set; }
+        /// <summary>Empty parent (e.g. author) folders cleaned up during Discard.</summary>
+        public int DiskParentFoldersDeleted { get; set; }
         public List<string> Warnings { get; set; } = new();
     }
 }

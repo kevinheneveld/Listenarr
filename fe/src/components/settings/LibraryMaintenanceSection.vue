@@ -43,9 +43,11 @@
         <div class="maintenance-copy">
           <div class="maintenance-title">Find duplicate audiobooks</div>
           <div class="maintenance-help">
-            Find audiobook rows that share the same ASIN. Pick which row to
-            keep per group; the rest are removed (files on disk are not
-            touched).
+            Find audiobook rows that share the same ASIN and resolve each group:
+            keep one, discard the rest (deletes their files and folders from disk),
+            or just clear the ASIN on a row that got it stamped by mistake. A
+            confirmation panel shows exactly what'll change before anything is
+            applied.
           </div>
           <div v-if="lastDuplicatesMessage" class="maintenance-result">
             {{ lastDuplicatesMessage }}
@@ -115,7 +117,13 @@ function onDuplicatesMerged(result: MergeDuplicatesResult) {
   const parts: string[] = []
   parts.push(`Resolved ${result.groupsProcessed} group${result.groupsProcessed === 1 ? '' : 's'}`)
   if (result.rowsDeleted > 0) {
-    parts.push(`removed ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+    parts.push(`discarded ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+  }
+  if (result.diskFilesDeleted > 0) {
+    parts.push(`deleted ${result.diskFilesDeleted} file${result.diskFilesDeleted === 1 ? '' : 's'} from disk`)
+  }
+  if (result.diskFoldersDeleted > 0) {
+    parts.push(`removed ${result.diskFoldersDeleted} folder${result.diskFoldersDeleted === 1 ? '' : 's'}`)
   }
   if (result.asinsCleared > 0) {
     parts.push(`cleared ${result.asinsCleared} ASIN${result.asinsCleared === 1 ? '' : 's'}`)
@@ -127,7 +135,16 @@ function onDuplicatesMerged(result: MergeDuplicatesResult) {
     parts.push(`reassigned ${result.historyReassigned} history entries`)
   }
   lastDuplicatesMessage.value = parts.join(', ') + '.'
-  toast.success('Duplicate cleanup complete', lastDuplicatesMessage.value)
+
+  const warningCount = result.warnings?.length ?? 0
+  if (warningCount > 0) {
+    toast.warning(
+      `Duplicate cleanup complete with ${warningCount} warning${warningCount === 1 ? '' : 's'}`,
+      `${lastDuplicatesMessage.value} Check server logs for details on the warnings.`,
+    )
+  } else {
+    toast.success('Duplicate cleanup complete', lastDuplicatesMessage.value)
+  }
 }
 </script>
 
