@@ -61,6 +61,7 @@ import type {
   RenameOperation,
   RenameResult,
   DuplicateGroup,
+  DuplicatesMergePair,
   MergeDuplicatesResult,
 } from '@/types'
 import {
@@ -1279,7 +1280,7 @@ class ApiService {
   }
 
   async mergeDuplicateAudiobooks(
-    merges: { winnerId: number; loserIds: number[] }[],
+    merges: DuplicatesMergePair[],
   ): Promise<MergeDuplicatesResult> {
     return this.request<MergeDuplicatesResult>(`/library/duplicates/merge`, {
       method: 'POST',

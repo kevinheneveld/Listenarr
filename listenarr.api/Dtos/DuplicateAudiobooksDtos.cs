@@ -28,6 +28,13 @@ namespace Listenarr.Api.Dtos
 
         /// <summary>The library rows that share this ASIN.</summary>
         public List<DuplicateRowDto> Rows { get; set; } = new();
+
+        /// <summary>
+        /// Human-readable explanation of why the row marked
+        /// <see cref="DuplicateRowDto.RecommendedWinner"/> was chosen.
+        /// Empty when no row is recommended.
+        /// </summary>
+        public string RecommendationReason { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -58,13 +65,45 @@ namespace Listenarr.Api.Dtos
         /// book folder, then the lowest Id.
         /// </summary>
         public bool RecommendedWinner { get; set; }
+
+        // --- Extended metadata so the UI can verify two rows are really the
+        // same book before merging. ---
+
+        public List<string> Authors { get; set; } = new();
+        public List<string> Narrators { get; set; } = new();
+        /// <summary>Runtime in minutes, when known.</summary>
+        public int? Runtime { get; set; }
+        /// <summary>Tracked file rows for this audiobook.</summary>
+        public List<DuplicateFileDto> Files { get; set; } = new();
+        /// <summary>Sum of <see cref="DuplicateFileDto.Size"/> across <see cref="Files"/>.</summary>
+        public long TotalSize { get; set; }
     }
 
     /// <summary>
-    /// Request body for the merge endpoint. Each entry says "keep
-    /// <see cref="MergePairDto.WinnerId"/>, delete each id in
-    /// <see cref="MergePairDto.LoserIds"/> after reassigning their references."
+    /// Minimal projection of an <c>AudiobookFiles</c> row for the duplicates UI.
     /// </summary>
+    public class DuplicateFileDto
+    {
+        public int Id { get; set; }
+        public string? Path { get; set; }
+        public long? Size { get; set; }
+        public double? DurationSeconds { get; set; }
+        public string? Format { get; set; }
+        public string? Codec { get; set; }
+        public int? Bitrate { get; set; }
+    }
+
+    /// <summary>
+    /// Request body for the merge endpoint. Each pair describes one group's
+    /// resolution: zero-or-one <see cref="MergePairDto.WinnerId"/>, plus the
+    /// rows to merge into it (<see cref="MergePairDto.LoserIds"/>) and/or the
+    /// rows whose ASIN should be cleared so they're no longer duplicates
+    /// (<see cref="MergePairDto.ClearAsinIds"/>).
+    /// </summary>
+    /// <remarks>
+    /// Rows in the group that appear in none of these lists are skipped — the
+    /// endpoint leaves them untouched.
+    /// </remarks>
     public class MergeDuplicatesRequest
     {
         public List<MergePairDto> Merges { get; set; } = new();
@@ -72,8 +111,15 @@ namespace Listenarr.Api.Dtos
 
     public class MergePairDto
     {
-        public int WinnerId { get; set; }
+        /// <summary>
+        /// The surviving row id. May be null when the only action for this
+        /// group is to clear ASINs on selected rows (no merge).
+        /// </summary>
+        public int? WinnerId { get; set; }
+        /// <summary>Rows to delete and reassign-FKs into the winner.</summary>
         public List<int> LoserIds { get; set; } = new();
+        /// <summary>Rows to keep but null out the ASIN on.</summary>
+        public List<int> ClearAsinIds { get; set; } = new();
     }
 
     /// <summary>
@@ -84,6 +130,7 @@ namespace Listenarr.Api.Dtos
     {
         public int GroupsProcessed { get; set; }
         public int RowsDeleted { get; set; }
+        public int AsinsCleared { get; set; }
         public int DownloadsReassigned { get; set; }
         public int HistoryReassigned { get; set; }
         public int MoveJobsReassigned { get; set; }
