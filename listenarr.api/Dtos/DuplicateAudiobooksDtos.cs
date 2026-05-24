@@ -77,6 +77,13 @@ namespace Listenarr.Api.Dtos
         public List<DuplicateFileDto> Files { get; set; } = new();
         /// <summary>Sum of <see cref="DuplicateFileDto.Size"/> across <see cref="Files"/>.</summary>
         public long TotalSize { get; set; }
+        /// <summary>
+        /// Files that share a normalized filename signature with at least one
+        /// other file on the same row — i.e. likely the same chapter imported
+        /// twice in different naming styles. <c>FileCount - LikelyDuplicateFileCount</c>
+        /// gives the effective unique chapter count.
+        /// </summary>
+        public int LikelyDuplicateFileCount { get; set; }
     }
 
     /// <summary>
