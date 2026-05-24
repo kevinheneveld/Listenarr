@@ -17,6 +17,7 @@
  */
 
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
 using System.Reflection;
@@ -38,6 +39,7 @@ using Listenarr.Application.Search;
 using Microsoft.AspNetCore.SignalR;
 using Listenarr.Application.Audiobooks;
 using Listenarr.Api.Attributes;
+using Listenarr.Infrastructure.Persistence;
 
 namespace Listenarr.Api.Controllers
 {
@@ -2492,6 +2494,251 @@ namespace Listenarr.Api.Controllers
                 };
 
             return Ok(result);
+        }
+
+        /// <summary>
+        /// Preview same-ASIN duplicate audiobook groups in the library. Each
+        /// group lists the rows that share a normalized (UPPER, trimmed) ASIN
+        /// and flags one row as the recommended winner (prefers rows with
+        /// files, then a real book folder, then the lowest Id).
+        /// </summary>
+        [HttpGet("duplicates")]
+        public async Task<IActionResult> GetDuplicates()
+        {
+            var allAudiobooks = await _repo.GetAllAsync();
+            // Pre-compute a single-pass file-count map for every audiobook so
+            // the response can show how much disk content each candidate has.
+            var allFiles = await _audioFileRepository.GetAllAsync();
+            var fileCountByAudiobookId = allFiles
+                .GroupBy(f => f.AudiobookId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var groups = allAudiobooks
+                .Where(a => !string.IsNullOrWhiteSpace(a.Asin))
+                .GroupBy(a => a.Asin!.Trim().ToUpperInvariant())
+                .Where(g => g.Count() > 1)
+                .OrderBy(g => g.Key)
+                .Select(g =>
+                {
+                    var rows = g
+                        .Select(a =>
+                        {
+                            var fileCount = fileCountByAudiobookId.TryGetValue(a.Id, out var fc) ? fc : 0;
+                            return new DuplicateRowDto
+                            {
+                                Id = a.Id,
+                                Title = a.Title,
+                                Series = a.Series,
+                                SeriesNumber = a.SeriesNumber,
+                                Asin = a.Asin,
+                                BasePath = a.BasePath,
+                                FilePath = a.FilePath,
+                                ImageUrl = a.ImageUrl,
+                                FileCount = fileCount,
+                                HasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath),
+                                HasBookFolder = HasRealBookFolder(a.BasePath),
+                            };
+                        })
+                        .ToList();
+
+                    // Same winner-selection rule as the SQL cleanup: files > real
+                    // book folder > lowest Id. Exactly one row is flagged per
+                    // group.
+                    var winner = rows
+                        .OrderByDescending(r => r.HasAnyFile)
+                        .ThenByDescending(r => r.HasBookFolder)
+                        .ThenBy(r => r.Id)
+                        .First();
+                    winner.RecommendedWinner = true;
+
+                    return new DuplicateGroupDto
+                    {
+                        NormalizedAsin = g.Key,
+                        Rows = rows.OrderBy(r => r.Id).ToList(),
+                    };
+                })
+                .ToList();
+
+            return Ok(new { groups, totalGroups = groups.Count });
+        }
+
+        /// <summary>
+        /// Merge same-ASIN duplicate audiobook groups in a single transaction.
+        /// For each pair, reassigns Downloads / History / MoveJobs references
+        /// from each loser to the winner, then deletes the loser audiobook
+        /// rows (cascade removes their tracked file rows, external
+        /// identifiers, and series memberships). Files on disk are NOT
+        /// touched — that's a separate cleanup the user manages explicitly.
+        /// </summary>
+        /// <remarks>
+        /// Validates that every winner+losers tuple shares the same normalized
+        /// ASIN before touching anything. If any tuple fails validation the
+        /// whole merge is aborted.
+        /// </remarks>
+        [HttpPost("duplicates/merge")]
+        public async Task<IActionResult> MergeDuplicates([FromBody] MergeDuplicatesRequest request)
+        {
+            if (request?.Merges == null || request.Merges.Count == 0)
+            {
+                return BadRequest(new { message = "No merges provided" });
+            }
+
+            // Strip out trivially-empty merges first so we don't open a DB
+            // transaction just to do nothing.
+            var nonEmptyMerges = request.Merges
+                .Where(m => m.LoserIds != null && m.LoserIds.Any(id => id != m.WinnerId))
+                .ToList();
+            if (nonEmptyMerges.Count == 0)
+            {
+                return BadRequest(new { message = "All merges had no losers" });
+            }
+
+            var ct = HttpContext?.RequestAborted ?? CancellationToken.None;
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ListenArrDbContext>();
+
+            // Validation pass: every winner + losers tuple must share the same
+            // normalized ASIN. Aborts the whole request on first mismatch so
+            // the user can fix their selection before retrying.
+            var allIds = nonEmptyMerges
+                .SelectMany(m => new[] { m.WinnerId }.Concat(m.LoserIds))
+                .Distinct()
+                .ToList();
+            var rowsById = await db.Audiobooks
+                .AsNoTracking()
+                .Where(a => allIds.Contains(a.Id))
+                .Select(a => new { a.Id, a.Asin })
+                .ToDictionaryAsync(a => a.Id, ct);
+
+            foreach (var pair in nonEmptyMerges)
+            {
+                if (!rowsById.TryGetValue(pair.WinnerId, out var winner))
+                {
+                    return BadRequest(new { message = $"Winner id {pair.WinnerId} not found" });
+                }
+                var winnerAsin = (winner.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                if (string.IsNullOrEmpty(winnerAsin))
+                {
+                    return BadRequest(new { message = $"Winner id {pair.WinnerId} has no ASIN — refusing to merge without one" });
+                }
+                foreach (var loserId in pair.LoserIds.Distinct())
+                {
+                    if (loserId == pair.WinnerId) continue;
+                    if (!rowsById.TryGetValue(loserId, out var loser))
+                    {
+                        return BadRequest(new { message = $"Loser id {loserId} not found" });
+                    }
+                    var loserAsin = (loser.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                    if (loserAsin != winnerAsin)
+                    {
+                        return BadRequest(new
+                        {
+                            message = $"Loser id {loserId} ASIN {loserAsin} does not match winner id {pair.WinnerId} ASIN {winnerAsin}"
+                        });
+                    }
+                }
+            }
+
+            // Execute the merges inside one transaction. Each FK column on
+            // Downloads / History / MoveJobs is a plain column (no DB-side
+            // constraint), so the reassignment is an UPDATE; the audiobook
+            // delete cascades to AudiobookFiles, AudiobookExternalIdentifiers,
+            // and AudiobookSeriesMemberships per their FK definitions.
+            // EF Core's InMemory provider doesn't support transactions; skip
+            // the wrapper there so the unit tests can exercise the merge logic.
+            var supportsTransactions = !string.Equals(
+                db.Database.ProviderName,
+                "Microsoft.EntityFrameworkCore.InMemory",
+                StringComparison.Ordinal);
+            Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? tx = supportsTransactions
+                ? await db.Database.BeginTransactionAsync(ct)
+                : null;
+
+            var result = new MergeDuplicatesResultDto();
+            try
+            {
+                foreach (var pair in nonEmptyMerges)
+                {
+                    var losers = pair.LoserIds.Distinct().Where(id => id != pair.WinnerId).ToList();
+                    if (losers.Count == 0) continue;
+
+                    // Load + update + save instead of ExecuteUpdateAsync so the
+                    // logic works against both SQLite (production) and the
+                    // in-memory test provider, which doesn't support
+                    // ExecuteUpdate.
+                    var downloads = await db.Downloads
+                        .Where(d => d.AudiobookId != null && losers.Contains(d.AudiobookId.Value))
+                        .ToListAsync(ct);
+                    foreach (var d in downloads) d.AudiobookId = pair.WinnerId;
+                    result.DownloadsReassigned += downloads.Count;
+
+                    var historyRows = await db.History
+                        .Where(h => h.AudiobookId != null && losers.Contains(h.AudiobookId.Value))
+                        .ToListAsync(ct);
+                    foreach (var h in historyRows) h.AudiobookId = pair.WinnerId;
+                    result.HistoryReassigned += historyRows.Count;
+
+                    var moveJobs = await db.MoveJobs
+                        .Where(j => losers.Contains(j.AudiobookId))
+                        .ToListAsync(ct);
+                    foreach (var j in moveJobs) j.AudiobookId = pair.WinnerId;
+                    result.MoveJobsReassigned += moveJobs.Count;
+
+                    var loserRows = await db.Audiobooks
+                        .Where(a => losers.Contains(a.Id))
+                        .ToListAsync(ct);
+                    db.Audiobooks.RemoveRange(loserRows);
+                    result.RowsDeleted += loserRows.Count;
+
+                    await db.SaveChangesAsync(ct);
+
+                    result.GroupsProcessed++;
+                }
+
+                if (tx != null) await tx.CommitAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Duplicate-audiobook merge failed; transaction rolled back");
+                if (tx != null) await tx.RollbackAsync(CancellationToken.None);
+                return StatusCode(500, new { message = "Merge failed; no changes applied", error = ex.Message });
+            }
+            finally
+            {
+                if (tx != null) await tx.DisposeAsync();
+            }
+
+            _logger.LogInformation(
+                "Merged {Groups} duplicate audiobook groups: deleted {Deleted} rows, reassigned {Downloads} downloads / {History} history / {MoveJobs} move jobs",
+                result.GroupsProcessed, result.RowsDeleted,
+                result.DownloadsReassigned, result.HistoryReassigned, result.MoveJobsReassigned);
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// A "real" book folder is one that is not the root <c>/audiobooks</c>
+        /// (or its trailing-slash variant) and is more than one level deeper
+        /// than that root — i.e. it contains an author + book segment, not
+        /// just the author folder created by an aborted import.
+        /// </summary>
+        private static bool HasRealBookFolder(string? basePath)
+        {
+            if (string.IsNullOrWhiteSpace(basePath)) return false;
+            var trimmed = basePath.Trim().TrimEnd('/');
+            if (string.IsNullOrEmpty(trimmed)) return false;
+            if (string.Equals(trimmed, "/audiobooks", StringComparison.OrdinalIgnoreCase)) return false;
+            // "/audiobooks/Some Author" → 2 segments after split on "/", no
+            // book folder. "/audiobooks/Author/Book" → 3 segments, real folder.
+            var segments = trimmed.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length <= 1) return false;
+            // If the path starts with /audiobooks and only has one extra
+            // segment, that's the author folder only.
+            if (segments[0].Equals("audiobooks", StringComparison.OrdinalIgnoreCase) && segments.Length < 3)
+            {
+                return false;
+            }
+            return true;
         }
 
         /// <summary>

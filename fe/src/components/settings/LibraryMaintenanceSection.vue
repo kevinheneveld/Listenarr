@@ -6,6 +6,14 @@
   it under the terms of the GNU Affero General Public License as published
   by the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+  GNU Affero General Public License for more details.
+
+  You should have received a copy of the GNU Affero General Public License
+  along with this program. If not, see <https://www.gnu.org/licenses/>.
 -->
 <template>
   <div class="form-section">
@@ -30,7 +38,34 @@
           {{ isRunning ? 'Running…' : 'Run sweep' }}
         </button>
       </div>
+
+      <div class="maintenance-row">
+        <div class="maintenance-copy">
+          <div class="maintenance-title">Find duplicate audiobooks</div>
+          <div class="maintenance-help">
+            Find audiobook rows that share the same ASIN. Pick which row to
+            keep per group; the rest are removed (files on disk are not
+            touched).
+          </div>
+          <div v-if="lastDuplicatesMessage" class="maintenance-result">
+            {{ lastDuplicatesMessage }}
+          </div>
+        </div>
+        <button
+          type="button"
+          class="action-button"
+          @click="showDuplicatesModal = true"
+        >
+          Review duplicates…
+        </button>
+      </div>
     </div>
+
+    <DuplicatesReviewModal
+      :visible="showDuplicatesModal"
+      @close="showDuplicatesModal = false"
+      @merged="onDuplicatesMerged"
+    />
   </div>
 </template>
 
@@ -39,9 +74,13 @@ import { ref } from 'vue'
 import { PhWrench } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
+import DuplicatesReviewModal from '@/components/domain/maintenance/DuplicatesReviewModal.vue'
+import type { MergeDuplicatesResult } from '@/types'
 
 const toast = useToast()
 const isRunning = ref(false)
+const showDuplicatesModal = ref(false)
+const lastDuplicatesMessage = ref<string | null>(null)
 
 async function runSweep() {
   if (isRunning.value) return
@@ -71,6 +110,20 @@ async function runSweep() {
     isRunning.value = false
   }
 }
+
+function onDuplicatesMerged(result: MergeDuplicatesResult) {
+  const parts: string[] = []
+  parts.push(`Merged ${result.groupsProcessed} group${result.groupsProcessed === 1 ? '' : 's'}`)
+  parts.push(`removed ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+  if (result.downloadsReassigned > 0) {
+    parts.push(`reassigned ${result.downloadsReassigned} downloads`)
+  }
+  if (result.historyReassigned > 0) {
+    parts.push(`reassigned ${result.historyReassigned} history entries`)
+  }
+  lastDuplicatesMessage.value = parts.join(', ') + '.'
+  toast.success('Duplicate cleanup complete', lastDuplicatesMessage.value)
+}
 </script>
 
 <style scoped>
@@ -91,12 +144,20 @@ h3 {
   border: 1px solid #333;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
   background-color: #232323;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .maintenance-row {
   display: flex;
   align-items: flex-start;
   gap: 1rem;
+}
+
+.maintenance-row + .maintenance-row {
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .maintenance-copy {
@@ -115,6 +176,12 @@ h3 {
   color: #adb5bd;
 }
 
+.maintenance-result {
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  color: #6fc080;
+}
+
 .action-button {
   flex: 0 0 auto;
   padding: 0.5rem 1rem;
@@ -124,6 +191,7 @@ h3 {
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 .action-button:hover:not(:disabled) {
