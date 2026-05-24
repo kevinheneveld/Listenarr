@@ -366,6 +366,54 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task GetDuplicates_PrefersSingleFileOverMultiFile()
+        {
+            // Two rows with the same ASIN, both have tracked files. One has a
+            // single .m4b (Kevin's preferred shape), the other is chunked into
+            // many chapter files. The single-file row should win.
+            var singleFile = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Whole Book", Asin = "B00SINGLE001",
+                BasePath = "/audiobooks/A/Whole Book",
+                FilePath = "/audiobooks/A/Whole Book/Book.m4b",
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = singleFile.Id,
+                Path = "/audiobooks/A/Whole Book/Book.m4b",
+                CreatedAt = DateTime.UtcNow,
+            });
+            var multiFile = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Chunked Book", Asin = "B00SINGLE001",
+                BasePath = "/audiobooks/A/Chunked Book",
+                FilePath = null,
+            });
+            for (var i = 1; i <= 12; i++)
+            {
+                await _audiobookFileRepository.AddAsync(new AudiobookFile
+                {
+                    AudiobookId = multiFile.Id,
+                    Path = $"/audiobooks/A/Chunked Book/chapter-{i:00}.mp3",
+                    CreatedAt = DateTime.UtcNow,
+                });
+            }
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var payload = ok!.Value!;
+            var groupsObj = payload.GetType().GetProperty("groups")!.GetValue(payload);
+            var groupList = new List<DuplicateGroupDto>();
+            foreach (var g in (System.Collections.IEnumerable)groupsObj!) groupList.Add((DuplicateGroupDto)g);
+
+            Assert.Single(groupList);
+            var recommended = groupList[0].Rows.Single(r => r.RecommendedWinner);
+            Assert.Equal(singleFile.Id, recommended.Id);
+            Assert.Contains("Single-file", groupList[0].RecommendationReason);
+        }
+
+        [Fact]
         public async Task GetDuplicates_SurfacesFileMetadataAndRecommendationReason()
         {
             // Verify the extended response shape: per-row file list, totals,

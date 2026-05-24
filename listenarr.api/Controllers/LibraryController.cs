@@ -2328,11 +2328,15 @@ namespace Listenarr.Api.Controllers
                         })
                         .ToList();
 
-                    // Same winner-selection rule as the SQL cleanup: files > real
-                    // book folder > lowest Id. Exactly one row is flagged per
-                    // group, and we explain why.
+                    // Winner-selection rule: prefer rows with files; among
+                    // those, prefer single-file copies (one whole .m4b/.mp3)
+                    // over chapter-file imports of the same book; then fall
+                    // back to file count, then real book folder, then lowest
+                    // Id. Exactly one row is flagged per group, and we
+                    // explain why.
                     var orderedForWinner = rows
                         .OrderByDescending(r => r.HasAnyFile)
+                        .ThenByDescending(r => r.FileCount == 1)
                         .ThenByDescending(r => r.FileCount)
                         .ThenByDescending(r => r.HasBookFolder)
                         .ThenBy(r => r.Id)
@@ -2364,6 +2368,12 @@ namespace Listenarr.Api.Controllers
             if (winner.HasAnyFile && others.All(r => !r.HasAnyFile))
             {
                 return "Only row with tracked files.";
+            }
+            // Single-file copies are preferred over chapter-file imports of
+            // the same book (Kevin's stated preference).
+            if (winner.HasAnyFile && winner.FileCount == 1 && others.Any(r => r.FileCount > 1))
+            {
+                return "Single-file copy (preferred over chapter-file imports).";
             }
             if (winner.HasAnyFile && others.Any(r => r.HasAnyFile) && winner.FileCount > others.Max(r => r.FileCount))
             {
