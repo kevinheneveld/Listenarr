@@ -56,6 +56,8 @@
           @update:settings="(val) => Object.assign(localSettings, val)"
           @update:startupConfig="(val) => emit('update:startupConfig', val)"
         ></AuthenticationSection>
+
+        <LibraryMaintenanceSection />
       </div>
       <!-- settings-form -->
     </div>
@@ -74,6 +76,7 @@ import DownloadSettingsSection from '@/components/settings/DownloadSettingsSecti
 import FeaturesSection from '@/components/settings/FeaturesSection.vue'
 import SearchSettingsSection from '@/components/settings/SearchSettingsSection.vue'
 import AuthenticationSection from '@/components/settings/AuthenticationSection.vue'
+import LibraryMaintenanceSection from '@/components/settings/LibraryMaintenanceSection.vue'
 
 interface Props {
   settings: ApplicationSettings | null

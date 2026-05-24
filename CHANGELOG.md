@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Find duplicate audiobooks (Library Maintenance):** New `GET /library/duplicates` returns groups of audiobook rows sharing a normalized (UPPER, trimmed) ASIN, with a server-suggested winner per group (prefers rows with files, then a real book folder, then the lowest Id). New `POST /library/duplicates/merge` consolidates groups in a single transaction: for each `{winnerId, loserIds[]}` tuple it validates ASINs match, reassigns `Downloads.AudiobookId` / `History.AudiobookId` / `MoveJobs.AudiobookId` from each loser to the winner, then deletes the loser audiobook rows (cascade removes their tracked file, external-identifier, and series-membership rows). Files on disk are not touched — that stays a manual cleanup. Surfaced in Settings → General → Library Maintenance via a "Review duplicates…" button that opens a modal listing each group with the server suggestion pre-selected; the user can pick a different winner per group before confirming. See kevinheneveld/Listenarr#6.
+
 ## [0.2.71] - 2026-04-17
 
 ### Added
