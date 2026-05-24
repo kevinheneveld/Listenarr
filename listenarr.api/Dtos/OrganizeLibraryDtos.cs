@@ -82,12 +82,27 @@ namespace Listenarr.Api.Dtos
         public string Reason { get; set; } = string.Empty;
     }
 
+    /// <summary>
+    /// One queued background move surfaced in the apply response. The
+    /// frontend uses <see cref="JobId"/> to correlate SignalR
+    /// <c>MoveJobUpdate</c> events back to the specific audiobook so a
+    /// failure's <c>error</c> string lands next to the right book in the
+    /// results UI.
+    /// </summary>
+    public class OrganizeQueuedJobDto
+    {
+        public string JobId { get; set; } = string.Empty;
+        public int AudiobookId { get; set; }
+        public string? AudiobookTitle { get; set; }
+        public string? TargetPath { get; set; }
+    }
+
     public class OrganizeLibraryApplyResultDto
     {
         public int Queued { get; set; }
         public int Skipped { get; set; }
         public int FailedToQueue { get; set; }
-        public List<string> JobIds { get; set; } = new();
+        public List<OrganizeQueuedJobDto> QueuedJobs { get; set; } = new();
         public List<OrganizeApplySkippedDto> SkippedDetails { get; set; } = new();
         public List<string> Warnings { get; set; } = new();
     }

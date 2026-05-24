@@ -1200,11 +1200,18 @@ export interface OrganizeApplySkipped {
   reason: string
 }
 
+export interface OrganizeQueuedJob {
+  jobId: string
+  audiobookId: number
+  audiobookTitle: string | null
+  targetPath: string | null
+}
+
 export interface OrganizeLibraryApplyResult {
   queued: number
   skipped: number
   failedToQueue: number
-  jobIds: string[]
+  queuedJobs: OrganizeQueuedJob[]
   skippedDetails: OrganizeApplySkipped[]
   warnings: string[]
 }
