@@ -1294,6 +1294,16 @@ export interface ExtractFileResult {
   conflict?: ExtractFileConflict
 }
 
+export interface DuplicateFile {
+  id: number
+  path: string | null
+  size: number | null
+  durationSeconds: number | null
+  format: string | null
+  codec: string | null
+  bitrate: number | null
+}
+
 export interface DuplicateRow {
   id: number
   title: string | null
@@ -1307,16 +1317,43 @@ export interface DuplicateRow {
   hasAnyFile: boolean
   hasBookFolder: boolean
   recommendedWinner: boolean
+  authors: string[]
+  narrators: string[]
+  runtime: number | null
+  files: DuplicateFile[]
+  totalSize: number
 }
 
 export interface DuplicateGroup {
   normalizedAsin: string
   rows: DuplicateRow[]
+  recommendationReason: string
+}
+
+/**
+ * Per-row action selected by the user in the dedup modal.
+ * - `skip`: leave the row untouched. Default for every row.
+ * - `keep`: this row survives. Exactly one per group when any `merge` is set.
+ * - `merge`: delete this row; reassign FK refs to the group's `keep` row.
+ * - `clearAsin`: keep the row but null its ASIN so it stops being a duplicate.
+ */
+export type DuplicateRowAction = 'skip' | 'keep' | 'merge' | 'clearAsin'
+
+/**
+ * Wire shape for `POST /library/duplicates/merge`. The backend accepts a
+ * nullable winnerId, a list of losers to merge into the winner, and a list
+ * of ids to clear ASIN on (kept as rows, no longer duplicates).
+ */
+export interface DuplicatesMergePair {
+  winnerId: number | null
+  loserIds: number[]
+  clearAsinIds: number[]
 }
 
 export interface MergeDuplicatesResult {
   groupsProcessed: number
   rowsDeleted: number
+  asinsCleared: number
   downloadsReassigned: number
   historyReassigned: number
   moveJobsReassigned: number

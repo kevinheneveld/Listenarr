@@ -113,8 +113,13 @@ async function runSweep() {
 
 function onDuplicatesMerged(result: MergeDuplicatesResult) {
   const parts: string[] = []
-  parts.push(`Merged ${result.groupsProcessed} group${result.groupsProcessed === 1 ? '' : 's'}`)
-  parts.push(`removed ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+  parts.push(`Resolved ${result.groupsProcessed} group${result.groupsProcessed === 1 ? '' : 's'}`)
+  if (result.rowsDeleted > 0) {
+    parts.push(`removed ${result.rowsDeleted} row${result.rowsDeleted === 1 ? '' : 's'}`)
+  }
+  if (result.asinsCleared > 0) {
+    parts.push(`cleared ${result.asinsCleared} ASIN${result.asinsCleared === 1 ? '' : 's'}`)
+  }
   if (result.downloadsReassigned > 0) {
     parts.push(`reassigned ${result.downloadsReassigned} downloads`)
   }

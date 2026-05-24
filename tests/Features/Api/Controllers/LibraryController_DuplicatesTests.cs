@@ -237,5 +237,186 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.IsType<BadRequestObjectResult>(result);
             Assert.NotNull(await _audiobookRepository.GetByIdAsync(a.Id));
         }
+
+        [Fact]
+        public async Task MergeDuplicates_ClearAsinOnly_KeepsRowButRemovesAsin()
+        {
+            // The "wrong ASIN got stamped on this row" case: same ASIN, but
+            // the two rows are actually different books. User wants to keep
+            // both, just clear the bad ASIN on one of them.
+            var winner = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Real book A", Asin = "B00CLEAR0001",
+            });
+            var wrongAsin = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Different book that got the same ASIN", Asin = "B00CLEAR0001",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var actionResult = await controller.MergeDuplicates(new MergeDuplicatesRequest
+            {
+                Merges =
+                {
+                    new MergePairDto
+                    {
+                        WinnerId = winner.Id,
+                        LoserIds = new List<int>(),
+                        ClearAsinIds = new List<int> { wrongAsin.Id },
+                    }
+                }
+            });
+
+            var ok = actionResult as OkObjectResult;
+            Assert.True(ok != null, $"Expected Ok, got {actionResult?.GetType().Name}: {(actionResult as ObjectResult)?.Value}");
+            var result = (MergeDuplicatesResultDto)ok!.Value!;
+            Assert.Equal(1, result.GroupsProcessed);
+            Assert.Equal(0, result.RowsDeleted);
+            Assert.Equal(1, result.AsinsCleared);
+
+            // Both rows survive; the cleared one has no ASIN now.
+            using var verifyScope = _provider.CreateScope();
+            var repo = verifyScope.ServiceProvider
+                .GetRequiredService<Listenarr.Application.Interfaces.Repositories.IAudiobookRepository>();
+            var winnerNow = await repo.GetByIdAsync(winner.Id);
+            var clearedNow = await repo.GetByIdAsync(wrongAsin.Id);
+            Assert.NotNull(winnerNow);
+            Assert.NotNull(clearedNow);
+            Assert.Equal("B00CLEAR0001", winnerNow!.Asin);
+            Assert.True(string.IsNullOrEmpty(clearedNow!.Asin), $"Expected null/empty ASIN on cleared row, got '{clearedNow.Asin}'");
+        }
+
+        [Fact]
+        public async Task MergeDuplicates_ClearAsinOnly_WithoutWinner_StillWorks()
+        {
+            // Pair with no winner, only ClearAsinIds: the reference ASIN comes
+            // from the first clear id. Everyone keeps existing as a row, ASINs
+            // are nulled.
+            var a = await _audiobookRepository.AddAsync(new Audiobook { Title = "A", Asin = "B00ASINONLY1" });
+            var b = await _audiobookRepository.AddAsync(new Audiobook { Title = "B", Asin = "B00ASINONLY1" });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var actionResult = await controller.MergeDuplicates(new MergeDuplicatesRequest
+            {
+                Merges =
+                {
+                    new MergePairDto
+                    {
+                        WinnerId = null,
+                        LoserIds = new List<int>(),
+                        ClearAsinIds = new List<int> { a.Id, b.Id },
+                    }
+                }
+            });
+
+            var ok = actionResult as OkObjectResult;
+            Assert.True(ok != null, $"Expected Ok, got {actionResult?.GetType().Name}: {(actionResult as ObjectResult)?.Value}");
+            var result = (MergeDuplicatesResultDto)ok!.Value!;
+            Assert.Equal(2, result.AsinsCleared);
+            Assert.Equal(0, result.RowsDeleted);
+        }
+
+        [Fact]
+        public async Task MergeDuplicates_LosersWithoutWinner_RefusesToMerge()
+        {
+            var loser = await _audiobookRepository.AddAsync(new Audiobook { Title = "Loser", Asin = "B00NOWIN0001" });
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var result = await controller.MergeDuplicates(new MergeDuplicatesRequest
+            {
+                Merges =
+                {
+                    new MergePairDto
+                    {
+                        WinnerId = null,
+                        LoserIds = new List<int> { loser.Id },
+                    }
+                }
+            });
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            Assert.NotNull(await _audiobookRepository.GetByIdAsync(loser.Id));
+        }
+
+        [Fact]
+        public async Task MergeDuplicates_ClearAsinMismatch_AbortsBeforeAnyChange()
+        {
+            var winner = await _audiobookRepository.AddAsync(new Audiobook { Title = "Winner", Asin = "B00CLRMM0001" });
+            var unrelated = await _audiobookRepository.AddAsync(new Audiobook { Title = "Unrelated", Asin = "B00CLRMM0002" });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var result = await controller.MergeDuplicates(new MergeDuplicatesRequest
+            {
+                Merges =
+                {
+                    new MergePairDto
+                    {
+                        WinnerId = winner.Id,
+                        ClearAsinIds = new List<int> { unrelated.Id },
+                    }
+                }
+            });
+
+            Assert.IsType<BadRequestObjectResult>(result);
+
+            // Both keep their original ASINs.
+            using var verifyScope = _provider.CreateScope();
+            var repo = verifyScope.ServiceProvider
+                .GetRequiredService<Listenarr.Application.Interfaces.Repositories.IAudiobookRepository>();
+            Assert.Equal("B00CLRMM0002", (await repo.GetByIdAsync(unrelated.Id))!.Asin);
+        }
+
+        [Fact]
+        public async Task GetDuplicates_SurfacesFileMetadataAndRecommendationReason()
+        {
+            // Verify the extended response shape: per-row file list, totals,
+            // narrators/authors, and a non-empty recommendation reason.
+            var winner = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Book", Asin = "B00META0001",
+                BasePath = "/audiobooks/Author/Book",
+                FilePath = "/audiobooks/Author/Book/Book.mp3",
+                Authors = new List<string> { "Some Author" },
+                Narrators = new List<string> { "Some Narrator" },
+                Runtime = 480,
+            });
+            await _audiobookFileRepository.AddAsync(new AudiobookFile
+            {
+                AudiobookId = winner.Id,
+                Path = "/audiobooks/Author/Book/Book.mp3",
+                Size = 12_345_678,
+                Format = "mp3",
+                Codec = "mp3",
+                Bitrate = 128000,
+                DurationSeconds = 28800,
+                CreatedAt = DateTime.UtcNow,
+            });
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Phantom", Asin = "B00META0001",
+                BasePath = "/audiobooks",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var payload = ok!.Value!;
+            var groupsObj = payload.GetType().GetProperty("groups")!.GetValue(payload);
+            var groupList = new List<DuplicateGroupDto>();
+            foreach (var g in (System.Collections.IEnumerable)groupsObj!) groupList.Add((DuplicateGroupDto)g);
+
+            Assert.Single(groupList);
+            var group = groupList[0];
+            Assert.False(string.IsNullOrWhiteSpace(group.RecommendationReason),
+                "Group should carry a human-readable recommendation reason");
+
+            var winnerDto = group.Rows.Single(r => r.Id == winner.Id);
+            Assert.True(winnerDto.RecommendedWinner);
+            Assert.Single(winnerDto.Files);
+            Assert.Equal(12_345_678, winnerDto.Files[0].Size);
+            Assert.Equal(12_345_678, winnerDto.TotalSize);
+            Assert.Contains("Some Author", winnerDto.Authors);
+            Assert.Contains("Some Narrator", winnerDto.Narrators);
+            Assert.Equal(480, winnerDto.Runtime);
+        }
     }
 }
