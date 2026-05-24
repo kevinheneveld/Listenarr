@@ -61,12 +61,41 @@
           Review duplicates…
         </button>
       </div>
+
+      <div class="maintenance-row">
+        <div class="maintenance-copy">
+          <div class="maintenance-title">Organize library folders</div>
+          <div class="maintenance-help">
+            Walk every audiobook and move it under its canonical
+            <code>{Author}/{Title}</code> path using the configured Folder Naming Pattern.
+            Preview-first: rows that already match, that need moving, that collide with
+            another row at the same target, and that have unmoveable metadata are shown
+            separately. Apply queues per-book moves through the existing background queue.
+          </div>
+          <div v-if="lastOrganizeMessage" class="maintenance-result">
+            {{ lastOrganizeMessage }}
+          </div>
+        </div>
+        <button
+          type="button"
+          class="action-button"
+          @click="showOrganizeModal = true"
+        >
+          Organize library…
+        </button>
+      </div>
     </div>
 
     <DuplicatesReviewModal
       :visible="showDuplicatesModal"
       @close="showDuplicatesModal = false"
       @merged="onDuplicatesMerged"
+    />
+
+    <OrganizeLibraryModal
+      :visible="showOrganizeModal"
+      @close="showOrganizeModal = false"
+      @organized="onOrganized"
     />
   </div>
 </template>
@@ -77,12 +106,15 @@ import { PhWrench } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import DuplicatesReviewModal from '@/components/domain/maintenance/DuplicatesReviewModal.vue'
-import type { MergeDuplicatesResult } from '@/types'
+import OrganizeLibraryModal from '@/components/domain/maintenance/OrganizeLibraryModal.vue'
+import type { MergeDuplicatesResult, OrganizeLibraryApplyResult } from '@/types'
 
 const toast = useToast()
 const isRunning = ref(false)
 const showDuplicatesModal = ref(false)
 const lastDuplicatesMessage = ref<string | null>(null)
+const showOrganizeModal = ref(false)
+const lastOrganizeMessage = ref<string | null>(null)
 
 async function runSweep() {
   if (isRunning.value) return
@@ -146,6 +178,17 @@ function onDuplicatesMerged(result: MergeDuplicatesResult) {
     toast.success('Duplicate cleanup complete', lastDuplicatesMessage.value)
   }
 }
+
+function onOrganized(result: OrganizeLibraryApplyResult) {
+  const parts: string[] = []
+  parts.push(`Queued ${result.queued} move${result.queued === 1 ? '' : 's'}`)
+  if (result.skipped > 0) parts.push(`${result.skipped} skipped`)
+  if (result.failedToQueue > 0) parts.push(`${result.failedToQueue} failed to queue`)
+  if (result.warnings.length > 0) {
+    parts.push(`${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}`)
+  }
+  lastOrganizeMessage.value = parts.join(', ') + '.'
+}
 </script>
 
 <style scoped>
@@ -196,6 +239,13 @@ h3 {
   margin-top: 0.35rem;
   font-size: 0.85rem;
   color: #adb5bd;
+}
+
+.maintenance-help code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.78rem;
 }
 
 .maintenance-result {

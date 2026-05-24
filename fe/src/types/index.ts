@@ -1368,3 +1368,51 @@ export interface MergeDuplicatesResult {
   diskParentFoldersDeleted: number
   warnings: string[]
 }
+
+/**
+ * One audiobook in the organize-library preview. The server has bucketed
+ * each row into one of `already_canonical` / `will_move` / `collision` /
+ * `invalid_target` based on the configured FolderNamingPattern.
+ */
+export type OrganizePreviewStatus =
+  | 'already_canonical'
+  | 'will_move'
+  | 'collision'
+  | 'invalid_target'
+
+export interface OrganizePreviewRow {
+  id: number
+  title: string | null
+  author: string | null
+  currentPath: string | null
+  targetPath: string | null
+  fileCount: number
+  totalSize: number
+  status: OrganizePreviewStatus
+  /** Set when status is `collision` — the shared normalized target. */
+  collisionKey: string | null
+  /** Set when status is `invalid_target` — the human-readable reason. */
+  reason: string | null
+}
+
+export interface OrganizeLibraryPreview {
+  rows: OrganizePreviewRow[]
+  alreadyCanonicalCount: number
+  willMoveCount: number
+  collisionCount: number
+  invalidTargetCount: number
+}
+
+export interface OrganizeApplySkipped {
+  audiobookId: number
+  reason: string
+}
+
+export interface OrganizeLibraryApplyResult {
+  queued: number
+  skipped: number
+  failedToQueue: number
+  jobIds: string[]
+  skippedDetails: OrganizeApplySkipped[]
+  warnings: string[]
+}
