@@ -2534,7 +2534,12 @@ namespace Listenarr.Api.Controllers
                     var rows = g
                         .Select(a =>
                         {
-                            var files = filesByAudiobookId.TryGetValue(a.Id, out var fs) ? fs : new List<AudiobookFile>();
+                            // Sort files naturally so "Part 01" precedes "Part 10" — same
+                            // helper that the audiobook detail page uses, keeping the dedup
+                            // modal's file list in the order a user would actually expect.
+                            var files = filesByAudiobookId.TryGetValue(a.Id, out var fs)
+                                ? AudiobookFileOrdering.InNaturalOrder(fs).ToList()
+                                : new List<AudiobookFile>();
                             var fileCount = files.Count;
                             var hasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath);
                             return new DuplicateRowDto
@@ -2580,14 +2585,31 @@ namespace Listenarr.Api.Controllers
                         r => r.Id,
                         r => PathMetadataMatchScore(audiobooksById[r.Id]));
 
-                    // Winner-selection rule: prefer rows with files; among
-                    // those, prefer single-file copies (one whole .m4b/.mp3)
-                    // over chapter-file imports of the same book; then fall
-                    // back to file count, then real book folder, then
-                    // path-metadata alignment, then lowest Id. Exactly one
-                    // row is flagged per group, and we explain why.
+                    // Bitrate per row — max across the row's tracked files,
+                    // 0 when no files / no bitrate data. Used as the
+                    // primary quality signal for choosing a winner.
+                    var maxBitrateById = rows.ToDictionary(
+                        r => r.Id,
+                        r => r.Files.Where(f => f.Bitrate.HasValue).Select(f => f.Bitrate!.Value).DefaultIfEmpty(0).Max());
+
+                    // Winner-selection rule, in order of importance:
+                    //  1. Has any file (a row with no playable file is never
+                    //     a winner unless every row is fileless).
+                    //  2. Higher bitrate — quality trumps shape; a clean
+                    //     192 kbps multi-file is preferable to a 32 kbps
+                    //     single file of the same book.
+                    //  3. Single-file (FileCount == 1) — Kevin's stated
+                    //     preference among rows of equal quality.
+                    //  4. More tracked files (when neither is single-file,
+                    //     a more-complete import wins).
+                    //  5. Real book folder shape.
+                    //  6. Path-metadata alignment (folder name matches the
+                    //     book's title/author — catches stray ASINs that
+                    //     landed on the wrong row).
+                    //  7. Lowest Id (stable tiebreaker).
                     var orderedForWinner = rows
                         .OrderByDescending(r => r.HasAnyFile)
+                        .ThenByDescending(r => maxBitrateById[r.Id])
                         .ThenByDescending(r => r.FileCount == 1)
                         .ThenByDescending(r => r.FileCount)
                         .ThenByDescending(r => r.HasBookFolder)
@@ -2601,7 +2623,7 @@ namespace Listenarr.Api.Controllers
                     {
                         NormalizedAsin = g.Key,
                         Rows = rows.OrderBy(r => r.Id).ToList(),
-                        RecommendationReason = ExplainRecommendation(winner, rows, pathScoreById),
+                        RecommendationReason = ExplainRecommendation(winner, rows, pathScoreById, maxBitrateById),
                     };
                 })
                 .ToList();
@@ -2618,18 +2640,27 @@ namespace Listenarr.Api.Controllers
         private static string ExplainRecommendation(
             DuplicateRowDto winner,
             List<DuplicateRowDto> rows,
-            Dictionary<int, int> pathScoreById)
+            Dictionary<int, int> pathScoreById,
+            Dictionary<int, int> maxBitrateById)
         {
             var others = rows.Where(r => r.Id != winner.Id).ToList();
             if (winner.HasAnyFile && others.All(r => !r.HasAnyFile))
             {
                 return "Only row with tracked files.";
             }
-            // Single-file copies are preferred over chapter-file imports of
-            // the same book (Kevin's stated preference).
+            // Bitrate is the primary quality signal — a clean high-bitrate
+            // copy beats a same-shape low-bitrate copy.
+            var winnerBitrate = maxBitrateById[winner.Id];
+            var bestOtherBitrate = others.Any() ? others.Max(r => maxBitrateById[r.Id]) : 0;
+            if (winnerBitrate > 0 && winnerBitrate > bestOtherBitrate)
+            {
+                return $"Higher bitrate ({winnerBitrate / 1000} kbps vs {bestOtherBitrate / 1000} kbps).";
+            }
+            // Single-file copies are preferred over chapter-file imports
+            // of equal-bitrate.
             if (winner.HasAnyFile && winner.FileCount == 1 && others.Any(r => r.FileCount > 1))
             {
-                return "Single-file copy (preferred over chapter-file imports).";
+                return "Single-file copy (preferred over chapter-file imports of equal bitrate).";
             }
             if (winner.HasAnyFile && others.Any(r => r.HasAnyFile) && winner.FileCount > others.Max(r => r.FileCount))
             {
@@ -2900,43 +2931,80 @@ namespace Listenarr.Api.Controllers
                     if (losers.Count == 0 && clears.Count == 0) continue;
 
                     // Reassign FK refs from losers to winner, then delete.
+                    // ExecuteUpdateAsync emits a bare UPDATE without
+                    // SELECTing the row, so it sidesteps any column-level
+                    // schema drift between model and DB (e.g. MoveJob.SourcePath
+                    // exists on the model but isn't in the SQLite schema yet).
+                    // The InMemory test provider doesn't support ExecuteUpdate,
+                    // so fall back to load+update+save when supportsTransactions
+                    // is false.
                     if (losers.Count > 0 && pair.WinnerId.HasValue)
                     {
                         var winnerId = pair.WinnerId.Value;
 
-                        var downloads = await db.Downloads
-                            .Where(d => d.AudiobookId != null && losers.Contains(d.AudiobookId.Value))
-                            .ToListAsync(ct);
-                        foreach (var d in downloads) d.AudiobookId = winnerId;
-                        result.DownloadsReassigned += downloads.Count;
+                        if (supportsTransactions)
+                        {
+                            result.DownloadsReassigned += await db.Downloads
+                                .Where(d => d.AudiobookId != null && losers.Contains(d.AudiobookId.Value))
+                                .ExecuteUpdateAsync(s => s.SetProperty(d => d.AudiobookId, winnerId), ct);
 
-                        var historyRows = await db.History
-                            .Where(h => h.AudiobookId != null && losers.Contains(h.AudiobookId.Value))
-                            .ToListAsync(ct);
-                        foreach (var h in historyRows) h.AudiobookId = winnerId;
-                        result.HistoryReassigned += historyRows.Count;
+                            result.HistoryReassigned += await db.History
+                                .Where(h => h.AudiobookId != null && losers.Contains(h.AudiobookId.Value))
+                                .ExecuteUpdateAsync(s => s.SetProperty(h => h.AudiobookId, winnerId), ct);
 
-                        var moveJobs = await db.MoveJobs
-                            .Where(j => losers.Contains(j.AudiobookId))
-                            .ToListAsync(ct);
-                        foreach (var j in moveJobs) j.AudiobookId = winnerId;
-                        result.MoveJobsReassigned += moveJobs.Count;
+                            result.MoveJobsReassigned += await db.MoveJobs
+                                .Where(j => losers.Contains(j.AudiobookId))
+                                .ExecuteUpdateAsync(s => s.SetProperty(j => j.AudiobookId, winnerId), ct);
 
-                        var loserRows = await db.Audiobooks
-                            .Where(a => losers.Contains(a.Id))
-                            .ToListAsync(ct);
-                        db.Audiobooks.RemoveRange(loserRows);
-                        result.RowsDeleted += loserRows.Count;
+                            result.RowsDeleted += await db.Audiobooks
+                                .Where(a => losers.Contains(a.Id))
+                                .ExecuteDeleteAsync(ct);
+                        }
+                        else
+                        {
+                            var downloads = await db.Downloads
+                                .Where(d => d.AudiobookId != null && losers.Contains(d.AudiobookId.Value))
+                                .ToListAsync(ct);
+                            foreach (var d in downloads) d.AudiobookId = winnerId;
+                            result.DownloadsReassigned += downloads.Count;
+
+                            var historyRows = await db.History
+                                .Where(h => h.AudiobookId != null && losers.Contains(h.AudiobookId.Value))
+                                .ToListAsync(ct);
+                            foreach (var h in historyRows) h.AudiobookId = winnerId;
+                            result.HistoryReassigned += historyRows.Count;
+
+                            var moveJobs = await db.MoveJobs
+                                .Where(j => losers.Contains(j.AudiobookId))
+                                .ToListAsync(ct);
+                            foreach (var j in moveJobs) j.AudiobookId = winnerId;
+                            result.MoveJobsReassigned += moveJobs.Count;
+
+                            var loserRows = await db.Audiobooks
+                                .Where(a => losers.Contains(a.Id))
+                                .ToListAsync(ct);
+                            db.Audiobooks.RemoveRange(loserRows);
+                            result.RowsDeleted += loserRows.Count;
+                        }
                     }
 
                     // Clear ASIN on rows the user wants to keep but un-dupe.
                     if (clears.Count > 0)
                     {
-                        var clearRows = await db.Audiobooks
-                            .Where(a => clears.Contains(a.Id))
-                            .ToListAsync(ct);
-                        foreach (var c in clearRows) c.Asin = null;
-                        result.AsinsCleared += clearRows.Count;
+                        if (supportsTransactions)
+                        {
+                            result.AsinsCleared += await db.Audiobooks
+                                .Where(a => clears.Contains(a.Id))
+                                .ExecuteUpdateAsync(s => s.SetProperty(a => a.Asin, (string?)null), ct);
+                        }
+                        else
+                        {
+                            var clearRows = await db.Audiobooks
+                                .Where(a => clears.Contains(a.Id))
+                                .ToListAsync(ct);
+                            foreach (var c in clearRows) c.Asin = null;
+                            result.AsinsCleared += clearRows.Count;
+                        }
                     }
 
                     await db.SaveChangesAsync(ct);
