@@ -41,7 +41,7 @@
             <p class="help-text">
               Every row starts as <strong>Skip</strong>. Pick an action per row:
               <strong>Keep</strong> (this row survives) →
-              <strong>Merge</strong> (delete and reassign refs into the Keep row) →
+              <strong>Discard</strong> (delete the row; its Downloads/History/MoveJobs references move to the Keep row) →
               <strong>Clear ASIN</strong> (keep the row but un-dupe it).
               <strong>Files on disk are not touched</strong> — move them yourself first if the
               Keep row's folder isn't the one you want.
@@ -293,7 +293,9 @@ interface ActionOption {
 
 function actionOptions(row: DuplicateRow, group: DuplicateGroup): ActionOption[] {
   // Disable 'Keep' if another row in this group is already 'keep'.
-  // Disable 'Merge' if no 'keep' row exists yet (you must pick a survivor first).
+  // Disable 'Discard' (internal value: 'merge') if no 'keep' row exists yet —
+  // discarded rows reassign their FK refs into a winner, so a winner must
+  // exist first.
   const keepRow = group.rows.find((r) => rowActions[r.id] === 'keep')
   const anotherIsKeep = keepRow != null && keepRow.id !== row.id
   const noKeepSelected = keepRow == null
@@ -311,15 +313,15 @@ function actionOptions(row: DuplicateRow, group: DuplicateGroup): ActionOption[]
       disabled: anotherIsKeep,
       tooltip: anotherIsKeep
         ? `Already keeping id ${keepRow!.id}. Switch that one first.`
-        : 'This row survives. Any Merge rows will fold into it.',
+        : 'This row survives. Any Discard rows will fold their references into it.',
     },
     {
       value: 'merge',
-      label: 'Merge',
+      label: 'Discard',
       disabled: noKeepSelected,
       tooltip: noKeepSelected
         ? 'Pick a Keep row in this group first.'
-        : `Delete this row; reassign Downloads/History/MoveJobs to id ${keepRow!.id}.`,
+        : `Delete this row. Its Downloads/History/MoveJobs references move to id ${keepRow!.id}. Files on disk are NOT deleted.`,
     },
     {
       value: 'clearAsin',
@@ -385,7 +387,7 @@ async function executeMerge() {
     const clears = g.rows.filter((r) => rowActions[r.id] === 'clearAsin').map((r) => r.id)
     if (losers.length === 0 && clears.length === 0) continue
     if (losers.length > 0 && !keepRow) {
-      mergeError.value = `Group ${g.normalizedAsin} has Merge rows but no Keep row.`
+      mergeError.value = `Group ${g.normalizedAsin} has Discard rows but no Keep row.`
       return
     }
     merges.push({
