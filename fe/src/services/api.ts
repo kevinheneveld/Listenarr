@@ -63,6 +63,8 @@ import type {
   DuplicateGroup,
   DuplicatesMergePair,
   MergeDuplicatesResult,
+  OrganizeLibraryPreview,
+  OrganizeLibraryApplyResult,
 } from '@/types'
 import {
   getStartupConfigCached,
@@ -1285,6 +1287,19 @@ class ApiService {
     return this.request<MergeDuplicatesResult>(`/library/duplicates/merge`, {
       method: 'POST',
       body: JSON.stringify({ merges }),
+    })
+  }
+
+  async getOrganizeLibraryPreview(): Promise<OrganizeLibraryPreview> {
+    return this.request<OrganizeLibraryPreview>(`/library/organize/preview`, {
+      method: 'GET',
+    })
+  }
+
+  async applyOrganizeLibrary(audiobookIds: number[]): Promise<OrganizeLibraryApplyResult> {
+    return this.request<OrganizeLibraryApplyResult>(`/library/organize/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ audiobookIds }),
     })
   }
 

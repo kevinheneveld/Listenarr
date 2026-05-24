@@ -2886,6 +2886,341 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Walk every audiobook and bucket it into one of:
+        /// <c>already_canonical</c>, <c>will_move</c>, <c>collision</c>, or
+        /// <c>invalid_target</c>. Read-only — no DB or filesystem changes.
+        /// Targets are computed by applying <c>FolderNamingPattern</c> to each
+        /// row's metadata against the root folder that contains the row's
+        /// current <c>BasePath</c> (longest-prefix match; default root when
+        /// no current path).
+        /// </summary>
+        [HttpGet("organize/preview")]
+        public async Task<IActionResult> GetOrganizePreview(CancellationToken ct = default)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+            var settings = await configService.GetApplicationSettingsAsync();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            var allAudiobooks = await _repo.GetAllAsync();
+            var allFiles = await _audioFileRepository.GetAllAsync();
+            var filesByAudiobookId = allFiles
+                .GroupBy(f => f.AudiobookId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            // First pass: compute target per audiobook + initial bucket
+            // (invalid_target vs proposed). Collision detection happens after
+            // because it needs the full target map.
+            var rows = new List<OrganizePreviewRowDto>(allAudiobooks.Count);
+            var targetGroups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var audiobook in allAudiobooks)
+            {
+                ct.ThrowIfCancellationRequested();
+                var files = filesByAudiobookId.TryGetValue(audiobook.Id, out var fs) ? fs : new List<AudiobookFile>();
+                var currentPath = NormalizeOrganizePath(audiobook.BasePath);
+                var row = new OrganizePreviewRowDto
+                {
+                    Id = audiobook.Id,
+                    Title = audiobook.Title,
+                    Author = audiobook.Authors?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a)),
+                    CurrentPath = currentPath,
+                    FileCount = files.Count,
+                    TotalSize = files.Sum(f => f.Size ?? 0L),
+                };
+
+                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                if (!string.IsNullOrEmpty(invalidReason))
+                {
+                    row.Status = OrganizePreviewStatus.InvalidTarget;
+                    row.Reason = invalidReason;
+                    rows.Add(row);
+                    continue;
+                }
+
+                row.TargetPath = target;
+                var key = NormalizeOrganizeKey(target);
+                if (!targetGroups.TryGetValue(key, out var members))
+                {
+                    members = new List<int>();
+                    targetGroups[key] = members;
+                }
+                members.Add(audiobook.Id);
+                rows.Add(row);
+            }
+
+            // Second pass: assign bucket from target groups.
+            var collisionKeys = targetGroups
+                .Where(kv => kv.Value.Count > 1)
+                .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var row in rows)
+            {
+                if (row.Status == OrganizePreviewStatus.InvalidTarget) continue;
+                var key = NormalizeOrganizeKey(row.TargetPath ?? string.Empty);
+                if (collisionKeys.ContainsKey(key))
+                {
+                    row.Status = OrganizePreviewStatus.Collision;
+                    row.CollisionKey = key;
+                    continue;
+                }
+                row.Status = NormalizeOrganizeKey(row.CurrentPath ?? string.Empty) == key
+                    ? OrganizePreviewStatus.AlreadyCanonical
+                    : OrganizePreviewStatus.WillMove;
+            }
+
+            var preview = new OrganizeLibraryPreviewDto
+            {
+                Rows = rows.OrderBy(r => r.Status switch
+                    {
+                        OrganizePreviewStatus.WillMove => 0,
+                        OrganizePreviewStatus.Collision => 1,
+                        OrganizePreviewStatus.InvalidTarget => 2,
+                        _ => 3,
+                    }).ThenBy(r => r.Author ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(r => r.Title ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                AlreadyCanonicalCount = rows.Count(r => r.Status == OrganizePreviewStatus.AlreadyCanonical),
+                WillMoveCount = rows.Count(r => r.Status == OrganizePreviewStatus.WillMove),
+                CollisionCount = rows.Count(r => r.Status == OrganizePreviewStatus.Collision),
+                InvalidTargetCount = rows.Count(r => r.Status == OrganizePreviewStatus.InvalidTarget),
+            };
+            return Ok(preview);
+        }
+
+        /// <summary>
+        /// Queue a per-book move for each id the user confirmed in the
+        /// preview. Each id is re-validated against the live DB state before
+        /// queuing: ids that no longer compute to <c>will_move</c>, or that
+        /// collide with another id in the same request, are skipped with a
+        /// warning rather than aborting the rest. Missing ids return
+        /// BadRequest without queuing anything.
+        /// </summary>
+        [HttpPost("organize/apply")]
+        public async Task<IActionResult> ApplyOrganize([FromBody] OrganizeLibraryApplyRequest request, CancellationToken ct = default)
+        {
+            if (request?.AudiobookIds == null || request.AudiobookIds.Count == 0)
+            {
+                return BadRequest(new { message = "No audiobook ids provided" });
+            }
+            if (_moveQueueService == null)
+            {
+                return StatusCode(503, new { message = "Move queue not available" });
+            }
+
+            var requestedIds = request.AudiobookIds.Distinct().ToList();
+            var audiobooks = await _repo.GetByIdsWithFilesAsync(requestedIds, ct);
+            var foundIds = audiobooks.Select(a => a.Id).ToHashSet();
+            var missing = requestedIds.Where(id => !foundIds.Contains(id)).ToList();
+            if (missing.Count > 0)
+            {
+                return BadRequest(new
+                {
+                    message = $"Audiobook id(s) not found: {string.Join(", ", missing)}",
+                    missingIds = missing,
+                });
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+            var settings = await configService.GetApplicationSettingsAsync();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            // Re-compute targets for the selected set so the collision check
+            // reflects the live world, not the user's snapshot.
+            var targets = new Dictionary<int, string>();
+            var result = new OrganizeLibraryApplyResultDto();
+            var byKey = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var audiobook in audiobooks)
+            {
+                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                if (!string.IsNullOrEmpty(invalidReason))
+                {
+                    result.Skipped++;
+                    result.SkippedDetails.Add(new OrganizeApplySkippedDto { AudiobookId = audiobook.Id, Reason = invalidReason });
+                    continue;
+                }
+
+                var currentKey = NormalizeOrganizeKey(NormalizeOrganizePath(audiobook.BasePath));
+                var targetKey = NormalizeOrganizeKey(target);
+                if (currentKey == targetKey)
+                {
+                    result.Skipped++;
+                    result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                    {
+                        AudiobookId = audiobook.Id,
+                        Reason = "Already at canonical path",
+                    });
+                    continue;
+                }
+
+                targets[audiobook.Id] = target;
+                if (!byKey.TryGetValue(targetKey, out var ids))
+                {
+                    ids = new List<int>();
+                    byKey[targetKey] = ids;
+                }
+                ids.Add(audiobook.Id);
+            }
+
+            // Drop ids that collide with another id in the same request.
+            foreach (var (key, ids) in byKey)
+            {
+                if (ids.Count <= 1) continue;
+                foreach (var id in ids)
+                {
+                    targets.Remove(id);
+                    result.Skipped++;
+                    result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                    {
+                        AudiobookId = id,
+                        Reason = $"Collides with audiobook id(s) {string.Join(", ", ids.Where(i => i != id))} at the same target",
+                    });
+                }
+                result.Warnings.Add($"Skipped {ids.Count} audiobooks that compute to the same target path '{key}'");
+            }
+
+            foreach (var audiobook in audiobooks)
+            {
+                if (!targets.TryGetValue(audiobook.Id, out var target)) continue;
+                try
+                {
+                    var sourcePath = NormalizeOrganizePath(audiobook.BasePath);
+                    var jobId = await _moveQueueService.EnqueueMoveAsync(audiobook.Id, target, sourcePath);
+                    result.Queued++;
+                    result.JobIds.Add(jobId.ToString());
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogError(ex, "Failed to enqueue organize move for audiobook {AudiobookId}", audiobook.Id);
+                    result.FailedToQueue++;
+                    result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                    {
+                        AudiobookId = audiobook.Id,
+                        Reason = $"Failed to enqueue: {ex.Message}",
+                    });
+                }
+            }
+
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Build the canonical target folder path for <paramref name="audiobook"/>
+        /// using the configured <c>FolderNamingPattern</c>. Returns the
+        /// <c>(target, invalidReason)</c> pair — when <c>invalidReason</c> is
+        /// non-empty the audiobook should be bucketed as
+        /// <see cref="OrganizePreviewStatus.InvalidTarget"/>.
+        /// </summary>
+        private (string Target, string? InvalidReason) ComputeOrganizeTarget(
+            Audiobook audiobook,
+            ApplicationSettings settings,
+            List<RootFolder> rootFolders)
+        {
+            var firstAuthor = audiobook.Authors?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a));
+            if (string.IsNullOrWhiteSpace(audiobook.Title))
+            {
+                return (string.Empty, "Missing title");
+            }
+            if (string.IsNullOrWhiteSpace(firstAuthor))
+            {
+                return (string.Empty, "Missing author");
+            }
+            if (string.IsNullOrWhiteSpace(settings?.FolderNamingPattern))
+            {
+                return (string.Empty, "FolderNamingPattern is not configured");
+            }
+
+            var root = ResolveOrganizeRoot(audiobook.BasePath, settings, rootFolders);
+            if (string.IsNullOrEmpty(root))
+            {
+                return (string.Empty, "Audiobook is outside any configured library root");
+            }
+
+            var variables = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "Author", firstAuthor! },
+                { "Series", audiobook.Series ?? string.Empty },
+                { "Title", audiobook.Title! },
+                { "Subtitle", audiobook.Subtitle ?? string.Empty },
+                { "Edition", audiobook.Edition ?? string.Empty },
+                { "Narrator", audiobook.Narrators != null ? string.Join(", ", audiobook.Narrators.Where(n => !string.IsNullOrWhiteSpace(n))) : string.Empty },
+                { "Publisher", audiobook.Publisher ?? string.Empty },
+                { "Language", audiobook.Language ?? string.Empty },
+                { "Asin", audiobook.Asin ?? string.Empty },
+                { "SeriesNumber", audiobook.SeriesNumber ?? string.Empty },
+                { "Year", audiobook.PublishYear ?? string.Empty },
+                { "Quality", audiobook.Quality ?? string.Empty },
+                { "DiskNumber", string.Empty },
+                { "ChapterNumber", string.Empty },
+            };
+
+            var relative = _fileNamingService.ApplyNamingPattern(settings.FolderNamingPattern, variables, false);
+            if (string.IsNullOrWhiteSpace(relative))
+            {
+                return (string.Empty, "Naming pattern produced an empty path");
+            }
+
+            var combined = Path.IsPathRooted(relative) ? relative : Path.Join(root, relative);
+            return (NormalizeOrganizePath(combined), null);
+        }
+
+        /// <summary>
+        /// Pick the canonical root for <paramref name="basePath"/>: the
+        /// longest configured root folder (or <c>OutputPath</c>) that contains
+        /// the current base path. Falls back to the default root, then to
+        /// <c>settings.OutputPath</c>, when the audiobook has no base path
+        /// yet. Returns empty when the audiobook lives outside every root.
+        /// </summary>
+        private static string ResolveOrganizeRoot(
+            string? basePath,
+            ApplicationSettings settings,
+            List<RootFolder> rootFolders)
+        {
+            var configuredRoots = rootFolders
+                .Where(r => !string.IsNullOrWhiteSpace(r.Path))
+                .Select(r => NormalizeOrganizePath(r.Path!))
+                .ToList();
+            if (!string.IsNullOrWhiteSpace(settings.OutputPath))
+            {
+                var outputNormalized = NormalizeOrganizePath(settings.OutputPath);
+                if (!configuredRoots.Any(r => string.Equals(r, outputNormalized, StringComparison.OrdinalIgnoreCase)))
+                {
+                    configuredRoots.Add(outputNormalized);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(basePath))
+            {
+                var defaultRoot = rootFolders.FirstOrDefault(r => r.IsDefault)?.Path;
+                if (!string.IsNullOrWhiteSpace(defaultRoot)) return NormalizeOrganizePath(defaultRoot);
+                if (!string.IsNullOrWhiteSpace(settings.OutputPath)) return NormalizeOrganizePath(settings.OutputPath);
+                return configuredRoots.FirstOrDefault() ?? string.Empty;
+            }
+
+            var current = NormalizeOrganizePath(basePath);
+            return configuredRoots
+                .Where(r => string.Equals(r, current, StringComparison.OrdinalIgnoreCase) || FileUtils.IsPathInsideOf(current, r))
+                .OrderByDescending(r => r.Length)
+                .FirstOrDefault() ?? string.Empty;
+        }
+
+        private static string NormalizeOrganizePath(string? path)
+            => string.IsNullOrWhiteSpace(path) ? string.Empty : FileUtils.NormalizeStoredPath(path);
+
+        private static string NormalizeOrganizeKey(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return string.Empty;
+            var trimmed = path.TrimEnd('/', '\\');
+            return trimmed.ToUpperInvariant();
+        }
+
+        /// <summary>
         /// Bulk-update fields (monitored status, quality profile, root folder) for multiple audiobooks at once.
         /// </summary>
         /// <param name="request">Audiobook IDs and the fields to update.</param>

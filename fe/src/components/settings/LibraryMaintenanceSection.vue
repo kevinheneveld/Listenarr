@@ -40,16 +40,42 @@
       @close="showModal = false"
       @merged="onMerged"
     />
+
+    <div class="maintenance-action">
+      <div class="action-text">
+        <div class="action-label">Organize library folders</div>
+        <p class="action-help">
+          Walk every audiobook and move it under its canonical
+          <code>{Author}/{Title}</code> path using the configured Folder Naming Pattern.
+          Preview-first: rows that already match, that need moving, that collide with
+          another row at the same target, and that have unmoveable metadata are shown
+          separately. Apply queues per-book moves through the existing background queue.
+        </p>
+        <p v-if="lastOrganizeMessage" class="action-result">{{ lastOrganizeMessage }}</p>
+      </div>
+      <button type="button" class="action-btn" @click="showOrganizeModal = true">
+        Organize library…
+      </button>
+    </div>
+
+    <OrganizeLibraryModal
+      :visible="showOrganizeModal"
+      @close="showOrganizeModal = false"
+      @organized="onOrganized"
+    />
   </section>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
 import DuplicatesReviewModal from '@/components/domain/maintenance/DuplicatesReviewModal.vue'
-import type { MergeDuplicatesResult } from '@/types'
+import OrganizeLibraryModal from '@/components/domain/maintenance/OrganizeLibraryModal.vue'
+import type { MergeDuplicatesResult, OrganizeLibraryApplyResult } from '@/types'
 
 const showModal = ref(false)
+const showOrganizeModal = ref(false)
 const lastResultMessage = ref<string | null>(null)
+const lastOrganizeMessage = ref<string | null>(null)
 
 function onMerged(result: MergeDuplicatesResult) {
   const parts: string[] = []
@@ -78,6 +104,17 @@ function onMerged(result: MergeDuplicatesResult) {
     )
   }
   lastResultMessage.value = parts.join(', ') + '.'
+}
+
+function onOrganized(result: OrganizeLibraryApplyResult) {
+  const parts: string[] = []
+  parts.push(`Queued ${result.queued} move${result.queued === 1 ? '' : 's'}`)
+  if (result.skipped > 0) parts.push(`${result.skipped} skipped`)
+  if (result.failedToQueue > 0) parts.push(`${result.failedToQueue} failed to queue`)
+  if (result.warnings.length > 0) {
+    parts.push(`${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'}`)
+  }
+  lastOrganizeMessage.value = parts.join(', ') + '.'
 }
 </script>
 
@@ -115,6 +152,17 @@ function onMerged(result: MergeDuplicatesResult) {
   color: #999;
   margin: 0;
   line-height: 1.4;
+}
+.action-help code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.maintenance-action + .maintenance-action {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 .action-result {
   font-size: 12px;
