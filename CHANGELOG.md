@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Settings → File Management pattern preview now respects arbitrary zero-padding widths:** the FE preview generator's substitution regex was hardcoded to `:00`, so a multi-file pattern like `{Title}-{DiskNumber:000}` (3-digit padding needed for books with >99 chapters) rendered the unsubstituted token instead of `Title-001`, `Title-002`, etc. The actual file naming was always correct — the backend `FileNamingService.ApplyNamingPattern` already uses `int.ToString(format)` which accepts any standard .NET numeric format — but the misleading preview made it look like the setting wasn't being honored. The preview now matches `\{Key:(0+)\}` and pads to the captured width; the multi-file preview also renders three files using `1`, `2`, `3` as distinct sequence inputs (instead of substituting strings after the fact, which broke when the sample value's display width didn't equal the padded width).
+
 ## [0.2.71] - 2026-04-17
 
 ### Added

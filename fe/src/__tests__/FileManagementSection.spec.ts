@@ -82,6 +82,31 @@ describe('FileManagementSection', () => {
     expect(preview.text()).toContain('Ch03')
   })
 
+  it('respects wider zero-padding format in multi-file pattern preview', async () => {
+    // Regression test: the original preview hardcoded `:00` and produced the
+    // wrong output for patterns like `{DiskNumber:000}` (3-digit padding
+    // needed for >99-chapter books). The backend FileNamingService accepts
+    // any zero-pad width via .NET's ToString(format); the FE preview must
+    // match.
+    const { default: FileManagementSection } =
+      await import('@/components/settings/FileManagementSection.vue')
+    const wrapper = mount(FileManagementSection, {
+      props: {
+        settings: {
+          multiFileNamingPattern: '{Title}-{DiskNumber:000}',
+        },
+      },
+    })
+
+    const preview = wrapper.find('.pattern-preview code')
+    expect(preview.exists()).toBe(true)
+    expect(preview.text()).toContain('-001')
+    expect(preview.text()).toContain('-002')
+    expect(preview.text()).toContain('-003')
+    // Make sure the two-digit fallback isn't sneaking through.
+    expect(preview.text()).not.toMatch(/-01[^0-9]/)
+  })
+
   it('shows path length warning when combined pattern exceeds 259 characters', async () => {
     const { default: FileManagementSection } =
       await import('@/components/settings/FileManagementSection.vue')
