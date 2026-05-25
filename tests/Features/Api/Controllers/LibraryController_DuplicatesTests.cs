@@ -838,6 +838,80 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task GetDuplicates_TitleAuthorPass_DropsPhantomRowWhenAnyRowHasFiles()
+        {
+            // The "real + phantom" pattern: a row with files at the canonical
+            // target plus a monitored-but-not-downloaded record (no
+            // AudiobookFiles, no real BasePath) that resolves to the same
+            // target. The phantom is noise — drop it. The group disappears
+            // because only one row remains.
+            await SeedFolderPatternAsync();
+
+            var realBook = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "The Way of Kings",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00REAL0001",
+                BasePath = "/audiobooks/Brandon Sanderson/The Way of Kings",
+                FilePath = "/audiobooks/Brandon Sanderson/The Way of Kings/The Way of Kings.m4b",
+            });
+            // Phantom: zero files, BasePath stamped at the root (the wishlist
+            // pattern from the live library — not empty BasePath, just no
+            // real book folder).
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "The Way of Kings",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00WISH0001",
+                BasePath = "/audiobooks",
+            });
+            // Attach a file to the real row so the file map distinguishes them.
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(realBook)
+                .WithPath("/audiobooks/Brandon Sanderson/The Way of Kings/The Way of Kings.m4b")
+                .Build());
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var groups = ExtractGroups(ok!);
+            Assert.DoesNotContain(groups, g => g.Kind == DuplicateGroupKind.TitleAuthor);
+        }
+
+        [Fact]
+        public async Task GetDuplicates_TitleAuthorPass_AllFilelessRowsStillSurfaceAsAGroup()
+        {
+            // The "phantom + phantom" pattern: two wishlist records for the
+            // same book under distinct ASINs. The user needs to resolve which
+            // ASIN to keep, so the group must surface (filter only drops the
+            // phantom when a real-file row exists to make the choice trivial).
+            await SeedFolderPatternAsync();
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "The Bands of Mourning",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00WISH0001",
+                BasePath = "/audiobooks",
+            });
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "The Bands of Mourning",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00WISH0002",
+                BasePath = "/audiobooks",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var groups = ExtractGroups(ok!);
+
+            var group = Assert.Single(groups, g => g.Kind == DuplicateGroupKind.TitleAuthor);
+            Assert.Equal(2, group.Rows.Count);
+            Assert.All(group.Rows, r => Assert.Equal(0, r.FileCount));
+        }
+
+        [Fact]
         public async Task GetDuplicates_TitleAuthorPass_RequiresAtLeastTwoRowsAtSameTarget()
         {
             // A row that computes a unique canonical target produces no

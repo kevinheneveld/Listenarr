@@ -260,10 +260,18 @@
             <div class="confirm-panel">
               <div class="confirm-title">About to apply these changes:</div>
               <ul class="confirm-list">
-                <li v-if="plannedDeletions > 0">
-                  <strong>{{ plannedDeletions }}</strong> row{{ plannedDeletions === 1 ? '' : 's' }} will be discarded —
+                <li v-if="plannedDeletions - plannedTitleAuthorDiscards > 0">
+                  <strong>{{ plannedDeletions - plannedTitleAuthorDiscards }}</strong>
+                  ASIN-group row{{ plannedDeletions - plannedTitleAuthorDiscards === 1 ? '' : 's' }} will be discarded —
                   {{ discardFileCount }} file{{ discardFileCount === 1 ? '' : 's' }}
                   ({{ formatBytes(discardTotalBytes) }}) and their folders will be deleted from disk.
+                </li>
+                <li v-if="plannedTitleAuthorDiscards > 0">
+                  <strong>{{ plannedTitleAuthorDiscards }}</strong>
+                  title/author row{{ plannedTitleAuthorDiscards === 1 ? '' : 's' }} will be deleted via per-row
+                  <code>DELETE /library/&#123;id&#125;</code><span v-if="plannedTitleAuthorDiscardsWithFiles > 0">
+                    — <strong>{{ plannedTitleAuthorDiscardsWithFiles }}</strong> of these
+                    {{ plannedTitleAuthorDiscardsWithFiles === 1 ? 'has' : 'have' }} files on disk that will also be removed</span>.
                 </li>
                 <li v-if="plannedClears > 0">
                   <strong>{{ plannedClears }}</strong> row{{ plannedClears === 1 ? '' : 's' }} will have their ASIN cleared
@@ -370,6 +378,29 @@ const plannedDeletions = computed(() => {
   }
   return total
 })
+// Count of title/author Discards specifically, so the confirmation panel
+// can describe them differently (no Keep row to fold references into; either
+// 0 files or a destructive per-row delete).
+const plannedTitleAuthorDiscards = computed(() => {
+  let total = 0
+  for (const g of groups.value) {
+    if (isAsinGroup(g)) continue
+    for (const r of g.rows) {
+      if (rowActions[r.id] === 'merge') total++
+    }
+  }
+  return total
+})
+const plannedTitleAuthorDiscardsWithFiles = computed(() => {
+  let total = 0
+  for (const g of groups.value) {
+    if (isAsinGroup(g)) continue
+    for (const r of g.rows) {
+      if (rowActions[r.id] === 'merge' && r.fileCount > 0) total++
+    }
+  }
+  return total
+})
 
 const plannedClears = computed(() => {
   let total = 0
@@ -392,11 +423,14 @@ const skippedCount = computed(() => {
 
 const canApply = computed(() => plannedDeletions.value > 0 || plannedClears.value > 0)
 
-// Sum of files / bytes across rows currently marked for Discard. Surfaced in
-// the confirmation panel so the user sees the disk impact before committing.
+// Sum of files / bytes across rows currently marked for Discard inside
+// ASIN groups (the bulk merge path). Title/author Discards are described
+// separately in the confirmation panel since they don't fold-references-
+// into-a-Keep-row — they're straight per-row deletes.
 const discardFileCount = computed(() => {
   let n = 0
   for (const g of groups.value) {
+    if (!isAsinGroup(g)) continue
     for (const r of g.rows) {
       if (rowActions[r.id] === 'merge') n += r.fileCount
     }
@@ -406,6 +440,7 @@ const discardFileCount = computed(() => {
 const discardTotalBytes = computed(() => {
   let n = 0
   for (const g of groups.value) {
+    if (!isAsinGroup(g)) continue
     for (const r of g.rows) {
       if (rowActions[r.id] === 'merge') n += r.totalSize
     }
@@ -431,17 +466,30 @@ interface ActionOption {
 }
 
 function actionOptions(row: DuplicateRow, group: DuplicateGroup): ActionOption[] {
-  // Title/author groups: distinct ASINs, so the merge endpoint will reject
-  // any cross-ASIN Keep/Discard. Surface a Skip-only action set + an explicit
-  // tooltip that points the user at the audiobook detail page for cleanup.
+  // Title/author groups: distinct ASINs. The merge endpoint rejects
+  // cross-ASIN attempts, so Keep / Clear ASIN don't apply. But Discard
+  // *does* — it just deletes the audiobook row (and its files / folder if
+  // the user opts in). Routes through DELETE /library/{id} per-row rather
+  // than through the merge endpoint.
   if (!isAsinGroup(group)) {
+    const hasFiles = row.fileCount > 0
     return [
       {
         value: 'skip',
         label: 'Skip',
         disabled: false,
-        tooltip:
-          'Title/author collisions can\'t be merged here — different ASINs. Use "open in new tab ↗" to inspect, then delete a row from its audiobook detail page if needed.',
+        tooltip: 'Leave this row untouched.',
+      },
+      {
+        // We reuse the internal value 'merge' for backward compatibility
+        // with the existing per-row action state; the executeMerge() path
+        // branches on group.kind to route ASIN-merge vs. straight delete.
+        value: 'merge',
+        label: 'Discard',
+        disabled: false,
+        tooltip: hasFiles
+          ? `Delete this audiobook row AND its ${row.fileCount} file${row.fileCount === 1 ? '' : 's'} from disk. Destructive — use "open in new tab ↗" to verify first.`
+          : 'Delete this audiobook row. No files on disk to remove (this is a monitored-but-not-downloaded record).',
       },
     ]
   }
@@ -543,12 +591,22 @@ async function load() {
 async function executeMerge() {
   mergeError.value = null
   const merges: DuplicatesMergePair[] = []
+  // Title/author Discards route through DELETE /library/{id} per row since
+  // the merge endpoint requires shared ASIN. Collect them here.
+  const titleAuthorDiscards: { row: DuplicateRow; deleteFiles: boolean }[] = []
   for (const g of groups.value) {
-    // Title/author groups can't be merged through this endpoint — distinct
-    // ASINs would be rejected server-side. The action set already hides
-    // Keep/Discard/Clear ASIN for these, but skip defensively in case a stale
-    // action somehow survived a tab switch.
-    if (!isAsinGroup(g)) continue
+    if (!isAsinGroup(g)) {
+      for (const r of g.rows) {
+        if (rowActions[r.id] === 'merge') {
+          // For phantom rows (no files) the delete is harmless — nothing on
+          // disk. For rows with files the user opted in via Discard's
+          // tooltip warning + the modal's overall confirmation panel; delete
+          // files and the book folder.
+          titleAuthorDiscards.push({ row: r, deleteFiles: r.fileCount > 0 })
+        }
+      }
+      continue
+    }
     const keepRow = g.rows.find((r) => rowActions[r.id] === 'keep')
     const losers = g.rows.filter((r) => rowActions[r.id] === 'merge').map((r) => r.id)
     const clears = g.rows.filter((r) => rowActions[r.id] === 'clearAsin').map((r) => r.id)
@@ -563,15 +621,58 @@ async function executeMerge() {
       clearAsinIds: clears,
     })
   }
-  if (merges.length === 0) {
+  if (merges.length === 0 && titleAuthorDiscards.length === 0) {
     mergeError.value = 'No actions selected.'
     return
   }
 
   merging.value = true
   try {
-    const result = await apiService.mergeDuplicateAudiobooks(merges)
-    emit('merged', result)
+    // Title/author Discards run first as independent per-row calls so a
+    // mid-loop failure leaves the ASIN merge un-executed (recoverable state)
+    // rather than half-done. Per-row failures are collected and surfaced.
+    const taFailures: string[] = []
+    for (const { row, deleteFiles } of titleAuthorDiscards) {
+      try {
+        await apiService.removeFromLibrary(row.id, {
+          deleteFiles,
+          deleteFolder: deleteFiles,
+        })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown error'
+        taFailures.push(`id ${row.id} (${row.title || 'untitled'}): ${msg}`)
+        errorTracking.captureException(err as Error, {
+          component: 'DuplicatesReviewModal',
+          operation: 'executeMerge.titleAuthorDiscard',
+          metadata: { audiobookId: row.id, deleteFiles },
+        })
+      }
+    }
+    if (taFailures.length > 0) {
+      mergeError.value = `Some title/author Discards failed: ${taFailures.slice(0, 3).join('; ')}${taFailures.length > 3 ? `; …(+${taFailures.length - 3} more)` : ''}`
+      // Don't return — the ASIN-side merge can still run if some rows succeeded.
+    }
+
+    let result: MergeDuplicatesResult | null = null
+    if (merges.length > 0) {
+      result = await apiService.mergeDuplicateAudiobooks(merges)
+    }
+    // Fabricate a result-like object so the parent's "merged" listener
+    // always gets a usable count, even when only title/author Discards ran.
+    const merged: MergeDuplicatesResult = result ?? {
+      groupsProcessed: 0,
+      rowsDeleted: 0,
+      asinsCleared: 0,
+      downloadsReassigned: 0,
+      historyReassigned: 0,
+      moveJobsReassigned: 0,
+      diskFilesDeleted: 0,
+      diskFoldersDeleted: 0,
+      diskParentFoldersDeleted: 0,
+      warnings: [],
+    }
+    merged.rowsDeleted += titleAuthorDiscards.length - taFailures.length
+    emit('merged', merged)
     emit('close')
   } catch (err) {
     mergeError.value = err instanceof Error ? err.message : 'Apply failed'

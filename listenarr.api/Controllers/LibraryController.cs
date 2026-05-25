@@ -2713,16 +2713,40 @@ namespace Listenarr.Api.Controllers
             // Title/author pass: group the pre-computed target map and emit
             // one group per collision key. Sorted by target key for stable UI
             // ordering.
+            //
+            // Phantom-row filtering: a row with zero tracked AudiobookFiles
+            // is a monitored-but-not-downloaded record — it has no content to
+            // compare and never sits on disk at the canonical target. When it
+            // shares a target with at least one row that *does* have files,
+            // the phantom is just noise (the user's options would be "delete
+            // the empty wishlist record" — no real choice). Drop it. Groups
+            // where ALL rows are fileless still surface, because two wishlist
+            // records under different ASINs for the same book IS a real
+            // duplicate the user needs to resolve.
             var audiobooksByIdLookup = allAudiobooks.ToDictionary(a => a.Id);
+            var fileCountByAudiobookId = filesByAudiobookId
+                .ToDictionary(kv => kv.Key, kv => kv.Value.Count);
+            int FileCount(int id) => fileCountByAudiobookId.TryGetValue(id, out var n) ? n : 0;
+
             var titleAuthorGroups = titleAuthorTargetByAudiobookId
                 .GroupBy(kv => kv.Value)
                 .Where(g => g.Count() > 1)
-                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(g => BuildGroup(
-                    g.Select(kv => audiobooksByIdLookup[kv.Key]).ToList(),
+                .Select(g =>
+                {
+                    var memberIds = g.Select(kv => kv.Key).ToList();
+                    var anyHasFiles = memberIds.Any(id => FileCount(id) > 0);
+                    var filteredIds = anyHasFiles
+                        ? memberIds.Where(id => FileCount(id) > 0).ToList()
+                        : memberIds;
+                    return new { Key = g.Key, Ids = filteredIds };
+                })
+                .Where(x => x.Ids.Count > 1)
+                .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(x => BuildGroup(
+                    x.Ids.Select(id => audiobooksByIdLookup[id]).ToList(),
                     DuplicateGroupKind.TitleAuthor,
                     normalizedAsin: string.Empty,
-                    collisionKey: g.Key))
+                    collisionKey: x.Key))
                 .Where(group => group != null)
                 .Cast<DuplicateGroupDto>()
                 .ToList();
