@@ -1327,8 +1327,24 @@ export interface DuplicateRow {
   likelyDuplicateFileCount: number
 }
 
+/**
+ * Bucket discriminator returned by `GET /library/duplicates`.
+ * - `asin`: rows share a normalized (UPPER, trimmed) ASIN — the original
+ *   dedup pass. Merge/Discard actions are safe to apply.
+ * - `title_author`: rows compute to the same canonical folder target via
+ *   `FolderNamingPattern` but have distinct ASINs (edition variants,
+ *   wrong-metadata rows). Merge across distinct ASINs is rejected by the
+ *   server — the UI surfaces these for manual cleanup.
+ */
+export type DuplicateGroupKind = 'asin' | 'title_author'
+
 export interface DuplicateGroup {
+  /** Discriminator. Older API responses lack this; assume `asin` when absent. */
+  kind?: DuplicateGroupKind
+  /** Populated when `kind === 'asin'`; empty otherwise. */
   normalizedAsin: string
+  /** Populated when `kind === 'title_author'` — the shared canonical target. */
+  collisionKey?: string
   rows: DuplicateRow[]
   recommendationReason: string
 }

@@ -34,22 +34,60 @@
           </div>
 
           <div v-else-if="groups.length === 0" class="state-msg">
-            No same-ASIN duplicate audiobook rows found.
+            No duplicate audiobook rows found.
           </div>
 
           <template v-else>
-            <p class="help-text">
-              Every row starts as <strong>Skip</strong>. Pick an action per row:
+            <!-- Tabs: ASIN dedup (the original detection) vs Title/Author
+                 collisions (rows that resolve to the same canonical folder
+                 path under FolderNamingPattern but have distinct ASINs).
+                 The two passes have different action sets so they're rendered
+                 as siblings — both visible under "All", filtered under each
+                 specific tab. -->
+            <div class="dup-tabs" role="tablist" aria-label="Duplicate kinds">
+              <button
+                v-for="t in tabs"
+                :key="t.value"
+                type="button"
+                role="tab"
+                class="dup-tab"
+                :class="{ active: activeTab === t.value }"
+                :aria-selected="activeTab === t.value"
+                :disabled="t.count === 0 && t.value !== 'all'"
+                @click="activeTab = t.value"
+              >
+                {{ t.label }}
+                <span class="dup-tab-count">{{ t.count }}</span>
+              </button>
+            </div>
+
+            <p v-if="activeTab !== 'title_author'" class="help-text">
+              <strong>By ASIN:</strong> every row starts as <strong>Skip</strong>. Pick an action per row:
               <strong>Keep</strong> (this row survives) →
               <strong>Discard</strong> (delete the row, its files, and its folder from disk; references move to the Keep row) →
               <strong>Clear ASIN</strong> (keep the row and its files — just un-dupe it).
               The summary below tracks what'll be deleted; you'll get one final confirmation
               before anything is applied.
             </p>
+            <p v-if="activeTab !== 'asin'" class="help-text">
+              <strong>By title/author:</strong> these rows have distinct ASINs but resolve to the same
+              <code>{Author}/{Title}/…</code> folder — usually edition variants or wrong-metadata rows.
+              The server won't merge across ASINs, so cleanup happens manually: open the suspect row
+              in a new tab to check it, then delete it from the audiobook detail page if needed.
+            </p>
 
-            <div v-for="group in groups" :key="group.normalizedAsin" class="group">
+            <div v-if="visibleGroups.length === 0" class="state-msg">
+              <span v-if="activeTab === 'asin'">No same-ASIN duplicate audiobook rows found.</span>
+              <span v-else-if="activeTab === 'title_author'">No title/author collisions found.</span>
+              <span v-else>No duplicates found in this view.</span>
+            </div>
+
+            <div v-for="group in visibleGroups" :key="groupKey(group)" class="group">
               <div class="group-header">
-                <span class="group-asin">ASIN {{ group.normalizedAsin }}</span>
+                <span v-if="isAsinGroup(group)" class="group-asin">ASIN {{ group.normalizedAsin }}</span>
+                <span v-else class="group-asin group-collision" :title="group.collisionKey || ''">
+                  Same folder · {{ shortenPath(group.collisionKey || '') }}
+                </span>
                 <span class="group-meta">{{ group.rows.length }} rows</span>
               </div>
               <p v-if="group.recommendationReason" class="group-reason">
@@ -290,6 +328,36 @@ const pendingConfirm = ref(false)
 // Per-row action keyed by audiobook id.
 const rowActions = reactive<Record<number, DuplicateRowAction>>({})
 const expanded = reactive<Record<number, boolean>>({})
+// Tab filter — 'asin' / 'title_author' / 'all'. Defaults intelligently after
+// load() based on which buckets have content.
+type DupTab = 'asin' | 'title_author' | 'all'
+const activeTab = ref<DupTab>('asin')
+
+function groupKindOf(g: DuplicateGroup): 'asin' | 'title_author' {
+  // Older API responses omit `kind`; treat them as ASIN groups for back-compat.
+  return g.kind === 'title_author' ? 'title_author' : 'asin'
+}
+function isAsinGroup(g: DuplicateGroup): boolean {
+  return groupKindOf(g) === 'asin'
+}
+function groupKey(g: DuplicateGroup): string {
+  // Stable v-for key — ASIN groups key on the ASIN, title/author groups on
+  // the collision key (the shared canonical target path).
+  return isAsinGroup(g) ? `asin:${g.normalizedAsin}` : `ta:${g.collisionKey || ''}`
+}
+
+const asinGroups = computed(() => groups.value.filter(isAsinGroup))
+const titleAuthorGroups = computed(() => groups.value.filter((g) => !isAsinGroup(g)))
+const visibleGroups = computed(() => {
+  if (activeTab.value === 'asin') return asinGroups.value
+  if (activeTab.value === 'title_author') return titleAuthorGroups.value
+  return groups.value
+})
+const tabs = computed(() => [
+  { value: 'asin' as DupTab, label: 'By ASIN', count: asinGroups.value.length },
+  { value: 'title_author' as DupTab, label: 'By title/author', count: titleAuthorGroups.value.length },
+  { value: 'all' as DupTab, label: 'All', count: groups.value.length },
+])
 
 const { getProtectedImageSrc } = useProtectedImages()
 
@@ -363,6 +431,21 @@ interface ActionOption {
 }
 
 function actionOptions(row: DuplicateRow, group: DuplicateGroup): ActionOption[] {
+  // Title/author groups: distinct ASINs, so the merge endpoint will reject
+  // any cross-ASIN Keep/Discard. Surface a Skip-only action set + an explicit
+  // tooltip that points the user at the audiobook detail page for cleanup.
+  if (!isAsinGroup(group)) {
+    return [
+      {
+        value: 'skip',
+        label: 'Skip',
+        disabled: false,
+        tooltip:
+          'Title/author collisions can\'t be merged here — different ASINs. Use "open in new tab ↗" to inspect, then delete a row from its audiobook detail page if needed.',
+      },
+    ]
+  }
+
   // Disable 'Keep' if another row in this group is already 'keep'.
   // Disable 'Discard' (internal value: 'merge') if no 'keep' row exists yet —
   // discarded rows reassign their FK refs into a winner, so a winner must
@@ -438,6 +521,14 @@ async function load() {
         rowActions[r.id] = 'skip'
       }
     }
+    // Default-tab heuristic: if the only content is title/author collisions,
+    // open that tab; otherwise stay on ASIN (the historical default + where
+    // the actionable Keep/Discard live).
+    if (asinGroups.value.length === 0 && titleAuthorGroups.value.length > 0) {
+      activeTab.value = 'title_author'
+    } else {
+      activeTab.value = 'asin'
+    }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : 'Unknown error'
     errorTracking.captureException(err as Error, {
@@ -453,6 +544,11 @@ async function executeMerge() {
   mergeError.value = null
   const merges: DuplicatesMergePair[] = []
   for (const g of groups.value) {
+    // Title/author groups can't be merged through this endpoint — distinct
+    // ASINs would be rejected server-side. The action set already hides
+    // Keep/Discard/Clear ASIN for these, but skip defensively in case a stale
+    // action somehow survived a tab switch.
+    if (!isAsinGroup(g)) continue
     const keepRow = g.rows.find((r) => rowActions[r.id] === 'keep')
     const losers = g.rows.filter((r) => rowActions[r.id] === 'merge').map((r) => r.id)
     const clears = g.rows.filter((r) => rowActions[r.id] === 'clearAsin').map((r) => r.id)
@@ -697,6 +793,62 @@ watch(
   color: #bbb;
   margin: 0 0 14px;
   line-height: 1.5;
+}
+.help-text code {
+  font-family: monospace;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #d8d8d8;
+}
+.dup-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.dup-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #aaa;
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.dup-tab:hover:not(:disabled) {
+  color: #ddd;
+}
+.dup-tab.active {
+  color: #fff;
+  border-bottom-color: #5ea1ff;
+}
+.dup-tab:disabled {
+  color: #555;
+  cursor: not-allowed;
+}
+.dup-tab-count {
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 1px 7px;
+  color: inherit;
+}
+.dup-tab.active .dup-tab-count {
+  background: rgba(94, 161, 255, 0.18);
+}
+.group-collision {
+  font-family: monospace;
+  letter-spacing: 0.02em;
+  color: #c9b88a;
+  max-width: 70%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .group {
   border: 1px solid rgba(255, 255, 255, 0.05);

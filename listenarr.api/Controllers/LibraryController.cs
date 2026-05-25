@@ -2497,155 +2497,244 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
-        /// Preview same-ASIN duplicate audiobook groups in the library. Each
-        /// group lists the rows that share a normalized (UPPER, trimmed) ASIN
-        /// and flags one row as the recommended winner (prefers rows with
-        /// files, then a real book folder, then the lowest Id).
+        /// Preview duplicate audiobook groups in the library across two
+        /// detection passes: same-ASIN (rows sharing a normalized UPPER/trimmed
+        /// ASIN, <see cref="DuplicateGroupKind.Asin"/>) and same-canonical-target
+        /// (rows that resolve to the same <c>{Author}/{Title}/…</c> folder via
+        /// the configured <c>FolderNamingPattern</c> but have distinct ASINs,
+        /// <see cref="DuplicateGroupKind.TitleAuthor"/>). The title/author pass
+        /// catches edition variants and wrong-metadata rows the same-ASIN pass
+        /// can't see.
         /// </summary>
+        /// <remarks>
+        /// Sequential-resolution semantic: a row already in an ASIN group is
+        /// excluded from the title/author pass. After the user merges the ASIN
+        /// pair, a re-fetch surfaces any residual title/author collisions
+        /// involving the survivor. This keeps each row in exactly one group at
+        /// a time so the UI never has to disambiguate.
+        /// </remarks>
         [HttpGet("duplicates")]
         public async Task<IActionResult> GetDuplicates()
         {
             var allAudiobooks = await _repo.GetAllAsync();
-            // Find the in-scope audiobook ids first so we only load files for
-            // rows that actually appear in a duplicate group.
-            var dupeAudiobookIds = allAudiobooks
+            // Find the same-ASIN in-scope ids first.
+            var asinGroupedIds = allAudiobooks
                 .Where(a => !string.IsNullOrWhiteSpace(a.Asin))
                 .GroupBy(a => a.Asin!.Trim().ToUpperInvariant())
                 .Where(g => g.Count() > 1)
                 .SelectMany(g => g.Select(a => a.Id))
                 .ToHashSet();
 
-            // Pre-compute the file map for the in-scope ids so the response
-            // can surface per-row size / bitrate / format for verifying
-            // "is this really the same book?" before merging.
+            // Settings + roots are needed for the title/author pass below.
+            // Load them now so the same instances feed every row's target
+            // computation.
+            using var scope = _scopeFactory.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+            var settings = await configService.GetApplicationSettingsAsync();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            // Title/author pass: rows NOT in any ASIN group whose computed
+            // canonical target collides with at least one other row. Building
+            // the map up front lets us include those ids in the file-loading
+            // scope so their detail rows look identical to the ASIN ones.
+            var titleAuthorTargetByAudiobookId = new Dictionary<int, string>();
+            foreach (var audiobook in allAudiobooks)
+            {
+                if (asinGroupedIds.Contains(audiobook.Id)) continue;
+                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                if (!string.IsNullOrEmpty(invalidReason) || string.IsNullOrWhiteSpace(target)) continue;
+                titleAuthorTargetByAudiobookId[audiobook.Id] = NormalizeOrganizeKey(target);
+            }
+            var titleAuthorGroupedIds = titleAuthorTargetByAudiobookId
+                .GroupBy(kv => kv.Value)
+                .Where(g => g.Count() > 1)
+                .SelectMany(g => g.Select(kv => kv.Key))
+                .ToHashSet();
+
+            // Pre-compute the file map for every in-scope id (both passes) so
+            // the response can surface per-row size / bitrate / format for
+            // verifying "is this really the same book?" before merging.
+            var inScopeAudiobookIds = new HashSet<int>(asinGroupedIds);
+            inScopeAudiobookIds.UnionWith(titleAuthorGroupedIds);
             var allFiles = await _audioFileRepository.GetAllAsync();
             var filesByAudiobookId = allFiles
-                .Where(f => dupeAudiobookIds.Contains(f.AudiobookId))
+                .Where(f => inScopeAudiobookIds.Contains(f.AudiobookId))
                 .GroupBy(f => f.AudiobookId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            var groups = allAudiobooks
+            // Build a group DTO from the audiobook rows that share a key —
+            // identical row-construction and winner-selection logic across both
+            // the ASIN and title/author passes. Returns null when the group
+            // becomes empty after row construction (shouldn't happen because
+            // both passes filter to size>1, but defensive).
+            DuplicateGroupDto? BuildGroup(IList<Audiobook> members, string kind, string normalizedAsin, string collisionKey)
+            {
+                var rows = members
+                    .Select(a =>
+                    {
+                        // Sort files by path so chapters list in a stable order.
+                        // Zero-padded numeric prefixes (01, 02, ... 10) sort correctly
+                        // alphabetically; the audiobook detail view does richer natural
+                        // sort, but for a preview modal alphabetical is fine.
+                        var files = filesByAudiobookId.TryGetValue(a.Id, out var fs)
+                            ? fs.OrderBy(f => f.Path ?? string.Empty, StringComparer.Ordinal).ToList()
+                            : new List<AudiobookFile>();
+                        var fileCount = files.Count;
+                        var hasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath);
+                        return new DuplicateRowDto
+                        {
+                            Id = a.Id,
+                            Title = a.Title,
+                            Series = a.Series,
+                            SeriesNumber = a.SeriesNumber,
+                            Asin = a.Asin,
+                            BasePath = a.BasePath,
+                            FilePath = a.FilePath,
+                            ImageUrl = a.ImageUrl,
+                            FileCount = fileCount,
+                            HasAnyFile = hasAnyFile,
+                            HasBookFolder = HasRealBookFolder(a.BasePath),
+                            Authors = a.Authors ?? new List<string>(),
+                            Narrators = a.Narrators ?? new List<string>(),
+                            Runtime = a.Runtime,
+                            Files = files.Select(f => new DuplicateFileDto
+                            {
+                                Id = f.Id,
+                                Path = f.Path,
+                                Size = f.Size,
+                                DurationSeconds = f.DurationSeconds,
+                                Format = f.Format,
+                                Codec = f.Codec,
+                                Bitrate = f.Bitrate,
+                            }).ToList(),
+                            TotalSize = files.Sum(f => f.Size ?? 0L),
+                            LikelyDuplicateFileCount = CountIntraRowDuplicates(files),
+                        };
+                    })
+                    .ToList();
+                if (rows.Count == 0) return null;
+
+                // Compute a "does this row's folder look like it actually
+                // belongs to this book" score per row. Captures the
+                // common "wrong ASIN got stamped on this row" symptom
+                // where the same ASIN ends up on rows whose BasePath
+                // points at totally different authors/books — the row
+                // whose folder name matches the title and/or author is
+                // the one we want. (For title/author groups the score is
+                // less discriminating since both rows resolve to the same
+                // canonical target, but it still tiebreaks usefully when
+                // one row's BasePath drifts from its metadata.)
+                var audiobooksById = members.ToDictionary(a => a.Id);
+                var pathScoreById = rows.ToDictionary(
+                    r => r.Id,
+                    r => PathMetadataMatchScore(audiobooksById[r.Id]));
+
+                // Bitrate per row — max across the row's tracked files,
+                // 0 when no files / no bitrate data. Used as the
+                // primary quality signal for choosing a winner.
+                var maxBitrateById = rows.ToDictionary(
+                    r => r.Id,
+                    r => r.Files.Where(f => f.Bitrate.HasValue).Select(f => f.Bitrate!.Value).DefaultIfEmpty(0).Max());
+
+                // Effective unique file count: total files minus the count
+                // of files that look like duplicate naming variants of
+                // another file on the same row. Two rows that both
+                // represent a 57-chapter book — one of them with each
+                // chapter imported twice in different naming styles —
+                // should be treated as equally complete, not 114 > 57.
+                var effectiveFileCountById = rows.ToDictionary(
+                    r => r.Id,
+                    r => r.FileCount - r.LikelyDuplicateFileCount);
+
+                // Winner-selection rule, in order of importance:
+                //  1. Has any file (a row with no playable file is never
+                //     a winner unless every row is fileless).
+                //  2. Higher bitrate — quality trumps shape; a clean
+                //     192 kbps multi-file is preferable to a 32 kbps
+                //     single file of the same book.
+                //  3. Single-file (FileCount == 1) — Kevin's stated
+                //     preference among rows of equal quality.
+                //  4. More unique tracked files (FileCount minus
+                //     LikelyDuplicateFileCount). A 114-file row whose
+                //     filenames pair up as 57×2 naming variants is
+                //     effectively 57, not 114.
+                //  5. Fewer intra-row dupes (cleaner content beats a
+                //     row that needs deduping after merge).
+                //  6. Real book folder shape.
+                //  7. Path-metadata alignment (folder name matches the
+                //     book's title/author — catches stray ASINs that
+                //     landed on the wrong row).
+                //  8. Lowest Id (stable tiebreaker).
+                var orderedForWinner = rows
+                    .OrderByDescending(r => r.HasAnyFile)
+                    .ThenByDescending(r => maxBitrateById[r.Id])
+                    .ThenByDescending(r => r.FileCount == 1)
+                    .ThenByDescending(r => effectiveFileCountById[r.Id])
+                    .ThenBy(r => r.LikelyDuplicateFileCount)
+                    .ThenByDescending(r => r.HasBookFolder)
+                    .ThenByDescending(r => pathScoreById[r.Id])
+                    .ThenBy(r => r.Id)
+                    .ToList();
+                var winner = orderedForWinner.First();
+                winner.RecommendedWinner = true;
+
+                // For title/author groups we phrase the recommendation
+                // differently: the same heuristic picks a likely-canonical
+                // row, but the user's action is "delete the misnamed
+                // rows" rather than "merge into the winner" since each row
+                // has a distinct ASIN. The merge endpoint will reject any
+                // cross-ASIN attempt anyway.
+                var recommendation = kind == DuplicateGroupKind.TitleAuthor
+                    ? "Same author/title — different ASINs. Open each row in a new tab to compare and clean up the wrong-metadata or duplicate-edition row(s) via the audiobook detail page."
+                    : ExplainRecommendation(winner, rows, pathScoreById, maxBitrateById);
+
+                return new DuplicateGroupDto
+                {
+                    Kind = kind,
+                    NormalizedAsin = normalizedAsin,
+                    CollisionKey = collisionKey,
+                    Rows = rows.OrderBy(r => r.Id).ToList(),
+                    RecommendationReason = recommendation,
+                };
+            }
+
+            var asinGroups = allAudiobooks
                 .Where(a => !string.IsNullOrWhiteSpace(a.Asin))
                 .GroupBy(a => a.Asin!.Trim().ToUpperInvariant())
                 .Where(g => g.Count() > 1)
                 .OrderBy(g => g.Key)
-                .Select(g =>
-                {
-                    var rows = g
-                        .Select(a =>
-                        {
-                            // Sort files by path so chapters list in a stable order.
-                            // Zero-padded numeric prefixes (01, 02, ... 10) sort correctly
-                            // alphabetically; the audiobook detail view does richer natural
-                            // sort, but for a preview modal alphabetical is fine.
-                            var files = filesByAudiobookId.TryGetValue(a.Id, out var fs)
-                                ? fs.OrderBy(f => f.Path ?? string.Empty, StringComparer.Ordinal).ToList()
-                                : new List<AudiobookFile>();
-                            var fileCount = files.Count;
-                            var hasAnyFile = fileCount > 0 || !string.IsNullOrWhiteSpace(a.FilePath);
-                            return new DuplicateRowDto
-                            {
-                                Id = a.Id,
-                                Title = a.Title,
-                                Series = a.Series,
-                                SeriesNumber = a.SeriesNumber,
-                                Asin = a.Asin,
-                                BasePath = a.BasePath,
-                                FilePath = a.FilePath,
-                                ImageUrl = a.ImageUrl,
-                                FileCount = fileCount,
-                                HasAnyFile = hasAnyFile,
-                                HasBookFolder = HasRealBookFolder(a.BasePath),
-                                Authors = a.Authors ?? new List<string>(),
-                                Narrators = a.Narrators ?? new List<string>(),
-                                Runtime = a.Runtime,
-                                Files = files.Select(f => new DuplicateFileDto
-                                {
-                                    Id = f.Id,
-                                    Path = f.Path,
-                                    Size = f.Size,
-                                    DurationSeconds = f.DurationSeconds,
-                                    Format = f.Format,
-                                    Codec = f.Codec,
-                                    Bitrate = f.Bitrate,
-                                }).ToList(),
-                                TotalSize = files.Sum(f => f.Size ?? 0L),
-                                LikelyDuplicateFileCount = CountIntraRowDuplicates(files),
-                            };
-                        })
-                        .ToList();
-
-                    // Compute a "does this row's folder look like it actually
-                    // belongs to this book" score per row. Captures the
-                    // common "wrong ASIN got stamped on this row" symptom
-                    // where the same ASIN ends up on rows whose BasePath
-                    // points at totally different authors/books — the row
-                    // whose folder name matches the title and/or author is
-                    // the one we want.
-                    var audiobooksById = g.ToDictionary(a => a.Id);
-                    var pathScoreById = rows.ToDictionary(
-                        r => r.Id,
-                        r => PathMetadataMatchScore(audiobooksById[r.Id]));
-
-                    // Bitrate per row — max across the row's tracked files,
-                    // 0 when no files / no bitrate data. Used as the
-                    // primary quality signal for choosing a winner.
-                    var maxBitrateById = rows.ToDictionary(
-                        r => r.Id,
-                        r => r.Files.Where(f => f.Bitrate.HasValue).Select(f => f.Bitrate!.Value).DefaultIfEmpty(0).Max());
-
-                    // Effective unique file count: total files minus the count
-                    // of files that look like duplicate naming variants of
-                    // another file on the same row. Two rows that both
-                    // represent a 57-chapter book — one of them with each
-                    // chapter imported twice in different naming styles —
-                    // should be treated as equally complete, not 114 > 57.
-                    var effectiveFileCountById = rows.ToDictionary(
-                        r => r.Id,
-                        r => r.FileCount - r.LikelyDuplicateFileCount);
-
-                    // Winner-selection rule, in order of importance:
-                    //  1. Has any file (a row with no playable file is never
-                    //     a winner unless every row is fileless).
-                    //  2. Higher bitrate — quality trumps shape; a clean
-                    //     192 kbps multi-file is preferable to a 32 kbps
-                    //     single file of the same book.
-                    //  3. Single-file (FileCount == 1) — Kevin's stated
-                    //     preference among rows of equal quality.
-                    //  4. More unique tracked files (FileCount minus
-                    //     LikelyDuplicateFileCount). A 114-file row whose
-                    //     filenames pair up as 57×2 naming variants is
-                    //     effectively 57, not 114.
-                    //  5. Fewer intra-row dupes (cleaner content beats a
-                    //     row that needs deduping after merge).
-                    //  6. Real book folder shape.
-                    //  7. Path-metadata alignment (folder name matches the
-                    //     book's title/author — catches stray ASINs that
-                    //     landed on the wrong row).
-                    //  8. Lowest Id (stable tiebreaker).
-                    var orderedForWinner = rows
-                        .OrderByDescending(r => r.HasAnyFile)
-                        .ThenByDescending(r => maxBitrateById[r.Id])
-                        .ThenByDescending(r => r.FileCount == 1)
-                        .ThenByDescending(r => effectiveFileCountById[r.Id])
-                        .ThenBy(r => r.LikelyDuplicateFileCount)
-                        .ThenByDescending(r => r.HasBookFolder)
-                        .ThenByDescending(r => pathScoreById[r.Id])
-                        .ThenBy(r => r.Id)
-                        .ToList();
-                    var winner = orderedForWinner.First();
-                    winner.RecommendedWinner = true;
-
-                    return new DuplicateGroupDto
-                    {
-                        NormalizedAsin = g.Key,
-                        Rows = rows.OrderBy(r => r.Id).ToList(),
-                        RecommendationReason = ExplainRecommendation(winner, rows, pathScoreById, maxBitrateById),
-                    };
-                })
+                .Select(g => BuildGroup(g.ToList(), DuplicateGroupKind.Asin, g.Key, string.Empty))
+                .Where(group => group != null)
+                .Cast<DuplicateGroupDto>()
                 .ToList();
 
-            return Ok(new { groups, totalGroups = groups.Count });
+            // Title/author pass: group the pre-computed target map and emit
+            // one group per collision key. Sorted by target key for stable UI
+            // ordering.
+            var audiobooksByIdLookup = allAudiobooks.ToDictionary(a => a.Id);
+            var titleAuthorGroups = titleAuthorTargetByAudiobookId
+                .GroupBy(kv => kv.Value)
+                .Where(g => g.Count() > 1)
+                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => BuildGroup(
+                    g.Select(kv => audiobooksByIdLookup[kv.Key]).ToList(),
+                    DuplicateGroupKind.TitleAuthor,
+                    normalizedAsin: string.Empty,
+                    collisionKey: g.Key))
+                .Where(group => group != null)
+                .Cast<DuplicateGroupDto>()
+                .ToList();
+
+            var groups = asinGroups.Concat(titleAuthorGroups).ToList();
+            return Ok(new
+            {
+                groups,
+                totalGroups = groups.Count,
+                asinGroupCount = asinGroups.Count,
+                titleAuthorGroupCount = titleAuthorGroups.Count,
+            });
         }
 
         /// <summary>

@@ -19,19 +19,51 @@
 namespace Listenarr.Api.Dtos
 {
     /// <summary>
-    /// One same-ASIN group surfaced by the duplicates preview endpoint.
+    /// Bucket-kind discriminator for <see cref="DuplicateGroupDto.Kind"/>.
+    /// </summary>
+    public static class DuplicateGroupKind
+    {
+        /// <summary>Rows share the same normalized ASIN.</summary>
+        public const string Asin = "asin";
+        /// <summary>
+        /// Rows compute to the same canonical folder target via
+        /// <c>FolderNamingPattern</c> (same <c>{Author}/{Title}/…</c>) but have
+        /// distinct ASINs. Surfaces edition-variant duplicates and "wrong
+        /// metadata" rows the same-ASIN dedup pass cannot catch.
+        /// </summary>
+        public const string TitleAuthor = "title_author";
+    }
+
+    /// <summary>
+    /// One duplicate group surfaced by the duplicates preview endpoint. May be
+    /// keyed by ASIN or by computed folder target — see <see cref="Kind"/>.
     /// </summary>
     public class DuplicateGroupDto
     {
-        /// <summary>The uppercase-trimmed ASIN shared by every row in the group.</summary>
+        /// <summary>
+        /// One of <see cref="DuplicateGroupKind"/>. Defaults to <c>asin</c>
+        /// for back-compat with older clients that don't know about the
+        /// title/author pass.
+        /// </summary>
+        public string Kind { get; set; } = DuplicateGroupKind.Asin;
+
+        /// <summary>The uppercase-trimmed ASIN shared by every row in the group. Empty for non-ASIN groups.</summary>
         public string NormalizedAsin { get; set; } = string.Empty;
 
-        /// <summary>The library rows that share this ASIN.</summary>
+        /// <summary>
+        /// The normalized canonical-folder target the rows in this group all
+        /// compute to. Populated when <see cref="Kind"/> is <c>title_author</c>;
+        /// empty otherwise. Lets the UI present the grouping criterion.
+        /// </summary>
+        public string CollisionKey { get; set; } = string.Empty;
+
+        /// <summary>The library rows in this group.</summary>
         public List<DuplicateRowDto> Rows { get; set; } = new();
 
         /// <summary>
         /// Human-readable explanation of why the row marked
-        /// <see cref="DuplicateRowDto.RecommendedWinner"/> was chosen.
+        /// <see cref="DuplicateRowDto.RecommendedWinner"/> was chosen, or — for
+        /// <c>title_author</c> groups — guidance on how to act on the group.
         /// Empty when no row is recommended.
         /// </summary>
         public string RecommendationReason { get; set; } = string.Empty;

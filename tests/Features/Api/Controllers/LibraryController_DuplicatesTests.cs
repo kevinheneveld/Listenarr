@@ -719,5 +719,175 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.Contains("Some Narrator", winnerDto.Narrators);
             Assert.Equal(480, winnerDto.Runtime);
         }
+
+        // -------------------------------------------------------------------
+        // Title/author dedup pass (Issue A) — rows that share a computed
+        // canonical folder target via FolderNamingPattern but have distinct
+        // ASINs. Catches edition variants and wrong-metadata rows the same-
+        // ASIN pass can't see.
+        // -------------------------------------------------------------------
+
+        private async Task SeedFolderPatternAsync(string pattern = "{Author}/{Title}", string root = "/audiobooks")
+        {
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithFolderNamingPattern(pattern)
+                .WithOutputPath(root)
+                .Build());
+            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
+                .WithName("Library")
+                .WithPath(root)
+                .WithIsDefault()
+                .Build());
+        }
+
+        private static List<DuplicateGroupDto> ExtractGroups(OkObjectResult ok)
+        {
+            var payload = ok!.Value!;
+            var groupsObj = payload.GetType().GetProperty("groups")!.GetValue(payload);
+            var groupList = new List<DuplicateGroupDto>();
+            foreach (var g in (System.Collections.IEnumerable)groupsObj!) groupList.Add((DuplicateGroupDto)g);
+            return groupList;
+        }
+
+        [Fact]
+        public async Task GetDuplicates_TitleAuthorPass_GroupsRowsByComputedTarget()
+        {
+            await SeedFolderPatternAsync();
+
+            // Two rows with the same {Author}/{Title} but distinct ASINs —
+            // exactly the case the same-ASIN pass misses.
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Elantris",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00EDIT0001",
+                BasePath = "/audiobooks/Brandon Sanderson/Elantris (old)",
+            });
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Elantris",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00EDIT0002",
+                BasePath = "/audiobooks/Brandon Sanderson/Elantris (new)",
+            });
+            // Unrelated row that should NOT collide with anything.
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Solo Book",
+                Authors = new List<string> { "Solo Author" },
+                Asin = "B00SOLO0001",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var groups = ExtractGroups(ok!);
+
+            var titleGroup = Assert.Single(groups, g => g.Kind == DuplicateGroupKind.TitleAuthor);
+            Assert.DoesNotContain(groups, g => g.Kind == DuplicateGroupKind.Asin);
+            Assert.Equal(2, titleGroup.Rows.Count);
+            Assert.False(string.IsNullOrEmpty(titleGroup.CollisionKey));
+            Assert.Equal(string.Empty, titleGroup.NormalizedAsin);
+            Assert.False(string.IsNullOrWhiteSpace(titleGroup.RecommendationReason));
+        }
+
+        [Fact]
+        public async Task GetDuplicates_TitleAuthorPass_ExcludesRowsAlreadyInAsinGroup()
+        {
+            // Same-ASIN pair AND a third row sharing the same canonical
+            // target but with a distinct ASIN. The third row alone has no
+            // title/author collision partner outside the ASIN group, so the
+            // title/author pass should emit NO group — sequential resolution:
+            // the user merges the ASIN pair first, then a re-fetch may surface
+            // a residual title/author collision against the survivor.
+            await SeedFolderPatternAsync();
+
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Foundation",
+                Authors = new List<string> { "Isaac Asimov" },
+                Asin = "B00ASIN0001",
+                BasePath = "/audiobooks/Isaac Asimov/Foundation",
+            });
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Foundation",
+                Authors = new List<string> { "Isaac Asimov" },
+                Asin = "B00ASIN0001",
+                BasePath = "/audiobooks/Isaac Asimov/Foundation (dupe)",
+            });
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Foundation",
+                Authors = new List<string> { "Isaac Asimov" },
+                Asin = "B00ASIN0002",
+                BasePath = "/audiobooks/Isaac Asimov/Foundation (variant)",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            var groups = ExtractGroups(ok!);
+
+            // One ASIN group (the B00ASIN0001 pair). No title/author group —
+            // the third row's only would-be collision partners are inside the
+            // ASIN group and are excluded from the title/author pass.
+            var asinGroup = Assert.Single(groups, g => g.Kind == DuplicateGroupKind.Asin);
+            Assert.Equal("B00ASIN0001", asinGroup.NormalizedAsin);
+            Assert.DoesNotContain(groups, g => g.Kind == DuplicateGroupKind.TitleAuthor);
+        }
+
+        [Fact]
+        public async Task GetDuplicates_TitleAuthorPass_RequiresAtLeastTwoRowsAtSameTarget()
+        {
+            // A row that computes a unique canonical target produces no
+            // collision and therefore no group.
+            await SeedFolderPatternAsync();
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Lone Book",
+                Authors = new List<string> { "Lone Author" },
+                Asin = "B00LONE0001",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var ok = await controller.GetDuplicates() as OkObjectResult;
+            Assert.NotNull(ok);
+            Assert.Empty(ExtractGroups(ok!));
+        }
+
+        [Fact]
+        public async Task MergeDuplicates_RejectsRowsThatDontShareAsin()
+        {
+            // Hardening check: even if a frontend forgets to suppress the merge
+            // action for title/author groups and submits a cross-ASIN merge,
+            // the server must reject the whole request.
+            var winner = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Elantris",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00EDIT0001",
+            });
+            var crossAsinLoser = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Elantris",
+                Authors = new List<string> { "Brandon Sanderson" },
+                Asin = "B00EDIT0002",
+            });
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var result = await controller.MergeDuplicates(new MergeDuplicatesRequest
+            {
+                Merges = new List<MergePairDto>
+                {
+                    new() { WinnerId = winner.Id, LoserIds = new List<int> { crossAsinLoser.Id } },
+                },
+            });
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            // Confirm nothing was deleted.
+            Assert.NotNull(await _audiobookRepository.GetByIdAsync(winner.Id));
+            Assert.NotNull(await _audiobookRepository.GetByIdAsync(crossAsinLoser.Id));
+        }
     }
 }
