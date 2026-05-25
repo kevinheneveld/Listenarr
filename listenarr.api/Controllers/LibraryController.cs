@@ -3160,6 +3160,16 @@ namespace Listenarr.Api.Controllers
             {
                 ct.ThrowIfCancellationRequested();
                 var files = filesByAudiobookId.TryGetValue(audiobook.Id, out var fs) ? fs : new List<AudiobookFile>();
+
+                // Monitored-but-not-downloaded records have no files on disk
+                // and no BasePath, so there is nothing to organize. Skip them
+                // entirely to keep the preview (and the default-select-all
+                // apply path) focused on rows that represent real files.
+                if (string.IsNullOrWhiteSpace(audiobook.BasePath) && files.Count == 0)
+                {
+                    continue;
+                }
+
                 var currentPath = NormalizeOrganizePath(audiobook.BasePath);
                 var row = new OrganizePreviewRowDto
                 {

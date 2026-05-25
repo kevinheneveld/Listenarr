@@ -137,6 +137,28 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task Preview_RowWithNoFilesAndNoBasePath_IsSkipped()
+        {
+            // Monitored-but-not-downloaded record: tracked in the library,
+            // but nothing on disk and no destination set. Including it in
+            // will_move would cause an "Source path does not exist" failure
+            // when the user applies the default selection.
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Wishlisted Book",
+                Authors = new List<string> { "Author M" },
+                BasePath = null,
+            });
+
+            var preview = await GetPreviewAsync();
+            Assert.Empty(preview.Rows);
+            Assert.Equal(0, preview.WillMoveCount);
+            Assert.Equal(0, preview.AlreadyCanonicalCount);
+            Assert.Equal(0, preview.CollisionCount);
+            Assert.Equal(0, preview.InvalidTargetCount);
+        }
+
+        [Fact]
         public async Task Preview_MissingAuthor_IsInvalidTarget()
         {
             await _audiobookRepository.AddAsync(new Audiobook
