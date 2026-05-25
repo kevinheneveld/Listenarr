@@ -3274,11 +3274,17 @@ namespace Listenarr.Api.Controllers
                 ct.ThrowIfCancellationRequested();
                 var files = filesByAudiobookId.TryGetValue(audiobook.Id, out var fs) ? fs : new List<AudiobookFile>();
 
-                // Monitored-but-not-downloaded records have no files on disk
-                // and no BasePath, so there is nothing to organize. Skip them
-                // entirely to keep the preview (and the default-select-all
-                // apply path) focused on rows that represent real files.
-                if (string.IsNullOrWhiteSpace(audiobook.BasePath) && files.Count == 0)
+                // Rows with no tracked files have nothing to organize. The
+                // earlier version of this check only skipped rows when BOTH
+                // BasePath was empty AND there were no files, which let through
+                // monitored-but-not-downloaded records whose BasePath was
+                // stamped at the root (e.g. "/audiobooks"). Those rows then
+                // appeared in `will_move`, got default-selected, and failed
+                // the MoveBackgroundService's source-path-exists check one by
+                // one — generating per-job DB writes and SignalR pings but
+                // doing no real work. Skip every fileless row entirely:
+                // whatever BasePath says, there's no on-disk content to move.
+                if (files.Count == 0)
                 {
                     continue;
                 }
@@ -4484,6 +4490,83 @@ namespace Listenarr.Api.Controllers
                 _logger.LogError(ex, "Failed to enqueue move job for audiobook {AudiobookId}", id);
                 return StatusCode(500, new { message = "Failed to enqueue move job", error = ex.Message });
             }
+        }
+
+        /// <summary>
+        /// Summary of the persisted MoveJobs table — counts by status plus a
+        /// configurable tail of recent completed/failed jobs. Built so the
+        /// UI can show "X of Y moves complete (Z failed)" progress for a
+        /// long-running organize-library run without spamming the
+        /// per-job <c>GET /library/move/{jobId}</c> endpoint, and so the
+        /// operator can curl it for post-mortem after a large run.
+        ///
+        /// Failure messages are returned verbatim — they're the most useful
+        /// signal when a batch under-performs. Source/target paths in the
+        /// recent-jobs tails are filesystem strings; no extra redaction
+        /// because the same data is already in <c>/library/move/{jobId}</c>.
+        /// </summary>
+        /// <param name="recentLimit">How many of the most-recent completed and most-recent failed jobs to include (default 25, clamped to [0, 200]).</param>
+        [HttpGet("move/summary")]
+        public async Task<IActionResult> GetMoveQueueSummary([FromQuery] int recentLimit = 25, CancellationToken ct = default)
+        {
+            if (recentLimit < 0) recentLimit = 0;
+            if (recentLimit > 200) recentLimit = 200;
+
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ListenArrDbContext>();
+
+            // Single query of the whole table — MoveJobs is small (one row per
+            // queued move ever) and the read is a single scan. Saves four
+            // round-trips compared to one GroupBy + one OrderBy per status.
+            // EF Core's ExecuteUpdate/ExecuteDelete style isn't applicable
+            // because we need projections.
+            var all = await db.MoveJobs
+                .AsNoTracking()
+                .Select(j => new
+                {
+                    j.Id,
+                    j.AudiobookId,
+                    j.Status,
+                    j.Error,
+                    j.RequestedPath,
+                    j.SourcePath,
+                    j.EnqueuedAt,
+                    j.UpdatedAt,
+                    j.AttemptCount,
+                })
+                .ToListAsync(ct);
+
+            var byStatus = all
+                .GroupBy(j => j.Status ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+            int CountOf(string s) => byStatus.TryGetValue(s, out var n) ? n : 0;
+
+            var recentCompleted = all
+                .Where(j => string.Equals(j.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
+                .Take(recentLimit)
+                .ToList();
+            var recentFailed = all
+                .Where(j => string.Equals(j.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
+                .Take(recentLimit)
+                .ToList();
+
+            return Ok(new
+            {
+                total = all.Count,
+                queued = CountOf("Queued"),
+                processing = CountOf("Processing"),
+                completed = CountOf("Completed"),
+                failed = CountOf("Failed"),
+                // Any status the server hasn't seen the producer use yet
+                // (e.g. legacy "Cancelled") falls into a residual bucket so
+                // the FE never silently drops a count.
+                other = all.Count - CountOf("Queued") - CountOf("Processing") - CountOf("Completed") - CountOf("Failed"),
+                recentCompleted,
+                recentFailed,
+            });
         }
 
         /// <summary>

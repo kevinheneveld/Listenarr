@@ -20,6 +20,7 @@ using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Application.Mapping;
 using Listenarr.Application.Notification;
 using Listenarr.Application.Security;
+using Listenarr.Domain.Common;
 using Listenarr.Domain.Models;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -220,6 +221,35 @@ namespace Listenarr.Infrastructure.FileSystem
 
                             // Delete source directory
                             Directory.Delete(source, true);
+
+                            // Persist the new BasePath BEFORE enqueueing the post-move scan.
+                            // Without this, the post-move scan (line ~370) runs against the
+                            // audiobook's stale BasePath (still pointing at the now-empty
+                            // source), reports every tracked file as "missing", clears the
+                            // AudiobookFile rows via the "base path missing" cleanup, and
+                            // nulls BasePath — orphaning the just-moved files on disk from
+                            // the library record. Update BasePath in place so the scan sees
+                            // the new location and re-attaches the (now-moved) files. The
+                            // ImageUrl / FilePath updates below depend on this being
+                            // persisted too, so do it first.
+                            try
+                            {
+                                audiobook.BasePath = FileUtils.NormalizeStoredPath(target);
+                                await audiobookRepository.UpdateAsync(audiobook);
+                                logger.LogInformation(
+                                    "Updated audiobook {AudiobookId} BasePath to new target after move job {JobId}",
+                                    audiobook.Id, job.Id);
+                            }
+                            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                            {
+                                // Don't fail the move if the DB update hiccups — the files
+                                // are already at the target on disk. A subsequent re-scan
+                                // or organize pass can still recover. But log loudly so the
+                                // operator sees it.
+                                logger.LogError(ex,
+                                    "Failed to persist new BasePath after move job {JobId} (audiobook {AudiobookId}). Files are at {Target} but the DB still points at the old source. Re-scan needed.",
+                                    job.Id, audiobook.Id, LogRedaction.SanitizeFilePath(target));
+                            }
 
                             // Preserve local image path if it pointed inside the source directory
                             try

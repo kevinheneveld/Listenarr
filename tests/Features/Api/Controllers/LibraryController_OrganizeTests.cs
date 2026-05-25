@@ -59,6 +59,22 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 .Build());
         }
 
+        /// <summary>
+        /// Attach a single tracked AudiobookFile to <paramref name="audiobook"/> so
+        /// it survives <c>GetOrganizePreview</c>'s fileless-row skip filter (rows
+        /// with zero tracked files are excluded from the preview entirely because
+        /// they have nothing on disk to move). Tests that exercise bucket
+        /// classification — already_canonical, will_move, collision,
+        /// invalid_target — call this so the row reaches the bucketing logic.
+        /// </summary>
+        private Task AttachFileAsync(Audiobook audiobook, string? path = null)
+        {
+            return _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(audiobook)
+                .WithPath(path ?? $"{audiobook.BasePath ?? Root}/dummy.m4b")
+                .Build());
+        }
+
         [Fact]
         public async Task Preview_NoLibrary_ReturnsEmptyBuckets()
         {
@@ -75,12 +91,13 @@ namespace Listenarr.Tests.Features.Api.Controllers
         public async Task Preview_RowAtCanonicalPath_IsAlreadyCanonical()
         {
             var canonicalPath = $"{Root}/Author A/Book One";
-            await _audiobookRepository.AddAsync(new Audiobook
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Book One",
                 Authors = new List<string> { "Author A" },
                 BasePath = canonicalPath,
             });
+            await AttachFileAsync(ab);
 
             var preview = await GetPreviewAsync();
             var row = Assert.Single(preview.Rows);
@@ -92,12 +109,13 @@ namespace Listenarr.Tests.Features.Api.Controllers
         [Fact]
         public async Task Preview_RowWithDifferentPath_IsWillMove()
         {
-            await _audiobookRepository.AddAsync(new Audiobook
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Book Two",
                 Authors = new List<string> { "Author B" },
                 BasePath = $"{Root}/Misplaced",
             });
+            await AttachFileAsync(ab);
 
             var preview = await GetPreviewAsync();
             var row = Assert.Single(preview.Rows);
@@ -111,20 +129,22 @@ namespace Listenarr.Tests.Features.Api.Controllers
         {
             // Same {Author}/{Title} → same target path; different ASINs so the
             // existing dedup tool wouldn't catch them.
-            await _audiobookRepository.AddAsync(new Audiobook
+            var ab1 = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Same Title",
                 Authors = new List<string> { "Same Author" },
                 Asin = "B00COLL0001",
                 BasePath = $"{Root}/Old Place A",
             });
-            await _audiobookRepository.AddAsync(new Audiobook
+            var ab2 = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Same Title",
                 Authors = new List<string> { "Same Author" },
                 Asin = "B00COLL0002",
                 BasePath = $"{Root}/Old Place B",
             });
+            await AttachFileAsync(ab1);
+            await AttachFileAsync(ab2);
 
             var preview = await GetPreviewAsync();
             Assert.Equal(2, preview.Rows.Count);
@@ -159,14 +179,37 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task Preview_RowWithNoFilesButBasePathStamped_IsSkipped()
+        {
+            // Live-data variant: an earlier ingestion path stamped some
+            // wishlist records' BasePath at the library root ("/audiobooks")
+            // even though no files ever arrived. The narrow filter — empty
+            // BasePath AND zero files — let these through; they appeared in
+            // will_move, got default-selected, and each failed the move
+            // queue's source-path-exists check. The loosened filter drops
+            // every fileless row regardless of BasePath value.
+            await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Wishlisted Book",
+                Authors = new List<string> { "Author N" },
+                BasePath = Root, // i.e. "/audiobooks" — stamped, but no file ever landed
+            });
+
+            var preview = await GetPreviewAsync();
+            Assert.Empty(preview.Rows);
+            Assert.Equal(0, preview.WillMoveCount);
+        }
+
+        [Fact]
         public async Task Preview_MissingAuthor_IsInvalidTarget()
         {
-            await _audiobookRepository.AddAsync(new Audiobook
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Orphan Book",
                 Authors = new List<string>(),
                 BasePath = $"{Root}/Somewhere",
             });
+            await AttachFileAsync(ab);
 
             var preview = await GetPreviewAsync();
             var row = Assert.Single(preview.Rows);
@@ -179,12 +222,13 @@ namespace Listenarr.Tests.Features.Api.Controllers
         [Fact]
         public async Task Preview_MissingTitle_IsInvalidTarget()
         {
-            await _audiobookRepository.AddAsync(new Audiobook
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = null,
                 Authors = new List<string> { "Author C" },
                 BasePath = $"{Root}/Somewhere",
             });
+            await AttachFileAsync(ab);
 
             var preview = await GetPreviewAsync();
             var row = Assert.Single(preview.Rows);
