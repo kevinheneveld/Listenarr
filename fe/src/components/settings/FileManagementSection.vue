@@ -242,6 +242,26 @@ const modalTitle = computed(() =>
   activePatternType.value === 'folder' ? 'Folder Naming Pattern Help' : 'File Naming Pattern Help',
 )
 
+// Substitute pattern tokens with values, honoring zero-padding format
+// specifiers like {DiskNumber:00} or {DiskNumber:000}. Backend uses .NET's
+// ToString(format) which accepts any number of zeros; the preview needs to
+// match arbitrary widths, not just two.
+function substituteTokens(pattern: string, variables: Record<string, string | number>): string {
+  let result = pattern
+  for (const [key, value] of Object.entries(variables)) {
+    if (key === 'DiskNumber' || key === 'ChapterNumber' || key === 'SeriesNumber') {
+      const paddedRegex = new RegExp(`\\{${key}:(0+)\\}`, 'g')
+      result = result.replace(paddedRegex, (_match, zeros) =>
+        String(value).padStart((zeros as string).length, '0'),
+      )
+      result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), String(value))
+    } else {
+      result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), String(value))
+    }
+  }
+  return result
+}
+
 function applyPattern(
   pattern: string,
   type: 'folder' | 'file' = 'folder',
@@ -249,60 +269,28 @@ function applyPattern(
 ): string {
   if (!pattern) return ''
 
-  let result = pattern
-
-  // Replace all variables with sample values
-  for (const [key, value] of Object.entries(sampleVariables)) {
-    if (key === 'DiskNumber' || key === 'ChapterNumber' || key === 'SeriesNumber') {
-      // Handle zero-padding for disk, chapter, and series numbers using the sample value
-      const paddedRegex = new RegExp(`\\{${key}:00\\}`, 'g')
-      const paddedSample = value.toString().padStart(2, '0')
-      result = result.replace(paddedRegex, paddedSample)
-      result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value)
-    } else {
-      const regex = new RegExp(`\\{${key}\\}`, 'g')
-      result = result.replace(regex, value)
-    }
-  }
-
-  // For multi-file preview, show how files would be named
+  // For multi-file preview, render the pattern three times with the disk /
+  // chapter number tokens varied so each file shows distinct (and correctly
+  // padded) numbering.
   if (type === 'file' && multiFile) {
-    // Check if pattern includes DiskNumber or ChapterNumber for uniqueness
     const hasDiskNumber = pattern.includes('{DiskNumber')
     const hasChapterNumber = pattern.includes('{ChapterNumber')
 
     if (!hasDiskNumber && !hasChapterNumber) {
-      // Pattern doesn't differentiate files - show warning
-      return `⚠️ ${result}.ext (all files would have the same name!)`
+      return `⚠️ ${substituteTokens(pattern, sampleVariables)}.ext (all files would have the same name!)`
     }
 
-    // Generate unique filenames by simulating different disk/chapter numbers
-    let file1 = result
-    let file2 = result
-    const file3 = result
-
-    // Replace DiskNumber variants
-    if (hasDiskNumber) {
-      const diskSample = sampleVariables.DiskNumber.toString().padStart(2, '0')
-      const diskRegex = new RegExp(diskSample, 'g')
-      file1 = file1.replace(diskRegex, '01')
-      file2 = file2.replace(diskRegex, '02')
-      // file3 already contains the sample value for the third file — no-op replacement removed
+    const renderFile = (sequence: number): string => {
+      const variables: Record<string, string | number> = { ...sampleVariables }
+      if (hasDiskNumber) variables.DiskNumber = sequence
+      if (hasChapterNumber) variables.ChapterNumber = sequence
+      return substituteTokens(pattern, variables)
     }
 
-    // Replace ChapterNumber variants
-    if (hasChapterNumber) {
-      const chapterSample = sampleVariables.ChapterNumber.toString().padStart(2, '0')
-      const chapterRegex = new RegExp(chapterSample, 'g')
-      file1 = file1.replace(chapterRegex, '01')
-      file2 = file2.replace(chapterRegex, '02')
-      // file3 already contains the sample value for the third file — no-op replacement removed
-    }
-
-    return `${file1}.ext, ${file2}.ext, ${file3}.ext...`
+    return `${renderFile(1)}.ext, ${renderFile(2)}.ext, ${renderFile(3)}.ext...`
   }
 
-  return result
+  return substituteTokens(pattern, sampleVariables)
 }
 
 function updateField(field: keyof ApplicationSettings, value: unknown) {
