@@ -71,9 +71,14 @@
             </p>
             <p v-if="activeTab !== 'asin'" class="help-text">
               <strong>By title/author:</strong> these rows have distinct ASINs but resolve to the same
-              <code>{Author}/{Title}/…</code> folder — usually edition variants or wrong-metadata rows.
-              The server won't merge across ASINs, so cleanup happens manually: open the suspect row
-              in a new tab to check it, then delete it from the audiobook detail page if needed.
+              <code>{Author}/{Title}/…</code> folder — usually edition variants, narrator variants,
+              or wishlist duplicates. Pick <strong>Discard</strong> on the row(s) you want removed;
+              keep at least one row marked <strong>Skip</strong> if you want Listenarr to keep
+              searching for the book. Discarding every row in a group will stop tracking that book
+              entirely (you'll be warned in the confirmation panel). The
+              <span class="inline-narrator-legend">🎙 narrator chip</span> is highlighted orange when
+              rows in the same group don't agree on their narrator — a strong hint they're different
+              readings of the same book, not redundant wishlist records.
             </p>
 
             <div v-if="visibleGroups.length === 0" class="state-msg">
@@ -139,6 +144,24 @@
                       <span v-if="row.basePath" class="row-path">{{ row.basePath }}</span>
                     </div>
                     <div class="row-meta">
+                      <span
+                        v-if="row.narrators.length > 0"
+                        class="meta-chip narrator-chip"
+                        :class="{ 'narrator-mismatch': groupHasNarratorMismatch(group) }"
+                        :title="row.narrators.length > 1
+                          ? `Narrators: ${row.narrators.join(', ')}${groupHasNarratorMismatch(group) ? ' — differs from another row in this group' : ''}`
+                          : `Narrator: ${row.narrators[0]}${groupHasNarratorMismatch(group) ? ' — differs from another row in this group' : ''}`"
+                      >
+                        🎙 {{ row.narrators[0] }}<span v-if="row.narrators.length > 1"> +{{ row.narrators.length - 1 }}</span>
+                      </span>
+                      <span
+                        v-else
+                        class="meta-chip narrator-chip narrator-missing"
+                        :class="{ 'narrator-mismatch': groupHasNarratorMismatch(group) }"
+                        :title="`No narrator metadata on this row${groupHasNarratorMismatch(group) ? ' — another row in this group has narrators listed' : ''}`"
+                      >
+                        🎙 (no narrator)
+                      </span>
                       <span class="meta-chip" :class="{ on: row.hasAnyFile }">
                         {{ row.fileCount }} file{{ row.fileCount === 1 ? '' : 's' }}
                       </span>
@@ -281,6 +304,20 @@
                   <strong>{{ skippedCount }}</strong> group{{ skippedCount === 1 ? '' : 's' }} fully skipped.
                 </li>
               </ul>
+              <div
+                v-if="fullDeleteTitleAuthorGroups.length > 0"
+                class="confirm-warning confirm-warning-strong"
+              >
+                ⚠ <strong>{{ fullDeleteTitleAuthorGroups.length }}</strong>
+                title/author group{{ fullDeleteTitleAuthorGroups.length === 1 ? ' has' : 's have' }}
+                every row marked Discard — Listenarr will stop tracking and searching for:
+                <ul class="confirm-warning-list">
+                  <li v-for="g in fullDeleteTitleAuthorGroups" :key="g.title">
+                    <em>{{ g.title }}</em> ({{ g.rowCount }} row{{ g.rowCount === 1 ? '' : 's' }})
+                  </li>
+                </ul>
+                To keep being monitored, leave at least one row in each group set to <strong>Skip</strong>.
+              </div>
               <div class="confirm-warning">
                 Disk deletions cannot be undone from the app. Make sure your backups are current.
               </div>
@@ -354,6 +391,29 @@ function groupKey(g: DuplicateGroup): string {
   return isAsinGroup(g) ? `asin:${g.normalizedAsin}` : `ta:${g.collisionKey || ''}`
 }
 
+/**
+ * True when the rows in this group don't all agree on their narrator set.
+ * Narrator isn't part of the search query or the match-confidence score, so
+ * it's a useful signal that two rows might be different editions / readings
+ * of the same book rather than redundant wishlist records. Empty / missing
+ * narrators count as a distinct "set" from any populated set — surfacing the
+ * "one row has narrator metadata, the other doesn't" case too.
+ *
+ * Cheap to compute per-render against the small row count in any group; no
+ * memoization needed.
+ */
+function groupHasNarratorMismatch(g: DuplicateGroup): boolean {
+  if (g.rows.length < 2) return false
+  const sigs = g.rows.map((r) =>
+    (r.narrators || [])
+      .map((n) => (n || '').trim().toLowerCase())
+      .filter((n) => n.length > 0)
+      .sort()
+      .join('|'),
+  )
+  return sigs.some((s) => s !== sigs[0])
+}
+
 const asinGroups = computed(() => groups.value.filter(isAsinGroup))
 const titleAuthorGroups = computed(() => groups.value.filter((g) => !isAsinGroup(g)))
 const visibleGroups = computed(() => {
@@ -400,6 +460,28 @@ const plannedTitleAuthorDiscardsWithFiles = computed(() => {
     }
   }
   return total
+})
+/**
+ * Title/author groups where every row is marked Discard. Deleting every
+ * row in such a group removes the book from Listenarr entirely — it stops
+ * being monitored and won't be searched for again. Surface these as a
+ * loud warning in the confirmation panel so the user doesn't accidentally
+ * delete a book they wanted to keep tracking under one consolidated ASIN.
+ */
+const fullDeleteTitleAuthorGroups = computed(() => {
+  const out: { title: string; rowCount: number }[] = []
+  for (const g of groups.value) {
+    if (isAsinGroup(g)) continue
+    if (g.rows.length === 0) continue
+    const allDiscarded = g.rows.every((r) => rowActions[r.id] === 'merge')
+    if (allDiscarded) {
+      out.push({
+        title: g.rows[0].title || '(untitled)',
+        rowCount: g.rows.length,
+      })
+    }
+  }
+  return out
 })
 
 const plannedClears = computed(() => {
@@ -872,6 +954,31 @@ watch(
   border-left: 3px solid #b08040;
   border-radius: 3px;
 }
+.confirm-warning-strong {
+  color: #ff8080;
+  background: rgba(255, 90, 90, 0.10);
+  border-left-color: #c04040;
+  margin-bottom: 6px;
+}
+.confirm-warning-list {
+  margin: 4px 0 2px;
+  padding-left: 20px;
+}
+.confirm-warning-list li {
+  margin-bottom: 2px;
+}
+/* Mini-callout in the title/author help paragraph that visually mirrors the
+   real narrator-mismatch chip in the row list. */
+.inline-narrator-legend {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(232, 170, 60, 0.18);
+  color: #f0c068;
+  outline: 1px solid rgba(232, 170, 60, 0.45);
+  vertical-align: baseline;
+}
 .confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -1093,6 +1200,29 @@ watch(
   background: rgba(232, 170, 60, 0.12);
   color: #e8aa3c;
   cursor: help;
+}
+/* Narrator chip is informational by default — slightly tinted so it stands
+   apart from generic meta chips without screaming for attention. */
+.narrator-chip {
+  background: rgba(120, 160, 220, 0.12);
+  color: #a8c4ec;
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+.narrator-chip.narrator-missing {
+  background: rgba(255, 255, 255, 0.04);
+  color: #777;
+  font-style: italic;
+}
+/* When the rows in a group disagree about narrators — different readings of
+   the same book — flag the chip so the user notices before discarding. */
+.narrator-chip.narrator-mismatch {
+  background: rgba(232, 170, 60, 0.18);
+  color: #f0c068;
+  outline: 1px solid rgba(232, 170, 60, 0.45);
 }
 .row-actions {
   display: flex;
