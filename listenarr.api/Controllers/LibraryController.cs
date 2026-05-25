@@ -4570,6 +4570,28 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Operator escape hatch: flip every <c>Queued</c> or stale
+        /// <c>Processing</c> move job older than the given threshold to
+        /// <c>Cancelled</c>. The <c>MoveBackgroundService</c>'s consumer
+        /// re-checks each job's DB status before processing, so any
+        /// cancelled jobs still sitting in the in-memory channel become
+        /// no-ops when popped.
+        /// </summary>
+        /// <param name="olderThanMinutes">Cancel jobs whose last-touched
+        /// time (<c>UpdatedAt ?? EnqueuedAt</c>) is older than this many
+        /// minutes. Default 5 — longer than the slowest realistic
+        /// single-file copy, short enough that truly stuck queues clear
+        /// quickly. Use <c>0</c> to cancel everything pending.</param>
+        [HttpPost("move/cancel-stale")]
+        public async Task<IActionResult> CancelStaleMoveJobs([FromQuery] int olderThanMinutes = 5, CancellationToken ct = default)
+        {
+            if (_moveQueueService == null) return StatusCode(503, new { message = "Move queue not available" });
+            if (olderThanMinutes < 0) olderThanMinutes = 0;
+            var cancelled = await _moveQueueService.CancelStalePendingAsync(TimeSpan.FromMinutes(olderThanMinutes), ct);
+            return Ok(new { cancelled, olderThanMinutes });
+        }
+
+        /// <summary>
         /// Get the current status of a file-move background job.
         /// </summary>
         /// <param name="jobId">The GUID returned when the move was enqueued.</param>

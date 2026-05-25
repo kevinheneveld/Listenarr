@@ -219,6 +219,125 @@ namespace Listenarr.Application.Audiobooks
                    string.Equals(status, "Completed", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(status, "Queued", StringComparison.OrdinalIgnoreCase);
         }
+
+        public async Task<int> RehydratePendingAsync(TimeSpan staleProcessingThreshold, CancellationToken ct = default)
+        {
+            int reEnqueued = 0;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var moveJobRepository = scope.ServiceProvider.GetRequiredService<IMoveJobRepository>();
+                var pending = await moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" }, ct);
+
+                var cutoff = DateTime.UtcNow - staleProcessingThreshold;
+                foreach (var job in pending)
+                {
+                    if (ct.IsCancellationRequested) break;
+
+                    // Skip jobs this process already knows about — the channel is
+                    // also fresh after restart, so anything in _jobs was added by
+                    // a concurrent enqueue path during startup (rare but possible
+                    // under crash-restart-with-active-callers); honour idempotency.
+                    if (_jobs.ContainsKey(job.Id)) continue;
+
+                    // Stale Processing rows have no live worker (the previous
+                    // process died mid-copy). Flip to Queued so the consumer
+                    // treats them as fresh work, not as already-in-progress.
+                    if (string.Equals(job.Status, "Processing", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var age = job.UpdatedAt.HasValue ? DateTime.UtcNow - job.UpdatedAt.Value : DateTime.UtcNow - job.EnqueuedAt;
+                        if (age < staleProcessingThreshold)
+                        {
+                            // Still recent — possible the previous run is in a
+                            // grace-period shutdown copy that hasn't actually
+                            // ended. Skip; the next call to rehydrate will pick
+                            // it up if it's truly orphaned.
+                            continue;
+                        }
+                        try
+                        {
+                            job.Status = "Queued";
+                            job.UpdatedAt = DateTime.UtcNow;
+                            await moveJobRepository.UpdateAsync(job, ct);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                        {
+                            _logger.LogWarning(ex, "Failed to flip stale Processing job {JobId} to Queued during rehydration; skipping", job.Id);
+                            continue;
+                        }
+                    }
+
+                    _jobs[job.Id] = job;
+                    try
+                    {
+                        await _channel.Writer.WriteAsync(job, ct);
+                        reEnqueued++;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        _logger.LogWarning(ex, "Failed to write rehydrated job {JobId} to channel", job.Id);
+                        // Remove from _jobs so a later retry can re-add it.
+                        _jobs.TryRemove(job.Id, out _);
+                    }
+                }
+
+                if (reEnqueued > 0)
+                {
+                    _logger.LogInformation("MoveQueueService rehydration: re-channeled {Count} pending job(s) (Queued + stale Processing>{Threshold})", reEnqueued, staleProcessingThreshold);
+                }
+                else
+                {
+                    _logger.LogDebug("MoveQueueService rehydration: no pending jobs to re-channel (scanned {Scanned})", pending.Count);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "MoveQueueService rehydration failed");
+            }
+            return reEnqueued;
+        }
+
+        public async Task<int> CancelStalePendingAsync(TimeSpan staleThreshold, CancellationToken ct = default)
+        {
+            int cancelled = 0;
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var moveJobRepository = scope.ServiceProvider.GetRequiredService<IMoveJobRepository>();
+                var pending = await moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" }, ct);
+                var cutoff = DateTime.UtcNow - staleThreshold;
+
+                foreach (var job in pending)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    var lastTouched = job.UpdatedAt ?? job.EnqueuedAt;
+                    if (lastTouched > cutoff) continue;
+
+                    try
+                    {
+                        job.Status = "Cancelled";
+                        job.Error = "Cancelled by operator (stale pending sweep)";
+                        job.UpdatedAt = DateTime.UtcNow;
+                        await moveJobRepository.UpdateAsync(job, ct);
+                        // Also drop from in-memory map so a re-queue from the
+                        // modal isn't deduped against this cancelled row.
+                        _jobs.TryRemove(job.Id, out _);
+                        cancelled++;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        _logger.LogWarning(ex, "Failed to cancel stale move job {JobId}; skipping", job.Id);
+                    }
+                }
+
+                _logger.LogInformation("Cancelled {Count} stale move job(s) older than {Threshold}", cancelled, staleThreshold);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to cancel stale pending move jobs");
+            }
+            return cancelled;
+        }
     }
 }
 

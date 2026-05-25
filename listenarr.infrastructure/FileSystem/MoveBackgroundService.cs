@@ -39,6 +39,25 @@ namespace Listenarr.Infrastructure.FileSystem
     {
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            // Rehydrate any jobs persisted as Queued/Processing in the DB but
+            // not yet in the in-memory channel — happens after a process
+            // restart, where the channel state was lost but the DB rows
+            // remain. Stale-Processing threshold of 5 minutes is longer than
+            // the slowest realistic single-file copy on a home NAS and short
+            // enough that a true orphan doesn't sit forever.
+            try
+            {
+                var rehydrated = await moveQueueService.RehydratePendingAsync(TimeSpan.FromMinutes(5), stoppingToken);
+                if (rehydrated > 0)
+                {
+                    logger.LogInformation("MoveBackgroundService: rehydrated {Count} pending move job(s) at startup", rehydrated);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogError(ex, "MoveBackgroundService: rehydration at startup failed; continuing with empty channel");
+            }
+
             try
             {
                 await foreach (var job in moveQueueService.Reader.ReadAllAsync(stoppingToken))
@@ -47,6 +66,24 @@ namespace Listenarr.Infrastructure.FileSystem
 
                     try
                     {
+                        // Defensive DB recheck — between the time this job
+                        // was enqueued and now, the operator may have hit
+                        // POST /library/move/cancel-stale (or some other
+                        // path flipped the DB status). The channel doesn't
+                        // know about that mutation, so re-check the row's
+                        // current state. Skip cancelled / completed jobs.
+                        using (var preScope = scopeFactory.CreateScope())
+                        {
+                            var preRepo = preScope.ServiceProvider.GetRequiredService<IMoveJobRepository>();
+                            var freshJob = await preRepo.GetByIdAsync(job.Id, stoppingToken);
+                            if (freshJob != null && !string.Equals(freshJob.Status, "Queued", StringComparison.OrdinalIgnoreCase)
+                                && !string.Equals(freshJob.Status, "Processing", StringComparison.OrdinalIgnoreCase))
+                            {
+                                logger.LogInformation("Skipping move job {JobId} — DB status is {Status} (cancelled or already terminal)", job.Id, freshJob.Status);
+                                continue;
+                            }
+                        }
+
                         logger.LogInformation("Processing move job {JobId} for audiobook {AudiobookId} to {Path}", job.Id, job.AudiobookId, LogRedaction.SanitizeFilePath(job.RequestedPath));
                         moveQueueService.UpdateJobStatus(job.Id, "Processing");
 
