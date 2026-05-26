@@ -136,17 +136,23 @@ namespace Listenarr.Infrastructure.FileSystem
             //
             // Special case — source contains target: we MUST NOT stage inside
             // source, or the recursive copy enumerates its own output. Use
-            // source's parent instead.
+            // source's parent instead. If source has no usable parent
+            // (filesystem root, e.g. `/audiobooks` as a Docker mount), refuse —
+            // this is the "BasePath stamped at the library root" case where
+            // proceeding would mean `Directory.Delete(source, true)` wipes
+            // every other audiobook sharing the same root. The library
+            // controller's organize-preview filters these out, but this is the
+            // last line of defense if the gate is bypassed.
             string tempParent;
             if (sourceContainsTarget)
             {
                 tempParent = Path.GetDirectoryName(sourceFull) ?? string.Empty;
-                if (string.IsNullOrEmpty(tempParent))
+                if (string.IsNullOrEmpty(tempParent) || IsFilesystemRoot(tempParent))
                 {
                     return new MoveOutcome
                     {
                         Success = false,
-                        ErrorMessage = "Cannot stage move outside source: source has no parent",
+                        ErrorMessage = "Refusing to move: source has no usable parent directory (looks like a library root). Re-scan to correct BasePath before retrying.",
                     };
                 }
             }
@@ -335,6 +341,25 @@ namespace Listenarr.Infrastructure.FileSystem
         private static string TrimTrailingSeparator(string p)
         {
             return p.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+
+        /// <summary>
+        /// True when the path refers to the root of its volume — i.e. has no
+        /// parent we can safely write to. On Linux that's "/"; on Windows it's
+        /// drive roots like "C:\". Containerised deploys often have the
+        /// library mounted at "/audiobooks" with "/" being the container root,
+        /// which is typically read-only or unwritable to the app user — so
+        /// staging there fails with permission-denied anyway. This check makes
+        /// the refusal explicit and the error message actionable.
+        /// </summary>
+        private static bool IsFilesystemRoot(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return true;
+            var trimmed = TrimTrailingSeparator(path);
+            if (string.IsNullOrEmpty(trimmed)) return true;
+            // Windows drive root: "C:" after trim from "C:\"
+            if (trimmed.Length == 2 && trimmed[1] == ':') return true;
+            return false;
         }
 
         private static async Task<bool> CopyFileWithRetryAsync(string source, string dest, ILogger? logger, CancellationToken ct)

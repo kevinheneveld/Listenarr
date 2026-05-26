@@ -129,6 +129,81 @@ namespace Listenarr.Tests.Features.Infrastructure.FileSystem
             Assert.True(File.Exists(Path.Combine(target, "preexisting.txt")));
         }
 
+        [Fact(DisplayName = "Source at filesystem root with target inside it → refused with library-root message")]
+        public async Task SourceAtFilesystemRoot_Refused()
+        {
+            // Simulate the bug from the 2026-05-26 organize run: an audiobook's
+            // BasePath was stamped at the library root (e.g. "/audiobooks" as a
+            // Docker mount), and organize-library tried to move it down a level
+            // into "/audiobooks/Author/Title/Narrator". sourceContainsTarget is
+            // true, so MoveExecutor would stage outside source — but source's
+            // parent is "/" (or equivalent), which is unwritable. Worse, if the
+            // copy *had* succeeded, Directory.Delete(source, true) would wipe
+            // every other audiobook sharing the root.
+            //
+            // We can't actually use "/" as the test source (we don't own it
+            // and don't want a "/" mkdir attempt). Instead we hand-build a path
+            // string whose Path.GetDirectoryName resolves to "/", which is what
+            // the production check guards on. Using a known no-such-dir source
+            // would short-circuit on the Directory.Exists check, so we create
+            // a real dir-at-root-of-tmpdir-mount substitute.
+            //
+            // Cross-platform: on Windows, Path.GetDirectoryName("C:\\foo")
+            // returns "C:\\" which our IsFilesystemRoot detects via the 2-char
+            // drive-letter form. On Linux, Path.GetDirectoryName("/foo") returns
+            // "/". Test by passing a source whose computed parent (via Path
+            // APIs) is the root.
+
+            // Build a fake "root-mounted" source by reaching back to the
+            // platform root and creating a subdir there is too invasive — so
+            // we test the helper directly via a path crafted to have its
+            // parent be the platform root form.
+            // Linux only here; skip on other platforms.
+            if (Path.DirectorySeparatorChar != '/')
+            {
+                return; // Skip on Windows — sandbox can't create at C:\\
+            }
+
+            // Use a non-existent /something-at-root as the source; expect early
+            // "source does not exist" rejection rather than the root-parent
+            // refusal. To exercise the root-parent path we need an actually-
+            // existing source whose parent is "/". Skip if we can't create
+            // such a dir (CI without root).
+            string rootChild = "/lna-move-test-root-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                Directory.CreateDirectory(rootChild);
+            }
+            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+            {
+                // Likely permission-denied — fine, that's the very environment
+                // we're trying to guard against in prod. Skip the test.
+                return;
+            }
+
+            try
+            {
+                File.WriteAllText(Path.Combine(rootChild, "book.m4b"), "data");
+                var target = Path.Combine(rootChild, "Author", "Title");
+
+                var outcome = await MoveExecutor.ExecuteMoveAsync(rootChild, target, Guid.NewGuid(), logger: null);
+
+                Assert.False(outcome.Success);
+                Assert.NotNull(outcome.ErrorMessage);
+                Assert.Contains("root", outcome.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+                // Source must be intact — refusing means not touching anything.
+                Assert.True(File.Exists(Path.Combine(rootChild, "book.m4b")));
+            }
+            finally
+            {
+                try { if (Directory.Exists(rootChild)) Directory.Delete(rootChild, true); }
+                catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+                {
+                    System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
+                }
+            }
+        }
+
         [Fact(DisplayName = "Target-contains-source (flattening into ancestor) → refused")]
         public async Task TargetContainsSource_Refused()
         {

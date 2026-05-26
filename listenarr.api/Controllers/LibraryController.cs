@@ -3300,6 +3300,21 @@ namespace Listenarr.Api.Controllers
                     TotalSize = files.Sum(f => f.Size ?? 0L),
                 };
 
+                // Source-at-root guard: rows whose BasePath equals a configured
+                // root folder (e.g. "/audiobooks") can't be moved — the post-
+                // copy `Directory.Delete(source, true)` would obliterate every
+                // other audiobook on that root. Surface as InvalidTarget so the
+                // operator sees the row needs attention (re-scan to detect the
+                // actual subfolder, or manually correct BasePath) before it
+                // can be organized.
+                if (IsSourceAtRootFolder(currentPath, rootFolders))
+                {
+                    row.Status = OrganizePreviewStatus.InvalidTarget;
+                    row.Reason = "Source path is the library root folder. Re-scan the library so this audiobook's BasePath points at its actual subfolder before organizing.";
+                    rows.Add(row);
+                    continue;
+                }
+
                 var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
                 if (!string.IsNullOrEmpty(invalidReason))
                 {
@@ -3407,6 +3422,22 @@ namespace Listenarr.Api.Controllers
 
             foreach (var audiobook in audiobooks)
             {
+                // Defense in depth: even if the preview gate missed this or
+                // the operator's snapshot is stale, refuse to queue a move
+                // whose source is the library root (would wipe everything on
+                // delete-source). Matches the InvalidTarget bucket the preview
+                // surfaces for the same condition.
+                if (IsSourceAtRootFolder(audiobook.BasePath, rootFolders))
+                {
+                    result.Skipped++;
+                    result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                    {
+                        AudiobookId = audiobook.Id,
+                        Reason = "Source path is the library root folder; re-scan to correct BasePath before organizing.",
+                    });
+                    continue;
+                }
+
                 var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
                 if (!string.IsNullOrEmpty(invalidReason))
                 {
@@ -3593,6 +3624,32 @@ namespace Listenarr.Api.Controllers
             if (string.IsNullOrEmpty(path)) return string.Empty;
             var trimmed = path.TrimEnd('/', '\\');
             return trimmed.ToUpperInvariant();
+        }
+
+        /// <summary>
+        /// Returns true if the audiobook's current path matches a configured
+        /// root folder exactly. Rows in this state can't be moved by the
+        /// organize-library flow: the "source" would be the library root
+        /// itself, and the post-copy <c>Directory.Delete(source, true)</c>
+        /// would wipe every other audiobook on the same root. The
+        /// <c>MoveExecutor</c> defensively refuses these, but they should
+        /// never have been queued in the first place — this gate keeps them
+        /// out of <c>will_move</c> and surfaces them as InvalidTarget so the
+        /// operator knows the row's BasePath needs to be corrected (usually
+        /// via re-scan) before it can be organized.
+        /// </summary>
+        private static bool IsSourceAtRootFolder(string? currentPath, IEnumerable<RootFolder> rootFolders)
+        {
+            if (string.IsNullOrWhiteSpace(currentPath)) return false;
+            var currentKey = NormalizeOrganizeKey(NormalizeOrganizePath(currentPath));
+            if (string.IsNullOrEmpty(currentKey)) return false;
+            foreach (var rf in rootFolders)
+            {
+                if (string.IsNullOrWhiteSpace(rf?.Path)) continue;
+                var rootKey = NormalizeOrganizeKey(NormalizeOrganizePath(rf.Path));
+                if (currentKey == rootKey) return true;
+            }
+            return false;
         }
 
         /// <summary>
