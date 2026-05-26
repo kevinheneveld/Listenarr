@@ -4926,19 +4926,179 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
-        /// Fallback for the rootbase recovery endpoint: when the configured
-        /// folder pattern doesn't match disk reality (because the book hasn't
-        /// been organized to canonical paths yet), walk under each root
-        /// folder's <c>{Author}/</c> looking for a directory whose name
-        /// matches the book's title. The match is case-insensitive and
-        /// strips common punctuation so "It" matches a folder named
-        /// "It (Unabridged)" or "It - Stephen King". Returns a single
-        /// unambiguous folder, or a skip reason if none found / multiple
-        /// candidates.
+        /// One-time disk index built at the start of the rootbase-recovery
+        /// run: maps (authorFolderName casing-insensitive, titleKey) →
+        /// list of full paths that match. This replaces per-book disk walks
+        /// (which were timing out at the proxy for libraries with hundreds
+        /// of broken rows) with a single walk + O(1) hash lookup per book.
+        /// </summary>
+        private sealed class AudiobookFolderIndex
+        {
+            // Composite key: "{authorKey} {titleKey}" so we can use a
+            // plain Dictionary without a custom IEqualityComparer.
+            private readonly Dictionary<string, List<string>> _byAuthorAndTitle =
+                new(StringComparer.Ordinal);
+
+            public int IndexedFolders { get; private set; }
+
+            public void Add(string authorFolderName, string folderName, string fullPath)
+            {
+                var titleKey = NormalizeForFolderMatch(folderName);
+                if (string.IsNullOrEmpty(titleKey)) return;
+                var key = authorFolderName.ToUpperInvariant() + " " + titleKey;
+                if (!_byAuthorAndTitle.TryGetValue(key, out var list))
+                {
+                    list = new List<string>(1);
+                    _byAuthorAndTitle[key] = list;
+                }
+                list.Add(fullPath);
+                IndexedFolders++;
+            }
+
+            public IReadOnlyList<string> Lookup(string author, string title)
+            {
+                var titleKey = NormalizeForFolderMatch(title);
+                if (string.IsNullOrEmpty(titleKey)) return Array.Empty<string>();
+                var key = author.ToUpperInvariant() + " " + titleKey;
+                return _byAuthorAndTitle.TryGetValue(key, out var list) ? list : (IReadOnlyList<string>)Array.Empty<string>();
+            }
+        }
+
+        /// <summary>
+        /// Walk each root folder once, building an index of every directory
+        /// that contains audio files (directly or one level down — to catch
+        /// the "/Author/Title/Narrator/" shape where audio is in the Narrator
+        /// subdir). Each indexed entry is keyed by (top-level-author-dir-name,
+        /// folder-name-of-the-audio-containing-dir). For paths like
+        /// /Author/Series/Title or /Author/Series/Title/Narrator the "title"
+        /// key is the deepest-relevant folder name.
+        /// </summary>
+        private static AudiobookFolderIndex BuildFolderIndex(IReadOnlyCollection<RootFolder> rootFolders)
+        {
+            var index = new AudiobookFolderIndex();
+
+            foreach (var rf in rootFolders)
+            {
+                if (string.IsNullOrWhiteSpace(rf?.Path) || !Directory.Exists(rf.Path)) continue;
+
+                IEnumerable<string> authorDirs;
+                try
+                {
+                    authorDirs = Directory.EnumerateDirectories(rf.Path);
+                }
+                catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+                {
+                    continue;
+                }
+
+                foreach (var authorDir in authorDirs)
+                {
+                    var authorName = Path.GetFileName(authorDir);
+                    if (string.IsNullOrEmpty(authorName)) continue;
+
+                    // Walk up to 3 levels under the author. For each
+                    // directory, check whether it (or any of its immediate
+                    // children) contains audio files — if so, treat it as a
+                    // book-folder candidate. Critically: when both a parent
+                    // and its child contain audio (e.g. /Author/Title with
+                    // audio AND /Author/Title/Narrator with audio), prefer
+                    // the leaf — the leaf is where the actual files live.
+                    IndexUnderAuthor(authorDir, authorName, depth: 0, maxDepth: 3, index);
+                }
+            }
+
+            return index;
+        }
+
+        private static void IndexUnderAuthor(string dir, string authorName, int depth, int maxDepth, AudiobookFolderIndex index)
+        {
+            if (depth > maxDepth) return;
+            var name = Path.GetFileName(dir);
+            // Skip staging dirs from interrupted moves.
+            if (depth > 0 && name.StartsWith(".lna-move-", StringComparison.Ordinal)) return;
+            if (depth > 0 && name.Contains(".tmp-", StringComparison.Ordinal)) return;
+
+            // If this directory directly contains audio files, index it under
+            // its own name. Its descendants are unlikely to be other books
+            // (parts/discs land in the same dir), so don't descend further.
+            //
+            // If it doesn't but a one-level-deeper child does, index THIS dir
+            // (the parent) under its own name AND continue descending —
+            // because the deeper folder might also be a separate book.
+            bool hasAudioHere = false;
+            bool childHasAudio = false;
+            try
+            {
+                hasAudioHere = Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly)
+                    .Any(f => IsAudioExtension(Path.GetExtension(f)));
+            }
+            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+            {
+                return;
+            }
+
+            IEnumerable<string> children = Array.Empty<string>();
+            try
+            {
+                children = Directory.EnumerateDirectories(dir).ToList();
+            }
+            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+            {
+                children = Array.Empty<string>();
+            }
+
+            foreach (var child in children)
+            {
+                var childName = Path.GetFileName(child);
+                if (childName.StartsWith(".lna-move-", StringComparison.Ordinal)) continue;
+                if (childName.Contains(".tmp-", StringComparison.Ordinal)) continue;
+                try
+                {
+                    if (Directory.EnumerateFiles(child, "*.*", SearchOption.TopDirectoryOnly)
+                        .Any(f => IsAudioExtension(Path.GetExtension(f))))
+                    {
+                        childHasAudio = true;
+                        break;
+                    }
+                }
+                catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+                {
+                    // ignore unreadable child
+                }
+            }
+
+            // Index this folder if it's a credible book folder (audio here
+            // or in a Narrator-style subdir). depth==0 is the author folder
+            // itself — never indexed as a book.
+            if (depth > 0 && (hasAudioHere || childHasAudio))
+            {
+                index.Add(authorName, name, dir);
+            }
+
+            // Recurse if we haven't hit depth limit and this folder might
+            // contain further book folders. Skip recursing INTO a folder
+            // whose audio is directly in it — its children are part-files,
+            // not separate books.
+            if (depth < maxDepth && !hasAudioHere)
+            {
+                foreach (var child in children)
+                {
+                    var childName = Path.GetFileName(child);
+                    if (childName.StartsWith(".lna-move-", StringComparison.Ordinal)) continue;
+                    if (childName.Contains(".tmp-", StringComparison.Ordinal)) continue;
+                    IndexUnderAuthor(child, authorName, depth + 1, maxDepth, index);
+                }
+            }
+        }
+
+        /// <summary>
+        /// In-memory lookup against the pre-built folder index. Replaces the
+        /// per-book disk-walk version. Same return contract: a single match,
+        /// or a skip reason.
         /// </summary>
         private static FolderSearchResult TrySearchForAudiobookFolder(
             Audiobook audiobook,
-            IReadOnlyCollection<RootFolder> rootFolders)
+            AudiobookFolderIndex index)
         {
             var title = audiobook.Title;
             var author = audiobook.Authors?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a));
@@ -4953,42 +5113,8 @@ namespace Listenarr.Api.Controllers
                 return new FolderSearchResult { Reason = "title_unmatchable_after_normalization" };
             }
 
-            var matches = new List<string>();
-            foreach (var rf in rootFolders)
-            {
-                if (string.IsNullOrWhiteSpace(rf?.Path) || !Directory.Exists(rf.Path)) continue;
-
-                // Authors are stored with their natural casing on disk; the
-                // FS comparison Windows-vs-Linux differs but enumerate is
-                // case-sensitive on Linux. Walk the root looking for any
-                // top-level dir that matches the author name.
-                IEnumerable<string> authorDirs;
-                try
-                {
-                    authorDirs = Directory.EnumerateDirectories(rf.Path)
-                        .Where(d => string.Equals(Path.GetFileName(d), author, StringComparison.OrdinalIgnoreCase));
-                }
-                catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
-                {
-                    continue;
-                }
-
-                foreach (var authorDir in authorDirs)
-                {
-                    // Walk up to 3 levels under the author folder. That covers
-                    // every layout we've seen in practice:
-                    //   /Author/Title                                 (depth 1)
-                    //   /Author/Title/Narrator                        (depth 2)
-                    //   /Author/Series/Title                          (depth 2)
-                    //   /Author/Series/Title/Narrator                 (depth 3)
-                    var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    EnumerateMatchingFolders(authorDir, titleKey, 0, 3, matches, visited);
-                }
-            }
-
-            // De-dupe in case multiple root folders contained the same path.
-            var deduped = matches.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            if (deduped.Count == 0)
+            var candidates = index.Lookup(author, title);
+            if (candidates.Count == 0)
             {
                 return new FolderSearchResult
                 {
@@ -4996,96 +5122,15 @@ namespace Listenarr.Api.Controllers
                     Detail = $"Searched under '{author}' for title key '{titleKey}'.",
                 };
             }
-            if (deduped.Count > 1)
+            if (candidates.Count > 1)
             {
                 return new FolderSearchResult
                 {
                     Reason = "ambiguous_folder_match",
-                    Detail = $"Multiple candidates under '{author}': {string.Join(" | ", deduped.Take(5))}",
+                    Detail = $"Multiple candidates under '{author}': {string.Join(" | ", candidates.Take(5))}",
                 };
             }
-            return new FolderSearchResult { Match = deduped[0] };
-        }
-
-        /// <summary>
-        /// Walk <paramref name="dir"/> recursively up to <paramref name="maxDepth"/>
-        /// (relative to the starting author dir, where depth=0 means the
-        /// author dir itself). Match when a directory's normalized name
-        /// equals <paramref name="titleKey"/>. Skips any directory that
-        /// matches the orphan tmp-staging pattern so we don't accidentally
-        /// pick up leftover staging dirs.
-        /// </summary>
-        private static void EnumerateMatchingFolders(
-            string dir,
-            string titleKey,
-            int depth,
-            int maxDepth,
-            List<string> matches,
-            HashSet<string> visited)
-        {
-            if (depth > maxDepth) return;
-            if (!visited.Add(dir)) return;
-
-            if (depth > 0)
-            {
-                var name = Path.GetFileName(dir);
-                // Skip staging dirs from interrupted moves.
-                if (name.StartsWith(".lna-move-", StringComparison.Ordinal)) return;
-                if (name.Contains(".tmp-", StringComparison.Ordinal)) return;
-
-                if (string.Equals(NormalizeForFolderMatch(name), titleKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Only match if the folder actually contains audio files
-                    // (directly or via a Narrator subfolder). We don't want
-                    // to stamp BasePath at a series-level "Reckoners" dir
-                    // when the book "Calamity" is one level deeper.
-                    if (ContainsAudioFiles(dir, recurseOneLevel: true))
-                    {
-                        matches.Add(dir);
-                        // Continue searching siblings — caller dedupes — but
-                        // don't descend further into this matching dir.
-                        return;
-                    }
-                }
-            }
-
-            IEnumerable<string> children;
-            try
-            {
-                children = Directory.EnumerateDirectories(dir);
-            }
-            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
-            {
-                return;
-            }
-            foreach (var child in children)
-            {
-                EnumerateMatchingFolders(child, titleKey, depth + 1, maxDepth, matches, visited);
-            }
-        }
-
-        private static bool ContainsAudioFiles(string dir, bool recurseOneLevel)
-        {
-            try
-            {
-                var here = Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly)
-                    .Any(f => IsAudioExtension(Path.GetExtension(f)));
-                if (here) return true;
-                if (!recurseOneLevel) return false;
-                foreach (var sub in Directory.EnumerateDirectories(dir))
-                {
-                    if (Directory.EnumerateFiles(sub, "*.*", SearchOption.TopDirectoryOnly)
-                        .Any(f => IsAudioExtension(Path.GetExtension(f))))
-                    {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
-            {
-                return false;
-            }
+            return new FolderSearchResult { Match = candidates[0] };
         }
 
         private static bool IsAudioExtension(string ext)
@@ -5158,6 +5203,16 @@ namespace Listenarr.Api.Controllers
             var skippedEntries = new List<object>();
             var inspected = 0;
 
+            // Build the disk index ONCE up front. Per-book disk walks here
+            // were timing out at the openresty/Cloudflare proxy (504 at 90s)
+            // for libraries with a few hundred broken rows — repeatedly
+            // walking the same author folders is O(books × dirs) when it
+            // should be O(dirs + books).
+            var folderIndex = BuildFolderIndex(rootFolders);
+            _logger.LogInformation(
+                "Root-base recovery: indexed {Count} audio-containing folders across {RootCount} root folder(s) before scanning broken rows.",
+                folderIndex.IndexedFolders, rootFolders.Count);
+
             foreach (var audiobook in allAudiobooks)
             {
                 if (ct.IsCancellationRequested) break;
@@ -5216,7 +5271,7 @@ namespace Listenarr.Api.Controllers
                 // name matches the book's title.
                 if (!targetExists || !targetHasContent)
                 {
-                    var searchResult = TrySearchForAudiobookFolder(audiobook, rootFolders);
+                    var searchResult = TrySearchForAudiobookFolder(audiobook, folderIndex);
                     if (searchResult.Match != null)
                     {
                         target = searchResult.Match;
