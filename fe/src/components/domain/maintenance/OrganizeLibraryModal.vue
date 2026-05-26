@@ -27,6 +27,12 @@
         </header>
 
         <div class="modal-body">
+          <!-- Always-visible move-queue status banner: polls /library/move/summary
+               on a 5s tick while open. Useful both BEFORE Apply (shows leftover
+               state from a previous run) and AFTER (live progress). Renders
+               nothing when the queue has never had any jobs. -->
+          <MoveQueueStatusBanner v-if="visible" />
+
           <div v-if="loading" class="state-msg">Computing canonical paths for your library…</div>
 
           <div v-else-if="loadError" class="state-msg error">
@@ -230,6 +236,7 @@ import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import { signalRService } from '@/services/signalr'
 import { errorTracking } from '@/services/errorTracking'
+import MoveQueueStatusBanner from '@/components/domain/maintenance/MoveQueueStatusBanner.vue'
 import type {
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,

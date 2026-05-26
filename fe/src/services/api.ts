@@ -71,6 +71,7 @@ import type {
   MergeDuplicatesResult,
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
+  MoveQueueSummary,
 } from '@/types'
 import {
   getStartupConfigCached,
@@ -1367,6 +1368,18 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ audiobookIds }),
     })
+  }
+
+  /**
+   * Read the persisted move-queue state — status counts plus the most-recent
+   * completed and failed jobs. Backs the in-modal and Maintenance-page
+   * progress banner. `recentLimit` is clamped to [0, 200] server-side.
+   */
+  async getMoveQueueSummary(recentLimit = 5): Promise<MoveQueueSummary> {
+    return this.request<MoveQueueSummary>(
+      `/library/move/summary?recentLimit=${encodeURIComponent(String(recentLimit))}`,
+      { method: 'GET' },
+    )
   }
 
   async removeFromLibrary(

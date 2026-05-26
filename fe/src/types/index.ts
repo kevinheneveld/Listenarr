@@ -1411,6 +1411,40 @@ export interface OrganizePreviewRow {
   reason: string | null
 }
 
+/**
+ * One row in the recent-completed / recent-failed tails of a
+ * `GET /library/move/summary` response. Mirrors `MoveJob` fields the
+ * summary endpoint projects.
+ */
+export interface MoveQueueJobSummary {
+  id: string
+  audiobookId: number
+  status: string
+  error: string | null
+  requestedPath: string | null
+  sourcePath: string | null
+  enqueuedAt: string
+  updatedAt: string | null
+  attemptCount: number
+}
+
+/**
+ * Shape returned by `GET /library/move/summary`. `total` is the sum of
+ * every non-purged MoveJob row; the per-status counts always sum to it
+ * (with anything unrecognized falling into `other` so the UI never
+ * silently drops a count).
+ */
+export interface MoveQueueSummary {
+  total: number
+  queued: number
+  processing: number
+  completed: number
+  failed: number
+  other: number
+  recentCompleted: MoveQueueJobSummary[]
+  recentFailed: MoveQueueJobSummary[]
+}
+
 export interface OrganizeLibraryPreview {
   rows: OrganizePreviewRow[]
   alreadyCanonicalCount: number

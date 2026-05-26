@@ -19,6 +19,12 @@
   <div class="form-section">
     <h3><PhWrench /> Library Maintenance</h3>
     <div class="form-body">
+      <!-- Move-queue status banner: visible whenever there's any move history.
+           Polls /library/move/summary every 5s. Lets the user see at-a-glance
+           whether the queue is draining, stuck, or failing, without having to
+           open the Organize modal. -->
+      <MoveQueueStatusBanner />
+
       <div class="maintenance-row">
         <div class="maintenance-copy">
           <div class="maintenance-title">Cache external cover art</div>
@@ -107,6 +113,7 @@ import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import DuplicatesReviewModal from '@/components/domain/maintenance/DuplicatesReviewModal.vue'
 import OrganizeLibraryModal from '@/components/domain/maintenance/OrganizeLibraryModal.vue'
+import MoveQueueStatusBanner from '@/components/domain/maintenance/MoveQueueStatusBanner.vue'
 import type { MergeDuplicatesResult, OrganizeLibraryApplyResult } from '@/types'
 
 const toast = useToast()
