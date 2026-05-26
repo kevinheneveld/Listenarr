@@ -4878,6 +4878,105 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Sweep root folders for orphan move-staging directories left behind
+        /// by interrupted or failed moves. Detects both the new
+        /// <c>.lna-move-{guid}</c> staging pattern and the legacy
+        /// <c>name.tmp-{guid}</c> pattern that the pre-recursion-fix code
+        /// produced.
+        /// </summary>
+        /// <param name="dryRun">When <c>true</c> (default) the candidates are
+        /// returned without being deleted. Set to <c>false</c> to actually
+        /// remove them. Operator-gated like the other recovery endpoints —
+        /// this exists because the recursion bug left some root folders
+        /// littered with multi-MB nested staging trees that show up as ghost
+        /// space usage.</param>
+        [HttpPost("move/cleanup-orphan-tmp")]
+        public async Task<IActionResult> CleanupOrphanMoveTmp([FromQuery] bool dryRun = true, CancellationToken ct = default)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            var candidates = new List<object>();
+            long bytesTotal = 0;
+            var deleted = 0;
+            var failed = 0;
+            var warnings = new List<string>();
+
+            foreach (var root in rootFolders)
+            {
+                ct.ThrowIfCancellationRequested();
+                var path = root.Path;
+                if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
+                {
+                    warnings.Add($"Root folder missing on disk: {path}");
+                    continue;
+                }
+
+                IEnumerable<string> orphans;
+                try
+                {
+                    orphans = Listenarr.Infrastructure.FileSystem.MoveExecutor
+                        .EnumerateOrphanTempDirs(path)
+                        .ToList();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    warnings.Add($"Enumeration failed under {path}: {ex.Message}");
+                    continue;
+                }
+
+                foreach (var orphan in orphans)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    long size = 0;
+                    try
+                    {
+                        size = new DirectoryInfo(orphan)
+                            .EnumerateFiles("*", SearchOption.AllDirectories)
+                            .Sum(f => f.Length);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        warnings.Add($"Could not size {orphan}: {ex.Message}");
+                    }
+                    bytesTotal += size;
+                    candidates.Add(new { path = orphan, sizeBytes = size });
+
+                    if (!dryRun)
+                    {
+                        try
+                        {
+                            Directory.Delete(orphan, true);
+                            deleted++;
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                        {
+                            failed++;
+                            warnings.Add($"Failed to delete {orphan}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+
+            _logger.LogInformation(
+                "Orphan move-tmp cleanup: found {Found} candidate(s), dryRun={DryRun}, deleted={Deleted}, failed={Failed}",
+                candidates.Count, dryRun, deleted, failed);
+
+            return Ok(new
+            {
+                dryRun,
+                found = candidates.Count,
+                totalBytes = bytesTotal,
+                deleted,
+                failed,
+                warnings,
+                candidates,
+            });
+        }
+
+        /// <summary>
         /// Get the current status of a file-move background job.
         /// </summary>
         /// <param name="jobId">The GUID returned when the move was enqueued.</param>

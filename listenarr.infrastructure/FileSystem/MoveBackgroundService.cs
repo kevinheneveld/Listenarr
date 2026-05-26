@@ -138,126 +138,30 @@ namespace Listenarr.Infrastructure.FileSystem
                             continue;
                         }
 
-                        // Ensure target parent exists
-                        var targetParent = Path.GetDirectoryName(target);
-                        if (string.IsNullOrEmpty(targetParent))
-                        {
-                            moveQueueService.UpdateJobStatus(job.Id, "Failed", "Invalid target path");
-                            continue;
-                        }
-
-                        if (!Directory.Exists(targetParent)) Directory.CreateDirectory(targetParent);
-
-                        // Check if target exists and has content - only fail if it has files/folders we'd overwrite
-                        if (Directory.Exists(target))
-                        {
-                            var targetHasContent = Directory.EnumerateFileSystemEntries(target).Any();
-                            if (targetHasContent)
-                            {
-                                moveQueueService.UpdateJobStatus(job.Id, "Failed", "Target directory already exists and contains files");
-                                continue;
-                            }
-                            // Target exists but is empty - safe to proceed (will use it instead of creating new)
-                            logger.LogInformation("Target directory {Target} exists but is empty; proceeding with move", LogRedaction.SanitizeFilePath(target));
-                        }
-
-                        // Create a temporary directory under the target parent
-                        var tempName = Path.Join(targetParent, Path.GetFileName(target) + ".tmp-" + job.Id.ToString("N"));
-
-                        // Copy recursively with retries per file
+                        // Delegate the actual copy-and-finalize to MoveExecutor.
+                        // It picks a safe staging-directory location (critical
+                        // when the configured folder pattern makes target a
+                        // descendant of source — e.g. adding {Narrator} — or
+                        // we'd recursively copy our own output into oblivion),
+                        // and caps error messages so a runaway path-length
+                        // failure doesn't bloat History.
+                        // Track the executor's chosen temp path for the failure
+                        // cleanup branch below.
+                        string? attemptedTempPath = null;
                         try
                         {
-                            // Only create tempName if target doesn't exist; otherwise copy directly into existing empty target
-                            var useTemp = !Directory.Exists(target);
-                            var copyDest = useTemp ? tempName : target;
+                            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, job.Id, logger, stoppingToken);
+                            attemptedTempPath = outcome.TempPathUsed;
 
-                            if (useTemp) Directory.CreateDirectory(tempName);
-
-                            var entries = Directory.EnumerateFileSystemEntries(source, "*", SearchOption.AllDirectories);
-                            foreach (var entry in entries)
+                            if (!outcome.Success)
                             {
-                                var rel = Path.GetRelativePath(source, entry);
-                                var destPath = CombineWithOptionalBase(copyDest, rel);
-
-                                if (Directory.Exists(entry))
-                                {
-                                    if (!Directory.Exists(destPath)) Directory.CreateDirectory(destPath);
-                                    continue;
-                                }
-
-                                // Ensure dest directory exists
-                                var ddir = Path.GetDirectoryName(destPath);
-                                if (!string.IsNullOrEmpty(ddir) && !Directory.Exists(ddir)) Directory.CreateDirectory(ddir);
-
-                                // Copy file with retry/backoff and preserve timestamps/attributes on success
-                                var succeeded = false;
-                                const int maxAttempts = 5;
-                                for (int attempt = 1; attempt <= maxAttempts; attempt++)
-                                {
-                                    try
-                                    {
-                                        File.Copy(entry, destPath, false);
-
-                                        // Preserve file attributes and timestamps
-                                        try
-                                        {
-                                            var attrs = File.GetAttributes(entry);
-                                            File.SetAttributes(destPath, attrs);
-
-                                            var lastWrite = File.GetLastWriteTimeUtc(entry);
-                                            var creation = File.GetCreationTimeUtc(entry);
-                                            File.SetLastWriteTimeUtc(destPath, lastWrite);
-                                            File.SetCreationTimeUtc(destPath, creation);
-                                        }
-                                        catch (Exception attrEx) when (attrEx is not OperationCanceledException && attrEx is not OutOfMemoryException && attrEx is not StackOverflowException)
-                                        {
-                                            logger.LogDebug(attrEx, "Non-fatal: failed to preserve attributes for {File}", LogRedaction.SanitizeFilePath(entry));
-                                        }
-
-                                        succeeded = true;
-                                        break;
-                                    }
-                                    catch (IOException ioex)
-                                    {
-                                        logger.LogWarning(ioex, "IO error copying file {File} attempt {Attempt}", LogRedaction.SanitizeFilePath(entry), attempt);
-
-                                        // exponential backoff
-                                        var delay = TimeSpan.FromSeconds(Math.Min(8, Math.Pow(2, attempt - 1)));
-                                        await Task.Delay(delay, stoppingToken);
-                                    }
-                                }
-
-                                if (!succeeded)
-                                {
-                                    // Increment attempt count for the DB job to surface retries
-                                    try
-                                    {
-                                        var dbJob = await moveJobRepository.GetByIdAsync(job.Id, stoppingToken);
-                                        if (dbJob != null)
-                                        {
-                                            dbJob.AttemptCount += 1;
-                                            await moveJobRepository.UpdateAsync(dbJob, stoppingToken);
-                                        }
-                                    }
-                                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                                    {
-                                        logger.LogWarning(ex, "Failed to increment AttemptCount for job {JobId}", job.Id);
-                                    }
-
-                                    throw new Exception($"Failed to copy file after {maxAttempts} attempts: {entry}");
-                                }
+                                // Surface as a normal failure so the rest of the
+                                // failure path (history, attempt counter, toast)
+                                // runs uniformly.
+                                throw new Exception(outcome.ErrorMessage ?? "Move failed for unknown reason");
                             }
 
-                            // After successful copy, finalize the move
-                            if (useTemp)
-                            {
-                                // Move temp to final target (atomic on same volume)
-                                Directory.Move(tempName, target);
-                            }
-                            // If we copied directly to target, it's already in place
-
-                            // Delete source directory
-                            Directory.Delete(source, true);
+                            logger.LogInformation("Move job {JobId}: copied {Count} files via {Temp}", job.Id, outcome.FilesCopied, LogRedaction.SanitizeFilePath(outcome.TempPathUsed ?? string.Empty));
 
                             // Persist the new BasePath BEFORE enqueueing the post-move scan.
                             // Without this, the post-move scan (line ~370) runs against the
@@ -473,12 +377,26 @@ namespace Listenarr.Infrastructure.FileSystem
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                         {
-                            // Cleanup any temp dir
-                            try { if (Directory.Exists(tempName)) Directory.Delete(tempName, true); }
+                            // MoveExecutor cleans up its own staging dir on
+                            // its internal failure path, but if the throw came
+                            // from somewhere else (BasePath update, history,
+                            // etc.) the temp dir may still exist — try once.
+                            try
+                            {
+                                if (!string.IsNullOrEmpty(attemptedTempPath) && Directory.Exists(attemptedTempPath))
+                                {
+                                    Directory.Delete(attemptedTempPath, true);
+                                }
+                            }
                             catch (Exception caughtEx_1) when (caughtEx_1 is not OperationCanceledException && caughtEx_1 is not OutOfMemoryException && caughtEx_1 is not StackOverflowException)
                             {
                                 System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
                             }
+
+                            // Cap the surfaced error message so a pathologically
+                            // long error (deeply nested path) doesn't blow up
+                            // History / toast payloads.
+                            var failureMessage = MoveExecutor.TruncateErrorMessage(ex.Message);
 
                             // Increment attempt count for the job on failure
                             try
@@ -503,11 +421,11 @@ namespace Listenarr.Infrastructure.FileSystem
                                     AudiobookId = audiobook.Id,
                                     AudiobookTitle = audiobook.Title,
                                     EventType = "MoveFailed",
-                                    Message = $"Move failed: {ex.Message}",
+                                    Message = $"Move failed: {failureMessage}",
                                     Source = "Move",
                                     Timestamp = DateTime.UtcNow,
                                     NotificationSent = false,
-                                    Data = System.Text.Json.JsonSerializer.Serialize(new { JobId = job.Id, Error = ex.Message })
+                                    Data = System.Text.Json.JsonSerializer.Serialize(new { JobId = job.Id, Error = failureMessage })
                                 };
 
                                 var historyRepository = scope.ServiceProvider.GetRequiredService<IHistoryRepository>();
@@ -517,8 +435,8 @@ namespace Listenarr.Infrastructure.FileSystem
                                 try
                                 {
                                     var message = !string.IsNullOrEmpty(audiobook.Title)
-                                        ? $"Failed to move {audiobook.Title}: {ex.Message}"
-                                        : $"Move failed: {ex.Message}";
+                                        ? $"Failed to move {audiobook.Title}: {failureMessage}"
+                                        : $"Move failed: {failureMessage}";
 
                                     await toastService.PublishToastAsync("error", "Move Failed", message, timeoutMs: 15000);
                                     logger.LogDebug("Sent toast notification for failed move job {JobId}", job.Id);
@@ -533,7 +451,7 @@ namespace Listenarr.Infrastructure.FileSystem
                                 logger.LogWarning(historyEx, "Failed to add history entry for failed move job {JobId}", job.Id);
                             }
 
-                            moveQueueService.UpdateJobStatus(job.Id, "Failed", ex.Message);
+                            moveQueueService.UpdateJobStatus(job.Id, "Failed", failureMessage);
                             logger.LogError(ex, "Move job {JobId} failed", job.Id);
                             // Failure during move job — attempt counts updated and history recorded where configured
                         }
@@ -549,7 +467,7 @@ namespace Listenarr.Infrastructure.FileSystem
                     catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                     {
                         logger.LogError(ex, "Unexpected error processing move job {JobId}", job.Id);
-                        try { moveQueueService.UpdateJobStatus(job.Id, "Failed", ex.Message); }
+                        try { moveQueueService.UpdateJobStatus(job.Id, "Failed", MoveExecutor.TruncateErrorMessage(ex.Message)); }
                         catch (Exception caughtEx_2) when (caughtEx_2 is not OperationCanceledException && caughtEx_2 is not OutOfMemoryException && caughtEx_2 is not StackOverflowException)
                         {
                             System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
