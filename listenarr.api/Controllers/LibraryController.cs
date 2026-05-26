@@ -4913,6 +4913,215 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Result of <see cref="TrySearchForAudiobookFolder"/>. Either
+        /// <see cref="Match"/> is non-null (one unambiguous folder found) or
+        /// <see cref="Reason"/> explains why we couldn't recover (no author
+        /// folder, no title match, ambiguous multiple matches, etc).
+        /// </summary>
+        private sealed class FolderSearchResult
+        {
+            public string? Match { get; init; }
+            public string Reason { get; init; } = "";
+            public string? Detail { get; init; }
+        }
+
+        /// <summary>
+        /// Fallback for the rootbase recovery endpoint: when the configured
+        /// folder pattern doesn't match disk reality (because the book hasn't
+        /// been organized to canonical paths yet), walk under each root
+        /// folder's <c>{Author}/</c> looking for a directory whose name
+        /// matches the book's title. The match is case-insensitive and
+        /// strips common punctuation so "It" matches a folder named
+        /// "It (Unabridged)" or "It - Stephen King". Returns a single
+        /// unambiguous folder, or a skip reason if none found / multiple
+        /// candidates.
+        /// </summary>
+        private static FolderSearchResult TrySearchForAudiobookFolder(
+            Audiobook audiobook,
+            IReadOnlyCollection<RootFolder> rootFolders)
+        {
+            var title = audiobook.Title;
+            var author = audiobook.Authors?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a));
+            if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(author))
+            {
+                return new FolderSearchResult { Reason = "missing_title_or_author_for_search" };
+            }
+
+            var titleKey = NormalizeForFolderMatch(title);
+            if (string.IsNullOrEmpty(titleKey))
+            {
+                return new FolderSearchResult { Reason = "title_unmatchable_after_normalization" };
+            }
+
+            var matches = new List<string>();
+            foreach (var rf in rootFolders)
+            {
+                if (string.IsNullOrWhiteSpace(rf?.Path) || !Directory.Exists(rf.Path)) continue;
+
+                // Authors are stored with their natural casing on disk; the
+                // FS comparison Windows-vs-Linux differs but enumerate is
+                // case-sensitive on Linux. Walk the root looking for any
+                // top-level dir that matches the author name.
+                IEnumerable<string> authorDirs;
+                try
+                {
+                    authorDirs = Directory.EnumerateDirectories(rf.Path)
+                        .Where(d => string.Equals(Path.GetFileName(d), author, StringComparison.OrdinalIgnoreCase));
+                }
+                catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+                {
+                    continue;
+                }
+
+                foreach (var authorDir in authorDirs)
+                {
+                    // Walk up to 3 levels under the author folder. That covers
+                    // every layout we've seen in practice:
+                    //   /Author/Title                                 (depth 1)
+                    //   /Author/Title/Narrator                        (depth 2)
+                    //   /Author/Series/Title                          (depth 2)
+                    //   /Author/Series/Title/Narrator                 (depth 3)
+                    var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    EnumerateMatchingFolders(authorDir, titleKey, 0, 3, matches, visited);
+                }
+            }
+
+            // De-dupe in case multiple root folders contained the same path.
+            var deduped = matches.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (deduped.Count == 0)
+            {
+                return new FolderSearchResult
+                {
+                    Reason = "no_folder_match_under_author",
+                    Detail = $"Searched under '{author}' for title key '{titleKey}'.",
+                };
+            }
+            if (deduped.Count > 1)
+            {
+                return new FolderSearchResult
+                {
+                    Reason = "ambiguous_folder_match",
+                    Detail = $"Multiple candidates under '{author}': {string.Join(" | ", deduped.Take(5))}",
+                };
+            }
+            return new FolderSearchResult { Match = deduped[0] };
+        }
+
+        /// <summary>
+        /// Walk <paramref name="dir"/> recursively up to <paramref name="maxDepth"/>
+        /// (relative to the starting author dir, where depth=0 means the
+        /// author dir itself). Match when a directory's normalized name
+        /// equals <paramref name="titleKey"/>. Skips any directory that
+        /// matches the orphan tmp-staging pattern so we don't accidentally
+        /// pick up leftover staging dirs.
+        /// </summary>
+        private static void EnumerateMatchingFolders(
+            string dir,
+            string titleKey,
+            int depth,
+            int maxDepth,
+            List<string> matches,
+            HashSet<string> visited)
+        {
+            if (depth > maxDepth) return;
+            if (!visited.Add(dir)) return;
+
+            if (depth > 0)
+            {
+                var name = Path.GetFileName(dir);
+                // Skip staging dirs from interrupted moves.
+                if (name.StartsWith(".lna-move-", StringComparison.Ordinal)) return;
+                if (name.Contains(".tmp-", StringComparison.Ordinal)) return;
+
+                if (string.Equals(NormalizeForFolderMatch(name), titleKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Only match if the folder actually contains audio files
+                    // (directly or via a Narrator subfolder). We don't want
+                    // to stamp BasePath at a series-level "Reckoners" dir
+                    // when the book "Calamity" is one level deeper.
+                    if (ContainsAudioFiles(dir, recurseOneLevel: true))
+                    {
+                        matches.Add(dir);
+                        // Continue searching siblings — caller dedupes — but
+                        // don't descend further into this matching dir.
+                        return;
+                    }
+                }
+            }
+
+            IEnumerable<string> children;
+            try
+            {
+                children = Directory.EnumerateDirectories(dir);
+            }
+            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+            {
+                return;
+            }
+            foreach (var child in children)
+            {
+                EnumerateMatchingFolders(child, titleKey, depth + 1, maxDepth, matches, visited);
+            }
+        }
+
+        private static bool ContainsAudioFiles(string dir, bool recurseOneLevel)
+        {
+            try
+            {
+                var here = Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly)
+                    .Any(f => IsAudioExtension(Path.GetExtension(f)));
+                if (here) return true;
+                if (!recurseOneLevel) return false;
+                foreach (var sub in Directory.EnumerateDirectories(dir))
+                {
+                    if (Directory.EnumerateFiles(sub, "*.*", SearchOption.TopDirectoryOnly)
+                        .Any(f => IsAudioExtension(Path.GetExtension(f))))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
+            {
+                return false;
+            }
+        }
+
+        private static bool IsAudioExtension(string ext)
+        {
+            if (string.IsNullOrEmpty(ext)) return false;
+            return ext.Equals(".m4b", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".m4a", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".flac", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".ogg", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".opus", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Normalize a title-or-folder-name for matching: lowercase, strip
+        /// punctuation and whitespace, collapse to alphanumerics. Tolerates
+        /// "The Crooked Staircase" matching "The Crooked Staircase (Unabridged)"
+        /// only when the latter starts with the former (post-normalization).
+        /// For now we require exact equality after normalization — fuzzy is
+        /// future work if too many books fall into ambiguous_folder_match.
+        /// </summary>
+        private static string NormalizeForFolderMatch(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            var sb = new System.Text.StringBuilder(s.Length);
+            foreach (var c in s)
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    sb.Append(char.ToLowerInvariant(c));
+                }
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Companion to <see cref="RecoverBrokenMoves"/> for the broader
         /// broken-state population: audiobooks whose <c>BasePath</c> got reset
         /// to a configured root folder (e.g. <c>/audiobooks</c>) and whose
@@ -4998,27 +5207,34 @@ namespace Listenarr.Api.Controllers
                     _logger.LogWarning(ex, "Root-base recovery: failed to stat target {Target} for audiobook {AudiobookId}", LogRedaction.SanitizeFilePath(target), audiobook.Id);
                 }
 
-                if (!targetExists)
+                // Fallback search: if the canonical target doesn't exist on
+                // disk, the book hasn't been organized to the configured
+                // pattern yet — its files live at some shallower or different
+                // path (e.g. /Author/Title without the Narrator subdir, or
+                // /Author/Series/Title without the Narrator subdir). Try to
+                // find them by walking under /Author/ for a directory whose
+                // name matches the book's title.
+                if (!targetExists || !targetHasContent)
                 {
-                    skippedEntries.Add(new
+                    var searchResult = TrySearchForAudiobookFolder(audiobook, rootFolders);
+                    if (searchResult.Match != null)
                     {
-                        audiobookId = audiobook.Id,
-                        title = audiobook.Title,
-                        reason = "target_path_missing_on_disk",
-                        target,
-                    });
-                    continue;
-                }
-                if (!targetHasContent)
-                {
-                    skippedEntries.Add(new
+                        target = searchResult.Match;
+                        targetExists = true;
+                        targetHasContent = true;
+                    }
+                    else
                     {
-                        audiobookId = audiobook.Id,
-                        title = audiobook.Title,
-                        reason = "target_path_empty",
-                        target,
-                    });
-                    continue;
+                        skippedEntries.Add(new
+                        {
+                            audiobookId = audiobook.Id,
+                            title = audiobook.Title,
+                            reason = searchResult.Reason,
+                            target,
+                            searchDetail = searchResult.Detail,
+                        });
+                        continue;
+                    }
                 }
 
                 // Sanity check: if the row somehow has files already and yet
