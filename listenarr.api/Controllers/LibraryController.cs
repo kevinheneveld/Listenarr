@@ -4913,6 +4913,194 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Companion to <see cref="RecoverBrokenMoves"/> for the broader
+        /// broken-state population: audiobooks whose <c>BasePath</c> got reset
+        /// to a configured root folder (e.g. <c>/audiobooks</c>) and whose
+        /// <c>AudiobookFile</c> rows were nulled by the pre-fix "base path
+        /// missing" cleanup, but whose actual files are still sitting at the
+        /// canonical target on disk. <c>recover-broken-moves</c> only catches
+        /// books that have a <c>Moved</c> History entry; this endpoint catches
+        /// the rest by computing the canonical path from the row's
+        /// metadata + the configured <c>FolderNamingPattern</c>, verifying
+        /// the files are there on disk, then re-stamping <c>BasePath</c> and
+        /// queuing a re-attach scan.
+        /// </summary>
+        /// <param name="dryRun">Default <c>true</c>. Returns the candidate
+        /// list (audiobook id, inferred canonical path, current file presence
+        /// on disk) without touching anything. Pass <c>false</c> to apply.
+        /// </param>
+        [HttpPost("recover-rootbase-audiobooks")]
+        public async Task<IActionResult> RecoverRootBaseAudiobooks([FromQuery] bool dryRun = true, CancellationToken ct = default)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+            var settings = await configService.GetApplicationSettingsAsync();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            var allAudiobooks = await _repo.GetAllAsync();
+            var allFiles = await _audioFileRepository.GetAllAsync();
+            var fileCountByAudiobookId = allFiles
+                .GroupBy(f => f.AudiobookId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var recoveredEntries = new List<object>();
+            var skippedEntries = new List<object>();
+            var inspected = 0;
+
+            foreach (var audiobook in allAudiobooks)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                // Population: audiobooks whose BasePath equals a configured
+                // root folder (the broken-state signature). The IsSource… check
+                // mirrors what the organize-preview gate uses to refuse these
+                // rows.
+                if (!IsSourceAtRootFolder(audiobook.BasePath, rootFolders))
+                {
+                    continue;
+                }
+
+                inspected++;
+
+                // Compute canonical target via the same logic organize-library
+                // uses. If the book lacks metadata to compute one, skip with a
+                // reason — those rows need manual attention.
+                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                if (!string.IsNullOrEmpty(invalidReason) || string.IsNullOrWhiteSpace(target))
+                {
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "cannot_compute_target",
+                        detail = invalidReason,
+                    });
+                    continue;
+                }
+
+                // Verify the target exists on disk and has content. Without
+                // this we'd re-stamp BasePath to a path that doesn't exist —
+                // worse than the current broken state.
+                bool targetExists = false;
+                bool targetHasContent = false;
+                try
+                {
+                    targetExists = Directory.Exists(target);
+                    if (targetExists)
+                    {
+                        targetHasContent = Directory.EnumerateFileSystemEntries(target).Any();
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Root-base recovery: failed to stat target {Target} for audiobook {AudiobookId}", LogRedaction.SanitizeFilePath(target), audiobook.Id);
+                }
+
+                if (!targetExists)
+                {
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "target_path_missing_on_disk",
+                        target,
+                    });
+                    continue;
+                }
+                if (!targetHasContent)
+                {
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "target_path_empty",
+                        target,
+                    });
+                    continue;
+                }
+
+                // Sanity check: if the row somehow has files already and yet
+                // BasePath is the library root, surface it for inspection
+                // rather than blindly stamping over it.
+                var currentFileCount = fileCountByAudiobookId.TryGetValue(audiobook.Id, out var n) ? n : 0;
+                if (currentFileCount > 0)
+                {
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "already_has_files_at_root_basepath",
+                        currentFileCount,
+                    });
+                    continue;
+                }
+
+                var entry = new
+                {
+                    audiobookId = audiobook.Id,
+                    title = audiobook.Title,
+                    previousBasePath = audiobook.BasePath,
+                    target,
+                };
+
+                if (dryRun)
+                {
+                    recoveredEntries.Add(entry);
+                    continue;
+                }
+
+                // Apply: re-stamp BasePath and trigger a scan at the new path.
+                // skipMissingBasePathCleanup defends against a race where the
+                // operator moves the folder between our existence check and
+                // the scan running.
+                try
+                {
+                    audiobook.BasePath = FileUtils.NormalizeStoredPath(target);
+                    var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
+                    await audiobookRepository.UpdateAsync(audiobook);
+
+                    if (_scanQueueService != null)
+                    {
+                        var scanJobId = await _scanQueueService.EnqueueScanAsync(
+                            audiobook,
+                            path: target,
+                            forceMetadataRefresh: false,
+                            skipMissingBasePathCleanup: true);
+                        _logger.LogInformation(
+                            "Root-base recovery: enqueued scan {ScanJobId} for audiobook {AudiobookId} at recovered BasePath {Target}",
+                            scanJobId, audiobook.Id, LogRedaction.SanitizeFilePath(target));
+                    }
+
+                    recoveredEntries.Add(entry);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogError(ex, "Root-base recovery: failed to recover audiobook {AudiobookId} (target {Target})", audiobook.Id, LogRedaction.SanitizeFilePath(target));
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "recovery_failed",
+                        error = ex.Message,
+                        target,
+                    });
+                }
+            }
+
+            return Ok(new
+            {
+                dryRun,
+                inspected,
+                recovered = recoveredEntries.Count,
+                skipped = skippedEntries.Count,
+                recoveredDetails = recoveredEntries,
+                skippedDetails = skippedEntries,
+            });
+        }
+
+        /// <summary>
         /// Operator escape hatch: flip every <c>Queued</c> or stale
         /// <c>Processing</c> move job older than the given threshold to
         /// <c>Cancelled</c>. The <c>MoveBackgroundService</c>'s consumer
