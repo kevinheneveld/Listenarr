@@ -4570,6 +4570,210 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// One-shot recovery for audiobooks that "succeeded" through the
+        /// pre-fix <c>MoveBackgroundService</c> (which copied files to the
+        /// canonical target on disk, but never updated the DB-side
+        /// <c>BasePath</c>). The post-move scan then ran against the now-
+        /// empty source path, cleared every tracked <c>AudiobookFile</c>
+        /// row, and nulled <c>BasePath</c> — leaving the files orphaned on
+        /// disk at the new location with no DB pointer back.
+        ///
+        /// This endpoint walks the <c>History</c> table for <c>Moved</c>
+        /// events, infers the target path from each event's <c>Data</c>
+        /// JSON, and (if the on-disk target still exists and contains
+        /// content) sets <c>audiobook.BasePath</c> back to the target and
+        /// enqueues a fresh scan against it with
+        /// <c>skipMissingBasePathCleanup=true</c> so a recovery scan that
+        /// somehow finds nothing won't retrigger the same wipe.
+        ///
+        /// Defaults to <c>dryRun=true</c> — surveys what WOULD be recovered
+        /// without writing anything. Pass <c>dryRun=false</c> to actually
+        /// execute. Only acts on audiobooks that currently have zero
+        /// tracked files AND (BasePath is null OR doesn't match the
+        /// inferred target) — never overwrites a working record.
+        /// </summary>
+        /// <param name="dryRun">When true (default), reports what would be
+        /// recovered without writing. Set to false to actually update
+        /// BasePath and enqueue scans.</param>
+        [HttpPost("recover-broken-moves")]
+        public async Task<IActionResult> RecoverBrokenMoves([FromQuery] bool dryRun = true, CancellationToken ct = default)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var historyRepository = scope.ServiceProvider.GetRequiredService<IHistoryRepository>();
+            var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
+            var fileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
+
+            // Pull every Moved history event. Set to null (no limit) so we
+            // see the entire history of moves — the broken-row population is
+            // bounded by the affected audiobooks (in Kevin's instance: ~77),
+            // and there's only one Moved event per successful move.
+            var movedEvents = await historyRepository.GetByEventTypeAsync("Moved", limit: null, ct);
+
+            // Most-recent Moved event per audiobook id wins. A book that was
+            // moved twice (legitimate or otherwise) recovers to the latest
+            // target — the older move's target is presumably no longer on
+            // disk anyway. (History.AudiobookId is nullable; rows without
+            // an id can't be recovered through this path.)
+            var latestPerAudiobook = movedEvents
+                .Where(e => e.AudiobookId.HasValue && e.AudiobookId.Value > 0)
+                .GroupBy(e => e.AudiobookId!.Value)
+                .Select(g => new { AudiobookId = g.Key, Event = g.OrderByDescending(e => e.Timestamp).ThenByDescending(e => e.Id).First() })
+                .ToList();
+
+            var allFiles = await _audioFileRepository.GetAllAsync();
+            var fileCountByAudiobookId = allFiles
+                .GroupBy(f => f.AudiobookId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var recoveredEntries = new List<object>();
+            var skippedEntries = new List<object>();
+
+            foreach (var item in latestPerAudiobook)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                var audiobookId = item.AudiobookId;
+                var ev = item.Event;
+
+                // Extract target from the History Data JSON. The Move
+                // service writes it as { JobId, Source, Target }.
+                string? target = null;
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(ev.Data))
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(ev.Data);
+                        if (doc.RootElement.TryGetProperty("Target", out var tEl) && tEl.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            target = tEl.GetString();
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Recovery: failed to parse History.Data for audiobook {AudiobookId}", audiobookId);
+                }
+
+                if (string.IsNullOrWhiteSpace(target))
+                {
+                    skippedEntries.Add(new { audiobookId, reason = "no_target_in_history" });
+                    continue;
+                }
+
+                var audiobook = await audiobookRepository.GetByIdAsync(audiobookId);
+                if (audiobook == null)
+                {
+                    skippedEntries.Add(new { audiobookId, reason = "audiobook_no_longer_exists", target });
+                    continue;
+                }
+
+                var currentFileCount = fileCountByAudiobookId.TryGetValue(audiobookId, out var n) ? n : 0;
+                var currentBaseNorm = NormalizeOrganizePath(audiobook.BasePath);
+                var targetNorm = NormalizeOrganizePath(target);
+
+                // Recovery acts only on broken-state rows: zero tracked files
+                // AND (BasePath is empty OR doesn't already match target).
+                // A row with files present is either healthy or already
+                // mid-recovery — leave alone.
+                if (currentFileCount > 0)
+                {
+                    skippedEntries.Add(new { audiobookId, reason = "already_has_files", currentFileCount, basePath = audiobook.BasePath });
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(currentBaseNorm)
+                    && string.Equals(currentBaseNorm, targetNorm, StringComparison.OrdinalIgnoreCase))
+                {
+                    skippedEntries.Add(new { audiobookId, reason = "basepath_already_matches_target", target });
+                    continue;
+                }
+
+                // Verify the target actually exists on disk and has content.
+                // If the operator moved or deleted the folder by hand after
+                // the buggy move ran, recovery should NOT silently re-stamp
+                // a BasePath that points at nothing.
+                bool targetExists = false;
+                bool targetHasContent = false;
+                try
+                {
+                    targetExists = Directory.Exists(target);
+                    if (targetExists)
+                    {
+                        targetHasContent = Directory.EnumerateFileSystemEntries(target).Any();
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Recovery: failed to stat target {Target} for audiobook {AudiobookId}", LogRedaction.SanitizeFilePath(target), audiobookId);
+                }
+
+                if (!targetExists)
+                {
+                    skippedEntries.Add(new { audiobookId, reason = "target_path_missing_on_disk", target });
+                    continue;
+                }
+                if (!targetHasContent)
+                {
+                    skippedEntries.Add(new { audiobookId, reason = "target_path_empty", target });
+                    continue;
+                }
+
+                // Eligible for recovery.
+                var entry = new
+                {
+                    audiobookId,
+                    title = audiobook.Title,
+                    previousBasePath = audiobook.BasePath,
+                    target,
+                    movedAt = ev.Timestamp,
+                };
+
+                if (dryRun)
+                {
+                    recoveredEntries.Add(entry);
+                    continue;
+                }
+
+                // Execute: set BasePath, enqueue a recovery scan with the
+                // safety belt that prevents a missing-files cascade if the
+                // scan somehow comes up empty (defense in depth — we just
+                // verified the folder has content, but a race with the
+                // operator could change that).
+                try
+                {
+                    audiobook.BasePath = FileUtils.NormalizeStoredPath(target);
+                    await audiobookRepository.UpdateAsync(audiobook);
+
+                    if (_scanQueueService != null)
+                    {
+                        var scanJobId = await _scanQueueService.EnqueueScanAsync(
+                            audiobook,
+                            path: target,
+                            forceMetadataRefresh: false,
+                            skipMissingBasePathCleanup: true);
+                        _logger.LogInformation("Recovery: enqueued scan {ScanJobId} for audiobook {AudiobookId} at recovered BasePath {Target}", scanJobId, audiobookId, LogRedaction.SanitizeFilePath(target));
+                    }
+
+                    recoveredEntries.Add(entry);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogError(ex, "Recovery: failed to recover audiobook {AudiobookId} (target {Target})", audiobookId, LogRedaction.SanitizeFilePath(target));
+                    skippedEntries.Add(new { audiobookId, reason = "recovery_failed", error = ex.Message, target });
+                }
+            }
+
+            return Ok(new
+            {
+                dryRun,
+                inspected = latestPerAudiobook.Count,
+                recovered = recoveredEntries.Count,
+                skipped = skippedEntries.Count,
+                recoveredDetails = recoveredEntries,
+                skippedDetails = skippedEntries,
+            });
+        }
+
+        /// <summary>
         /// Operator escape hatch: flip every <c>Queued</c> or stale
         /// <c>Processing</c> move job older than the given threshold to
         /// <c>Cancelled</c>. The <c>MoveBackgroundService</c>'s consumer
