@@ -4552,6 +4552,85 @@ namespace Listenarr.Api.Controllers
                 .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
                 .Take(recentLimit)
                 .ToList();
+            var processingNow = all
+                .Where(j => string.Equals(j.Status, "Processing", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
+                .ToList();
+            var queuedNow = all
+                .Where(j => string.Equals(j.Status, "Queued", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // To render meaningful per-job and per-queue size info on the
+            // banner ("currently moving X with 12 files / 3.4 GB", "queue
+            // has 4321 files / 339 GB remaining"), load file counts and
+            // byte totals for every in-scope audiobook in one IN-clause
+            // query. Out-of-scope audiobooks (e.g. those referenced only
+            // by long-dead Completed/Failed jobs we're not returning in
+            // the tail) are skipped. Audiobooks with no tracked files
+            // simply have 0 in the dictionary.
+            var inScopeAudiobookIds = new HashSet<int>();
+            foreach (var j in recentCompleted) inScopeAudiobookIds.Add(j.AudiobookId);
+            foreach (var j in recentFailed) inScopeAudiobookIds.Add(j.AudiobookId);
+            foreach (var j in processingNow) inScopeAudiobookIds.Add(j.AudiobookId);
+            foreach (var j in queuedNow) inScopeAudiobookIds.Add(j.AudiobookId);
+
+            var fileStatsByAudiobookId = inScopeAudiobookIds.Count == 0
+                ? new Dictionary<int, (int Count, long Bytes)>()
+                : await db.AudiobookFiles
+                    .AsNoTracking()
+                    .Where(f => inScopeAudiobookIds.Contains(f.AudiobookId))
+                    .GroupBy(f => f.AudiobookId)
+                    .Select(g => new { AudiobookId = g.Key, Count = g.Count(), Bytes = g.Sum(f => (long?)f.Size ?? 0L) })
+                    .ToDictionaryAsync(x => x.AudiobookId, x => (x.Count, x.Bytes), ct);
+
+            // Titles for in-scope audiobooks — single small query so the
+            // banner can name the in-flight book instead of just an id.
+            var titlesByAudiobookId = inScopeAudiobookIds.Count == 0
+                ? new Dictionary<int, string?>()
+                : await db.Audiobooks
+                    .AsNoTracking()
+                    .Where(a => inScopeAudiobookIds.Contains(a.Id))
+                    .Select(a => new { a.Id, a.Title })
+                    .ToDictionaryAsync(a => a.Id, a => a.Title, ct);
+
+            (int FileCount, long TotalBytes) StatsFor(int audiobookId) =>
+                fileStatsByAudiobookId.TryGetValue(audiobookId, out var s) ? s : (0, 0L);
+
+            // Project each surfaced job into a uniform shape that includes
+            // file count + total bytes + audiobook title. Cheap dictionary
+            // lookups, no extra DB hits.
+            object Project(dynamic j)
+            {
+                var (fc, tb) = StatsFor((int)j.AudiobookId);
+                titlesByAudiobookId.TryGetValue((int)j.AudiobookId, out var title);
+                return new
+                {
+                    j.Id,
+                    j.AudiobookId,
+                    audiobookTitle = title,
+                    j.Status,
+                    j.Error,
+                    j.RequestedPath,
+                    j.SourcePath,
+                    j.EnqueuedAt,
+                    j.UpdatedAt,
+                    j.AttemptCount,
+                    fileCount = fc,
+                    totalBytes = tb,
+                };
+            }
+
+            // Aggregate file count / bytes across all queued audiobooks so
+            // the banner can show "queue: N files, M GB remaining". Useful
+            // for ETA back-of-envelope (vs. observed throughput).
+            var queuedFiles = 0;
+            var queuedBytes = 0L;
+            foreach (var j in queuedNow)
+            {
+                var (fc, tb) = StatsFor(j.AudiobookId);
+                queuedFiles += fc;
+                queuedBytes += tb;
+            }
 
             return Ok(new
             {
@@ -4564,8 +4643,11 @@ namespace Listenarr.Api.Controllers
                 // (e.g. legacy "Cancelled") falls into a residual bucket so
                 // the FE never silently drops a count.
                 other = all.Count - CountOf("Queued") - CountOf("Processing") - CountOf("Completed") - CountOf("Failed"),
-                recentCompleted,
-                recentFailed,
+                queuedFiles,
+                queuedBytes,
+                currentlyProcessing = processingNow.Select(j => Project(j)).ToList(),
+                recentCompleted = recentCompleted.Select(j => Project(j)).ToList(),
+                recentFailed = recentFailed.Select(j => Project(j)).ToList(),
             });
         }
 

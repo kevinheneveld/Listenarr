@@ -59,11 +59,52 @@
       </span>
     </div>
 
+    <div
+      v-for="proc in summary!.currentlyProcessing"
+      :key="proc.id"
+      class="banner-row banner-detail banner-detail-processing"
+    >
+      <span class="banner-detail-label">Now moving:</span>
+      <span class="banner-detail-text" :title="proc.requestedPath || ''">
+        <strong>{{ proc.audiobookTitle || `ab #${proc.audiobookId}` }}</strong>
+        <span v-if="proc.fileCount > 0" class="size-meta">
+          ({{ proc.fileCount }} file{{ proc.fileCount === 1 ? '' : 's' }}<span
+            v-if="proc.totalBytes > 0"
+          >
+            · {{ formatBytes(proc.totalBytes) }}</span
+          >)
+        </span>
+        → {{ shortPath(proc.requestedPath) || '(unknown target)' }}
+      </span>
+      <span v-if="proc.updatedAt" class="banner-detail-time" :title="`Started ${proc.updatedAt}`">
+        running {{ formatRelative(proc.updatedAt) }}
+      </span>
+    </div>
+
+    <div v-if="summary!.queued > 0 && summary!.queuedFiles > 0" class="banner-row banner-detail">
+      <span class="banner-detail-label">Queue remaining:</span>
+      <span class="banner-detail-text">
+        {{ summary!.queued }} book{{ summary!.queued === 1 ? '' : 's' }} ·
+        {{ summary!.queuedFiles.toLocaleString() }} file{{
+          summary!.queuedFiles === 1 ? '' : 's'
+        }}<span v-if="summary!.queuedBytes > 0"> · {{ formatBytes(summary!.queuedBytes) }}</span>
+      </span>
+    </div>
+
     <div v-if="latestCompleted" class="banner-row banner-detail">
       <span class="banner-detail-label">Last completed:</span>
       <span class="banner-detail-text" :title="latestCompleted.requestedPath || ''">
-        ab #{{ latestCompleted.audiobookId }} →
-        {{ shortPath(latestCompleted.requestedPath) || '(unknown target)' }}
+        {{ latestCompleted.audiobookTitle || `ab #${latestCompleted.audiobookId}` }}<span
+          v-if="latestCompleted.fileCount > 0"
+          class="size-meta"
+        >
+          ({{ latestCompleted.fileCount }} file{{
+            latestCompleted.fileCount === 1 ? '' : 's'
+          }}<span v-if="latestCompleted.totalBytes > 0">
+            · {{ formatBytes(latestCompleted.totalBytes) }}</span
+          >)
+        </span>
+        → {{ shortPath(latestCompleted.requestedPath) || '(unknown target)' }}
       </span>
       <span v-if="latestCompleted.updatedAt" class="banner-detail-time">
         {{ formatRelative(latestCompleted.updatedAt) }}
@@ -73,8 +114,9 @@
     <div v-if="latestFailed" class="banner-row banner-detail banner-detail-failed">
       <span class="banner-detail-label">Last failure:</span>
       <span class="banner-detail-text" :title="latestFailed.error || ''">
-        ab #{{ latestFailed.audiobookId }}: {{ (latestFailed.error || 'unknown error').slice(0, 100)
-        }}{{ (latestFailed.error || '').length > 100 ? '…' : '' }}
+        {{ latestFailed.audiobookTitle || `ab #${latestFailed.audiobookId}` }}: {{
+          (latestFailed.error || 'unknown error').slice(0, 140)
+        }}{{ (latestFailed.error || '').length > 140 ? '…' : '' }}
       </span>
       <span v-if="latestFailed.updatedAt" class="banner-detail-time">
         {{ formatRelative(latestFailed.updatedAt) }}
@@ -154,6 +196,19 @@ function shortPath(p: string | null): string {
   if (!p) return ''
   // Trim /audiobooks/ prefix to save horizontal space. Full path is in title attr.
   return p.replace(/^\/?audiobooks\//i, '')
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unitIdx = 0
+  while (value >= 1024 && unitIdx < units.length - 1) {
+    value /= 1024
+    unitIdx++
+  }
+  const decimals = value < 10 && unitIdx > 0 ? 1 : 0
+  return `${value.toFixed(decimals)} ${units[unitIdx]}`
 }
 
 function formatRelative(iso: string): string {
@@ -331,5 +386,18 @@ watch(
 }
 .banner-detail-failed .banner-detail-text {
   color: #f0a0a0;
+}
+.banner-detail-processing .banner-detail-text {
+  color: #b8d4ff;
+}
+.banner-detail-processing .banner-detail-text strong {
+  color: #fff;
+}
+.size-meta {
+  font-family: monospace;
+  font-size: 10px;
+  color: #888;
+  margin-left: 4px;
+  white-space: nowrap;
 }
 </style>

@@ -1412,13 +1412,16 @@ export interface OrganizePreviewRow {
 }
 
 /**
- * One row in the recent-completed / recent-failed tails of a
- * `GET /library/move/summary` response. Mirrors `MoveJob` fields the
- * summary endpoint projects.
+ * One row in the currently-processing / recent-completed / recent-failed
+ * tails of a `GET /library/move/summary` response. Mirrors `MoveJob`
+ * fields the summary endpoint projects, plus the audiobook's title and
+ * per-job file count / total bytes so the UI can show size context
+ * without a second round-trip.
  */
 export interface MoveQueueJobSummary {
   id: string
   audiobookId: number
+  audiobookTitle: string | null
   status: string
   error: string | null
   requestedPath: string | null
@@ -1426,13 +1429,19 @@ export interface MoveQueueJobSummary {
   enqueuedAt: string
   updatedAt: string | null
   attemptCount: number
+  /** Number of tracked AudiobookFile rows for the referenced audiobook. */
+  fileCount: number
+  /** Sum of AudiobookFile.Size (bytes) for the referenced audiobook. 0 when unknown. */
+  totalBytes: number
 }
 
 /**
  * Shape returned by `GET /library/move/summary`. `total` is the sum of
  * every non-purged MoveJob row; the per-status counts always sum to it
  * (with anything unrecognized falling into `other` so the UI never
- * silently drops a count).
+ * silently drops a count). `queuedFiles` / `queuedBytes` aggregate
+ * across all Queued rows so the banner can show "queue: N files, M GB
+ * remaining" for ETA context.
  */
 export interface MoveQueueSummary {
   total: number
@@ -1441,6 +1450,9 @@ export interface MoveQueueSummary {
   completed: number
   failed: number
   other: number
+  queuedFiles: number
+  queuedBytes: number
+  currentlyProcessing: MoveQueueJobSummary[]
   recentCompleted: MoveQueueJobSummary[]
   recentFailed: MoveQueueJobSummary[]
 }
