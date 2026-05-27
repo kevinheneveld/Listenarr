@@ -7,11 +7,13 @@
 
 ## What Is This
 
-Kevin's fork of [therobbiedavis/Listenarr](https://github.com/therobbiedavis/Listenarr) — an automated audiobook management system (C# .NET 8 backend + Vue 3 frontend). Kevin runs a live instance on his home network, tracks bugs and features as GitHub Issues, and submits PRs back to the upstream author.
+Kevin's fork of [Listenarrs/Listenarr](https://github.com/Listenarrs/Listenarr) — an automated audiobook management system (C# .NET 8 backend + Vue 3 frontend). Kevin runs a live instance on his home network, tracks bugs and features as GitHub Issues, and submits PRs back upstream.
+
+The canonical upstream repo moved from `therobbiedavis/Listenarr` to the `Listenarrs` org on 2026-05-27 (the old URL still resolves as a transparent redirect, but `origin` now points at the org).
 
 | | |
 |---|---|
-| **Upstream repo** | https://github.com/therobbiedavis/Listenarr |
+| **Upstream repo** | https://github.com/Listenarrs/Listenarr |
 | **Kevin's fork** | https://github.com/kevinheneveld/Listenarr |
 | **Live instance** | https://your-host.example (your-server.local port 4545) |
 | **Compose file** | `/srv/listenarr/docker-compose.yml` on your-server.local |
@@ -24,7 +26,7 @@ Kevin's fork of [therobbiedavis/Listenarr](https://github.com/therobbiedavis/Lis
 ## Git Remote Setup
 
 ```
-origin  → therobbiedavis/Listenarr  (upstream — fetch/pull only)
+origin  → Listenarrs/Listenarr      (upstream org — fetch/pull only)
 fork    → kevinheneveld/Listenarr   (Kevin's fork — push branches here)
 ```
 
@@ -199,10 +201,10 @@ gh issue create \
   --body "What problem does this solve? What should it do?"
 
 # Check PR status (your PRs against upstream)
-gh pr list --repo therobbiedavis/Listenarr --author kevinheneveld
+gh pr list --repo Listenarrs/Listenarr --author kevinheneveld
 
 # Watch upstream PRs (new features or fixes to pull in)
-gh pr list --repo therobbiedavis/Listenarr --state open
+gh pr list --repo Listenarrs/Listenarr --state open
 ```
 
 ---
@@ -215,14 +217,14 @@ gh pr list --repo therobbiedavis/Listenarr --state open
 4. **Update CHANGELOG.md** (required — see `.github/CLAUDE.md` for format)
 5. **Run tests**: `cd tests && dotnet test`
 6. **Push to fork**: `git push fork feat/my-feature`
-7. **Open PR upstream**: `gh pr create --repo therobbiedavis/Listenarr --base canary`
+7. **Open PR upstream**: `gh pr create --repo Listenarrs/Listenarr --base canary`
 
 ### Before opening a PR — check upstream for conflicts
 ```bash
 # See if anyone else is working on the same area
-gh pr list --repo therobbiedavis/Listenarr --state open
+gh pr list --repo Listenarrs/Listenarr --state open
 # Review recent merged PRs for overlap
-gh pr list --repo therobbiedavis/Listenarr --state merged --limit 10
+gh pr list --repo Listenarrs/Listenarr --state merged --limit 10
 ```
 
 ---
@@ -265,5 +267,5 @@ scripts/                  Deploy and utility scripts (deploy-local.sh, smoke-tes
 | Smoke test live | `./scripts/smoke-test.sh` |
 | Sync from upstream | `./scripts/sync-upstream.sh` |
 | List open issues | `gh issue list --repo kevinheneveld/Listenarr` |
-| List your upstream PRs | `gh pr list --repo therobbiedavis/Listenarr --author kevinheneveld` |
-| Check upstream PRs | `gh pr list --repo therobbiedavis/Listenarr` |
+| List your upstream PRs | `gh pr list --repo Listenarrs/Listenarr --author kevinheneveld` |
+| Check upstream PRs | `gh pr list --repo Listenarrs/Listenarr` |
