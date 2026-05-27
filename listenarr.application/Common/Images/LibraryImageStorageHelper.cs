@@ -18,6 +18,7 @@
 
 using System.Security.Cryptography;
 using System.Text;
+using Listenarr.Application.Interfaces;
 using Listenarr.Domain.Models;
 using Microsoft.Extensions.Logging;
 

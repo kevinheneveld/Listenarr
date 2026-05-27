@@ -24,7 +24,7 @@ namespace Listenarr.Tests.Features.Api.Services
             var startup = new Mock<IStartupConfigService>();
             startup.Setup(s => s.GetConfig()).Returns(new StartupConfig());
 
-            return new FfmpegService(NullLogger<FfmpegService>.Instance, startup.Object, runner.Object);
+            return new FfmpegService(NullLogger<FfmpegService>.Instance, startup.Object, runner.Object, new Mock<IApplicationPathService>().Object);
         }
 
         [Fact]

@@ -322,14 +322,9 @@
                   :class="{ loaded: authorImageLoaded[collection.name] }"
                 ></div>
                 <img
-                  class="audiobook-poster author-cover lazy-img"
+                  class="audiobook-poster author-cover"
                   :class="{ loaded: authorImageLoaded[collection.name] }"
-                  :src="
-                    getProtectedImageSrc(
-                      getAuthorImageUrl(collection),
-                      `author:${collection.name}:${getAuthorImageUrl(collection) || ''}`,
-                    ) || getPlaceholderUrl()
-                  "
+                  :src="getProtectedImageSrc(getAuthorImageUrl(collection), getPlaceholderUrl())"
                   :alt="collection.name"
                   loading="lazy"
                   decoding="async"
@@ -366,37 +361,52 @@
                 <div class="series-covers">
                   <!-- Single cover: blurred background + centered cover -->
                   <template v-if="collection.coverUrls.length === 1">
-                    <div
+                    <img
                       class="series-single-bg"
-                      :style="{
-                        backgroundImage: `url(${
-                          getProtectedImageSrc(
-                            collection.coverUrls[0],
-                            `series-bg:${collection.name}:${collection.coverUrls[0] || ''}`,
-                          ) || getPlaceholderUrl()
-                        })`,
-                      }"
+                      :src="getProtectedImageSrc(collection.coverUrls[0], getPlaceholderUrl())"
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      aria-hidden="true"
+                      @error="handleImageError"
                     />
                     <div
                       class="series-cover-item"
                       :style="getCoverStyle(0, collection.coverUrls.length)"
                     >
+                      <div
+                        class="audiobook-image-placeholder"
+                        :class="{
+                          loaded: isImageLoaded(
+                            getSeriesImageKey(collection.name, 0, collection.coverUrls[0]),
+                          ),
+                        }"
+                      >
+                        <PhBookOpen class="audiobook-placeholder-icon" />
+                      </div>
                       <img
-                        :src="
-                          getProtectedImageSrc(
-                            collection.coverUrls[0],
-                            `series:${collection.name}:0:${collection.coverUrls[0] || ''}`,
-                          ) || getPlaceholderUrl()
-                        "
+                        :src="getProtectedImageSrc(collection.coverUrls[0], getPlaceholderUrl())"
                         :alt="`${collection.name} Cover`"
-                        class="series-cover-image centered"
+                        class="series-cover-image centered cover-loading-image"
+                        :class="{
+                          loaded: isImageLoaded(
+                            getSeriesImageKey(collection.name, 0, collection.coverUrls[0]),
+                          ),
+                        }"
                         loading="lazy"
                         decoding="async"
-                        @error="handleImageError"
+                        @load="
+                          markImageLoaded(
+                            getSeriesImageKey(collection.name, 0, collection.coverUrls[0]),
+                          )
+                        "
+                        @error="
+                          handleLazyImageError(
+                            getSeriesImageKey(collection.name, 0, collection.coverUrls[0]),
+                            $event,
+                          )
+                        "
                       />
-                      <div v-if="imagesLoading" class="image-loading-overlay">
-                        <PhSpinner class="ph-spin small" />
-                      </div>
                     </div>
                   </template>
                   <!-- Multiple covers: distribute across container using computed offset -->
@@ -407,22 +417,35 @@
                       class="series-cover-item"
                       :style="getCoverStyle(index, collection.coverUrls.length)"
                     >
+                      <div
+                        class="audiobook-image-placeholder"
+                        :class="{
+                          loaded: isImageLoaded(
+                            getSeriesImageKey(collection.name, index, coverUrl),
+                          ),
+                        }"
+                      >
+                        <PhBookOpen class="audiobook-placeholder-icon" />
+                      </div>
                       <img
-                        :src="
-                          getProtectedImageSrc(
-                            coverUrl,
-                            `series:${collection.name}:${index}:${coverUrl || ''}`,
-                          ) || getPlaceholderUrl()
-                        "
+                        :src="getProtectedImageSrc(coverUrl, getPlaceholderUrl())"
                         :alt="`${collection.name} Cover`"
-                        class="series-cover-image"
+                        class="series-cover-image cover-loading-image"
+                        :class="{
+                          loaded: isImageLoaded(
+                            getSeriesImageKey(collection.name, index, coverUrl),
+                          ),
+                        }"
                         loading="lazy"
                         decoding="async"
-                        @error="handleImageError"
+                        @load="markImageLoaded(getSeriesImageKey(collection.name, index, coverUrl))"
+                        @error="
+                          handleLazyImageError(
+                            getSeriesImageKey(collection.name, index, coverUrl),
+                            $event,
+                          )
+                        "
                       />
-                      <div v-if="imagesLoading" class="image-loading-overlay">
-                        <PhSpinner class="ph-spin small" />
-                      </div>
                     </div>
                   </template>
                 </div>
@@ -522,22 +545,22 @@
                 />
               </div>
               <div class="audiobook-poster-container" :class="{ 'show-details': showItemDetails }">
+                <div
+                  class="audiobook-image-placeholder"
+                  :class="{ loaded: isImageLoaded(getBookImageKey(audiobook)) }"
+                >
+                  <PhBookOpen class="audiobook-placeholder-icon" />
+                </div>
                 <img
-                  :src="
-                    getProtectedImageSrc(
-                      getBookImageUrl(audiobook),
-                      `book:${audiobook.id}:${getBookImageUrl(audiobook) || ''}`,
-                    ) || getPlaceholderUrl()
-                  "
+                  :src="getProtectedImageSrc(getBookImageUrl(audiobook), getPlaceholderUrl())"
                   :alt="audiobook.title"
-                  class="audiobook-poster"
+                  class="audiobook-poster cover-loading-image"
+                  :class="{ loaded: isImageLoaded(getBookImageKey(audiobook)) }"
                   loading="lazy"
                   decoding="async"
-                  @error="handleImageError"
+                  @load="markImageLoaded(getBookImageKey(audiobook))"
+                  @error="handleLazyImageError(getBookImageKey(audiobook), $event)"
                 />
-                <div v-if="imagesLoading" class="image-loading-overlay">
-                  <PhSpinner class="ph-spin small" />
-                </div>
                 <div class="status-overlay">
                   <div v-if="!showItemDetails" class="audiobook-title">
                     {{ safeText(audiobook.title) }}
@@ -688,19 +711,24 @@
                 @keydown.space.prevent="handleCheckboxKeydown(audiobook, $event)"
               />
             </div>
-            <img
-              class="list-thumb"
-              :src="
-                getProtectedImageSrc(
-                  getBookImageUrl(audiobook),
-                  `book:${audiobook.id}:${getBookImageUrl(audiobook) || ''}`,
-                ) || getPlaceholderUrl()
-              "
-              :alt="audiobook.title"
-              loading="lazy"
-              decoding="async"
-              @error="handleImageError"
-            />
+            <div class="list-thumb-container">
+              <div
+                class="audiobook-image-placeholder"
+                :class="{ loaded: isImageLoaded(getBookImageKey(audiobook)) }"
+              >
+                <PhBookOpen class="audiobook-placeholder-icon" />
+              </div>
+              <img
+                class="list-thumb cover-loading-image"
+                :class="{ loaded: isImageLoaded(getBookImageKey(audiobook)) }"
+                :src="getProtectedImageSrc(getBookImageUrl(audiobook), getPlaceholderUrl())"
+                :alt="audiobook.title"
+                loading="lazy"
+                decoding="async"
+                @load="markImageLoaded(getBookImageKey(audiobook))"
+                @error="handleLazyImageError(getBookImageKey(audiobook), $event)"
+              />
+            </div>
             <div class="list-details">
               <div class="audiobook-title">{{ safeText(audiobook.title) }}</div>
               <div class="audiobook-author">
@@ -991,7 +1019,6 @@ import type { RuleLike } from '@/utils/customFilterEvaluator'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
 import { safeText } from '@/utils/textUtils'
 import { getPlaceholderUrl } from '@/utils/placeholder'
-import { observeLazyImages } from '@/utils/lazyLoad'
 import { errorTracking } from '@/services/errorTracking'
 import { isLikelyBackendImageUrl, useProtectedImages } from '@/composables/useProtectedImages'
 import {
@@ -1037,7 +1064,7 @@ const libraryStore = useLibraryStore()
 const configStore = useConfigurationStore()
 const rootFoldersStore = useRootFoldersStore()
 const downloadsStore = useDownloadsStore()
-const { getProtectedImageSrc, clearProtectedImages } = useProtectedImages()
+const { getProtectedImageSrc } = useProtectedImages()
 
 // Computed list after applying search, filters and sorting
 const searchQuery = ref('')
@@ -1534,6 +1561,7 @@ const authorCoverOverrides = reactive<Record<string, string>>({})
 const authorCoverLoading = reactive<Record<string, boolean>>({})
 const authorCoverNotFound = new Set<string>()
 const authorImageLoaded = reactive<Record<string, boolean>>({})
+const loadedImageKeys = reactive(new Set<string>())
 
 function isPlaceholderCoverUrl(url: string | undefined): boolean {
   const v = (url || '').trim()
@@ -1557,6 +1585,31 @@ function getBookImageUrl(
   return raw || undefined
 }
 
+function getBookImageKey(book: Pick<Audiobook, 'id' | 'imageUrl' | 'asin'>): string {
+  return `book:${book.id}:${getBookImageUrl(book) || ''}`
+}
+
+function getSeriesImageKey(
+  seriesName: string,
+  index: number,
+  coverUrl: string | undefined,
+): string {
+  return `series:${seriesName}:${index}:${coverUrl || ''}`
+}
+
+function isImageLoaded(imageKey: string): boolean {
+  return loadedImageKeys.has(imageKey)
+}
+
+function markImageLoaded(imageKey: string) {
+  loadedImageKeys.add(imageKey)
+}
+
+function handleLazyImageError(imageKey: string, event: Event) {
+  markImageLoaded(imageKey)
+  handleImageError(event)
+}
+
 function getAuthorImageUrl(collection: { name: string; coverUrl?: string }) {
   const override = authorCoverOverrides[collection.name]
   if (override) return override
@@ -1576,9 +1629,6 @@ function handleAuthorImageError(authorName: string, event: Event) {
   authorImageLoaded[authorName] = false
   const img = event.target as HTMLImageElement | null
   if (!img) return
-  try {
-    img.removeAttribute('data-src')
-  } catch {}
   try {
     img.style.opacity = '0'
   } catch {}
@@ -1612,10 +1662,6 @@ async function ensureAuthorCover(authorName: string) {
     } else {
       authorCoverNotFound.add(authorName)
     }
-    try {
-      await nextTick()
-      observeLazyImages()
-    } catch {}
   } catch (e: unknown) {
     authorCoverNotFound.add(authorName)
     errorTracking.captureException(e as Error, {
@@ -1647,9 +1693,17 @@ const activeDownloadAudiobookIds = computed(() => {
 
 // Grouping mode
 const GROUP_BY_KEY = 'listenarr.groupBy'
+const GROUP_BY_MODES = ['books', 'authors', 'series'] as const
+type GroupByMode = (typeof GROUP_BY_MODES)[number]
+const DEFAULT_VISIBLE_RANGE_END = 20
 const groupBy = ref<'books' | 'authors' | 'series'>('books')
-const imagesLoading = ref(false) // show loading overlay while images rerender when grouping changes
 const showGroupMenu = ref(false)
+
+function normalizeGroupBy(value: unknown): GroupByMode | null {
+  return typeof value === 'string' && GROUP_BY_MODES.includes(value as GroupByMode)
+    ? (value as GroupByMode)
+    : null
+}
 
 // --- GroupBy and SortKey Initialization ---
 // URL wins over localStorage so a shared link reproduces the sender's view.
@@ -1658,12 +1712,19 @@ const showGroupMenu = ref(false)
 // ?author=, etc.) carried in by dashboard links.
 try {
   const stored = localStorage.getItem(GROUP_BY_KEY)
-  if (stored && ['books', 'authors', 'series'].includes(stored)) {
-    groupBy.value = stored as 'books' | 'authors' | 'series'
+  const storedGroup = normalizeGroupBy(stored)
+  if (storedGroup) {
+    groupBy.value = storedGroup
   }
-  const initialQ = route.query.group as string | undefined
-  if (initialQ && ['books', 'authors', 'series'].includes(initialQ) && initialQ !== groupBy.value) {
-    groupBy.value = initialQ as 'books' | 'authors' | 'series'
+  const initialGroup = normalizeGroupBy(route.query.group)
+  if (initialGroup && initialGroup !== groupBy.value) {
+    groupBy.value = initialGroup
+  }
+  // Mirror the active group back to the URL so deep-links + browser back/forward stay consistent.
+  if (!initialGroup) {
+    router.replace({ path: '/audiobooks', query: { group: groupBy.value } })
+  } else if (route.query.group !== initialGroup) {
+    router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: initialGroup } })
   }
 } catch {}
 
@@ -2001,12 +2062,10 @@ function clearFilters() {
   } catch {}
   selectedFilterId.value = null
 
-  // Reset author image caches so images reload after clearing filters
+  // Reset author image state so images reload after clearing filters
   Object.keys(authorCoverOverrides).forEach((k) => delete authorCoverOverrides[k])
   Object.keys(authorImageLoaded).forEach((k) => delete authorImageLoaded[k])
   authorCoverNotFound.clear()
-  clearProtectedImages()
-  nextTick(() => typeof observeLazyImages === 'function' && observeLazyImages())
 }
 const loading = computed(() => libraryStore.loading)
 const error = computed(() => libraryStore.error)
@@ -2068,11 +2127,23 @@ watch(viewMode, (v) => {
   }
 })
 
-const visibleRange = ref({ start: 0, end: 20 }) // Initially show first 20 items
+const visibleRange = ref({ start: 0, end: DEFAULT_VISIBLE_RANGE_END })
 
 const visibleAudiobooks = computed(() => {
   return audiobooks.value.slice(visibleRange.value.start, visibleRange.value.end)
 })
+
+function recalcItemsPerRow() {
+  if (!scrollContainer.value) return
+  const minItemWidth = 180
+  const gap = 20
+  const containerWidth = scrollContainer.value.clientWidth - 40 // Subtract padding
+  const newItems =
+    viewMode.value === 'list' ? 1 : Math.floor((containerWidth + gap) / (minItemWidth + gap)) || 1
+  if (newItems !== ITEMS_PER_ROW.value) {
+    ITEMS_PER_ROW.value = newItems
+  }
+}
 
 // Option: show extra details under each audiobook poster in grid view
 const SHOW_ITEM_DETAILS_KEY = 'listenarr.showItemDetails'
@@ -2179,15 +2250,13 @@ watch(
   () => route.query.group,
   (g) => {
     try {
-      const q = g as string | undefined
-      const mode =
-        q && ['books', 'authors', 'series'].includes(q)
-          ? (q as 'books' | 'authors' | 'series')
-          : 'books'
+      const mode = normalizeGroupBy(g) ?? 'books'
       // If the route changed the group, use setGroupBy so we run the same DOM/update/observer logic
       if (mode !== groupBy.value) {
         // fire-and-forget async to avoid blocking the router navigation
         void setGroupBy(mode)
+      } else if (g !== mode) {
+        void router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: mode } })
       }
     } catch {}
   },
@@ -2410,7 +2479,7 @@ const updateVisibleRange = () => {
   const endRow = Math.min(firstVisibleRow + visibleRowCount + BUFFER_ROWS, totalRows)
 
   // Convert to item indices
-  const startIndex = startRow * ITEMS_PER_ROW.value
+  const startIndex = Math.max(0, startRow * ITEMS_PER_ROW.value)
   const endIndex = Math.min(endRow * ITEMS_PER_ROW.value, audiobooks.value.length)
 
   visibleRange.value = { start: startIndex, end: endIndex }
@@ -2470,62 +2539,32 @@ let resizeObserver: ResizeObserver | null = null
 let stopVisibleRangeWatch: (() => void) | null = null
 let stopViewModeWatch: (() => void) | null = null
 
-onMounted(async () => {
-  document.addEventListener('click', handleClickOutside)
-  await Promise.all([
-    libraryStore.fetchLibrary(),
-    configStore.loadApplicationSettings(),
-    loadQualityProfiles(),
-  ])
+async function initializeVirtualScroller() {
+  if (!scrollContainer.value) return
 
-  // Calculate items per row based on container width
-  if (scrollContainer.value) {
-    const minItemWidth = 180
-    const gap = 20
-
-    const recalcItemsPerRow = () => {
+  if (!resizeObserver) {
+    resizeObserver = new ResizeObserver(() => {
       if (!scrollContainer.value) return
-      const containerWidth = scrollContainer.value.clientWidth - 40 // Subtract padding
-      const newItems =
-        viewMode.value === 'list'
-          ? 1
-          : Math.floor((containerWidth + gap) / (minItemWidth + gap)) || 1
-      if (newItems !== ITEMS_PER_ROW.value) {
-        ITEMS_PER_ROW.value = newItems
-      }
-    }
-
-    // Initial calculation (view mode persistence is handled at top level —
-    // see VIEWMODE_KEYS / loadViewModeFor)
-    recalcItemsPerRow()
-    // Initialize visible range
-    updateVisibleRange()
-
-    // Wait for DOM update then attach lazy observer so posters start with placeholder and load when visible
-    await nextTick()
-    try {
-      observeLazyImages()
-    } catch (e: unknown) {
-      errorTracking.captureException(e as Error, {
-        component: 'AudiobooksView',
-        operation: 'observeLazyImages',
-      })
-    }
-
-    if (groupBy.value === 'authors') {
-      try {
-        await nextTick()
-        observeAuthorCards()
-      } catch {}
-    }
-
-    await nextTick()
-    if (syncMeasuredRowHeight()) {
+      measuredRowHeight.value = null
+      recalcItemsPerRow()
       updateVisibleRange()
-      await nextTick()
-    }
+    })
+  }
 
-    // Re-run observer when visible range changes (virtual scrolling)
+  try {
+    resizeObserver.observe(scrollContainer.value)
+  } catch {}
+
+  recalcItemsPerRow()
+  updateVisibleRange()
+
+  await nextTick()
+  if (syncMeasuredRowHeight()) {
+    updateVisibleRange()
+    await nextTick()
+  }
+
+  if (!stopVisibleRangeWatch) {
     stopVisibleRangeWatch = watch(
       () => visibleRange.value,
       async () => {
@@ -2534,37 +2573,36 @@ onMounted(async () => {
           updateVisibleRange()
           await nextTick()
         }
-        try {
-          observeLazyImages()
-        } catch (e: unknown) {
-          errorTracking.captureException(e as Error, {
-            component: 'AudiobooksView',
-            operation: 'observeLazyImages',
-          })
-        }
       },
     )
+  }
 
-    // Add resize observer to recalculate on window resize
-    resizeObserver = new ResizeObserver(() => {
-      // Guard against null - element may be unmounted during navigation
-      if (!scrollContainer.value) return
-      measuredRowHeight.value = null
-      recalcItemsPerRow()
-      updateVisibleRange()
-    })
-    resizeObserver.observe(scrollContainer.value)
-
-    // Watch for view mode changes to recalc item layout
+  if (!stopViewModeWatch) {
     stopViewModeWatch = watch(viewMode, async () => {
       measuredRowHeight.value = null
       recalcItemsPerRow()
-      // wait a tick for layout to update then recalc range
       await nextTick()
       syncMeasuredRowHeight()
       updateVisibleRange()
     })
+  }
+}
 
+onMounted(async () => {
+  document.addEventListener('click', handleClickOutside)
+  await Promise.all([
+    libraryStore.fetchLibrary(),
+    configStore.loadApplicationSettings(),
+    loadQualityProfiles(),
+  ])
+
+  await initializeVirtualScroller()
+
+  if (groupBy.value === 'authors') {
+    try {
+      await nextTick()
+      observeAuthorCards()
+    } catch {}
   }
 })
 
@@ -2586,9 +2624,6 @@ onUnmounted(() => {
 
   try {
     authorCardObserver?.disconnect()
-  } catch {}
-  try {
-    clearProtectedImages()
   } catch {}
   document.removeEventListener('click', handleClickOutside)
 })
@@ -2636,9 +2671,21 @@ function toggleViewMode() {
   viewMode.value = viewMode.value === 'grid' ? 'list' : 'grid'
 }
 
-async function setGroupBy(mode: 'books' | 'authors' | 'series') {
+function resetVirtualScroller() {
+  measuredRowHeight.value = null
+  visibleRange.value = { start: 0, end: DEFAULT_VISIBLE_RANGE_END }
+  if (scrollContainer.value) {
+    scrollContainer.value.scrollTop = 0
+  }
+}
+
+async function setGroupBy(mode: GroupByMode) {
+  const changed = mode !== groupBy.value
   groupBy.value = mode
   showGroupMenu.value = false
+  if (changed) {
+    resetVirtualScroller()
+  }
   if (mode !== 'authors') {
     try {
       authorCardObserver?.disconnect()
@@ -2656,10 +2703,12 @@ async function setGroupBy(mode: 'books' | 'authors' | 'series') {
   }
   // URL sync happens via the unified query writer watching groupBy.
 
-  // Show image loading overlay and ensure DOM settles and recalc visible range for the virtual scroller
-  imagesLoading.value = mode !== 'authors'
+  // Ensure DOM settles and recalc visible range for the virtual scroller
   try {
     await nextTick()
+    if (changed) {
+      resetVirtualScroller()
+    }
     try {
       updateVisibleRange()
     } catch (e: unknown) {
@@ -2673,17 +2722,16 @@ async function setGroupBy(mode: 'books' | 'authors' | 'series') {
     if (mode === 'authors') {
       await nextTick()
       observeAuthorCards()
-      try {
-        observeLazyImages()
-      } catch {}
       return
     }
+
+    await initializeVirtualScroller()
 
     // Wait for visible images to finish loading (or timeout)
     try {
       await waitForImagesToLoad(5000)
     } catch {
-      // ignore, we'll clear loading overlay regardless
+      // ignore image wait failures
     }
   } catch (e) {
     errorTracking.captureException(e as Error, {
@@ -2691,8 +2739,6 @@ async function setGroupBy(mode: 'books' | 'authors' | 'series') {
       operation: 'setGroupBy.scheduleObservation',
       metadata: { mode },
     })
-  } finally {
-    imagesLoading.value = false
   }
 }
 
@@ -2782,12 +2828,6 @@ function handleImageError(event: Event) {
     }
     try {
       img.src = getPlaceholderUrl()
-    } catch {}
-    try {
-      img.removeAttribute('data-src')
-    } catch {}
-    try {
-      img.removeAttribute('data-original-src')
     } catch {}
     try {
       ;(img as unknown as { onerror?: null }).onerror = null
@@ -3482,6 +3522,8 @@ defineExpose({
   cursor: pointer;
   transition: all 0.2s;
   position: relative;
+  content-visibility: auto;
+  contain-intrinsic-size: 260px 300px;
 }
 
 .collection-card:hover {
@@ -3563,6 +3605,8 @@ defineExpose({
   position: absolute;
   top: 0;
   transition: transform 0.2s ease;
+  overflow: hidden;
+  border-radius: 6px;
 }
 
 .series-cover-image {
@@ -3578,8 +3622,9 @@ defineExpose({
 .series-single-bg {
   position: absolute;
   inset: 0;
-  background-size: cover;
-  background-position: center;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   filter: blur(10px) contrast(0.9) brightness(0.7);
   transform: scale(1.05);
   z-index: 1;
@@ -3596,6 +3641,15 @@ defineExpose({
   left: 0;
   top: 0;
   border-radius: 6px;
+}
+
+.list-thumb-container .audiobook-image-placeholder {
+  gap: 0.2rem;
+}
+
+.list-thumb-container .audiobook-placeholder-icon {
+  width: 1.35rem;
+  height: 1.35rem;
 }
 
 /* legacy .series-hover-overlay rules removed; use .status-overlay for hover */
@@ -4014,20 +4068,43 @@ defineExpose({
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
-.image-loading-overlay {
+.audiobook-image-placeholder {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.45);
-  z-index: 10;
+  gap: 0.45rem;
+  background: linear-gradient(90deg, #242424 0%, #2f343a 50%, #242424 100%);
+  background-size: 200% 100%;
+  animation: authorShimmer 1.6s ease infinite;
+  color: #9aa4b2;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+  z-index: 1;
+  pointer-events: none;
 }
 
-.image-loading-overlay .ph-spin.small {
-  width: 28px;
-  height: 28px;
-  font-size: 24px;
+.audiobook-image-placeholder.loaded {
+  opacity: 0;
+}
+
+.audiobook-placeholder-icon {
+  width: 2.75em;
+  height: 2.75em;
+}
+
+.cover-loading-image {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.cover-loading-image.loaded {
+  opacity: 1;
 }
 
 .audiobook-poster {
@@ -4482,6 +4559,20 @@ defineExpose({
   object-fit: cover;
   border-radius: 6px;
   flex-shrink: 0;
+}
+
+.list-thumb-container {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.list-thumb-container .list-thumb {
+  width: 100%;
+  height: 100%;
 }
 
 .list-details {

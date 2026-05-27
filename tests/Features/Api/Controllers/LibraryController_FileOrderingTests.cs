@@ -75,7 +75,9 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 Mock.Of<IQualityProfileRepository>(),
                 Mock.Of<IDownloadRepository>(),
                 Mock.Of<IRootFolderRepository>(),
-                Mock.Of<IFileNamingService>());
+                Mock.Of<IFileNamingService>(),
+                Mock.Of<IApplicationPathService>(),
+                Mock.Of<ILibraryListService>());
 
             var actionResult = await controller.GetAudiobook(book.Id);
             var ok = Assert.IsType<OkObjectResult>(actionResult.Result);

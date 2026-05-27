@@ -45,6 +45,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IDownloadRepository>().Object,
                 new Mock<IRootFolderRepository>().Object,
                 new Mock<IFileNamingService>().Object,
+                new Mock<IApplicationPathService>().Object,
+                new Mock<ILibraryListService>().Object,
                 externalCoverArtSweepService: sweep);
         }
 

@@ -35,10 +35,8 @@ using Listenarr.Infrastructure.Search.Providers;
 using Listenarr.Infrastructure.Security;
 using Listenarr.Infrastructure.Services;
 using Listenarr.Infrastructure.SignalR;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Infrastructure.Extensions
 {
@@ -66,6 +64,7 @@ namespace Listenarr.Infrastructure.Extensions
             services.AddScoped<IAuthorCatalogService, AuthorCatalogService>();
             services.AddScoped<ISeriesCatalogService, SeriesCatalogService>();
             services.AddScoped<ILibraryAddService, LibraryAddService>();
+            services.AddScoped<ILibraryListService, LibraryListService>();
             services.AddScoped<IAuthorMonitoringService, AuthorMonitoringService>();
             services.AddScoped<ISeriesMonitoringService, SeriesMonitoringService>();
             // Metadata extraction limiter to bound concurrent ffprobe calls
@@ -75,6 +74,7 @@ namespace Listenarr.Infrastructure.Extensions
             // Service to accept client-pushed download updates and maintain recent-push cache
             services.AddSingleton<IDownloadPushService, DownloadPushService>();
             services.AddScoped<IAsinLookupService, AsinLookupService>();
+            services.AddScoped<IAudiobookMetadataService, AudiobookMetadataService>();
             // Notification service for webhook notifications (typed HttpClient so a HttpClient is injected)
             services.AddHttpClient<NotificationService>();
             // Also register the concrete NotificationService type in the container so constructors
@@ -93,11 +93,6 @@ namespace Listenarr.Infrastructure.Extensions
             // Queue service extracted from DownloadService to encapsulate queue-building and filtering
             services.AddScoped<IDownloadQueueService, DownloadQueueService>();
             services.AddScoped<IOpenLibraryService, OpenLibraryService>();
-            services.AddSingleton<IImageCacheService>(sp => new ImageCacheService(
-                sp.GetRequiredService<ILogger<ImageCacheService>>(),
-                sp.GetRequiredService<IHttpClientFactory>(),
-                sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath
-            ));
             services.AddScoped<IExternalCoverArtSweepService, ExternalCoverArtSweepService>();
             services.AddScoped<IFileNamingService, FileNamingService>();
             services.AddScoped<IRenameService, RenameService>();

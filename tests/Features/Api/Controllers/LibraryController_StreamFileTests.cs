@@ -95,7 +95,9 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 new Mock<IQualityProfileRepository>().Object,
                 new Mock<IDownloadRepository>().Object,
                 mockRoots.Object,
-                mockFileNaming.Object);
+                mockFileNaming.Object,
+                new Mock<IApplicationPathService>().Object,
+                new Mock<ILibraryListService>().Object);
         }
 
         [Fact]

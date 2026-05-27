@@ -19,6 +19,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Listenarr.Domain.Models;
 using System.Text.Json;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -29,16 +30,15 @@ using Listenarr.Application.Interfaces;
 using Listenarr.Application.Common;
 using Listenarr.Application.Common.Images;
 using Listenarr.Domain.Models.Configurations;
-using Listenarr.Domain.Models;
 using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Application.Notification;
 using Listenarr.Application.Security;
 using Listenarr.Application.Metadata;
-using Listenarr.Api.Dtos;
 using Listenarr.Application.Search;
 using Microsoft.AspNetCore.SignalR;
 using Listenarr.Application.Audiobooks;
 using Listenarr.Api.Attributes;
+using Listenarr.Api.Dtos;
 using Listenarr.Infrastructure.Persistence;
 
 namespace Listenarr.Api.Controllers
@@ -53,14 +53,6 @@ namespace Listenarr.Api.Controllers
         private const int MetadataRescanMaxRequestsPerWindow = 5;
         private const int MetadataRescanMaxAsinLookupAttempts = 8;
         private const int MetadataRescanMaxIsbnConversionAttempts = 5;
-        private static readonly DownloadStatus[] ActiveLibraryDownloadStatuses =
-        {
-            DownloadStatus.Queued,
-            DownloadStatus.Downloading,
-            DownloadStatus.Paused,
-            DownloadStatus.Processing,
-            DownloadStatus.ImportPending
-        };
         private readonly IAudiobookRepository _repo;
         private readonly IImageCacheService _imageCacheService;
         private readonly ILogger<LibraryController> _logger;
@@ -79,6 +71,8 @@ namespace Listenarr.Api.Controllers
         private readonly IRenameService? _renameService;
         private readonly IExternalCoverArtSweepService? _externalCoverArtSweepService;
         private readonly IFileExtractionService? _fileExtractionService;
+        private readonly ILibraryListService _libraryListService;
+        private readonly string _contentRootPath;
         /// <summary>Initializes a new instance of <see cref="LibraryController"/>.</summary>
         /// <param name="repo">Repository for audiobook persistence and queries.</param>
         /// <param name="imageCacheService">Service for caching and moving cover images.</param>
@@ -98,6 +92,8 @@ namespace Listenarr.Api.Controllers
         /// <param name="renameService">Optional organize/rename service used for previewing and executing library file organization.</param>
         /// <param name="externalCoverArtSweepService">Optional sweep service that downloads still-external cover URLs into local library storage on demand.</param>
         /// <param name="fileExtractionService">Optional file-extraction service used to move a single tracked file onto a different (typically new) destination audiobook.</param>
+        /// <param name="applicationPathService">Application path service used to resolve content-root-relative cache files.</param>
+        /// <param name="libraryListService">Application service that builds the slim library list payload.</param>
         public LibraryController(
             IAudiobookRepository repo,
             IImageCacheService imageCacheService,
@@ -109,6 +105,8 @@ namespace Listenarr.Api.Controllers
             IDownloadRepository downloadRepository,
             IRootFolderRepository rootFolderRepository,
             IFileNamingService fileNamingService,
+            IApplicationPathService applicationPathService,
+            ILibraryListService libraryListService,
             IScanQueueService? scanQueueService = null,
             IMoveQueueService? moveQueueService = null,
             NotificationService? notificationService = null,
@@ -121,7 +119,7 @@ namespace Listenarr.Api.Controllers
             _repo = repo;
             _imageCacheService = imageCacheService;
             _logger = logger;
-            _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+            _scopeFactory = scopeFactory;
             _historyRepository = historyRepository;
             _audioFileRepository = audioFileRepository;
             _qualityProfileRepository = qualityProfileRepository;
@@ -136,56 +134,13 @@ namespace Listenarr.Api.Controllers
             _renameService = renameService;
             _externalCoverArtSweepService = externalCoverArtSweepService;
             _fileExtractionService = fileExtractionService;
-        }
-
-        private static bool ComputeWantedFlag(Audiobook audiobook)
-        {
-            var files = audiobook.Files;
-            var hasTrackedFiles = files != null && files.Count > 0;
-            return ComputeWantedFlag(audiobook.Monitored, hasTrackedFiles, audiobook.FilePath);
-        }
-
-        private static bool ComputeWantedFlag(bool monitored, bool hasTrackedFiles, string? legacyFilePath)
-        {
-            if (!monitored)
-            {
-                return false;
-            }
-
-            // The library list endpoint should not hit the filesystem for every book.
-            // Use AudiobookFiles as the primary source of truth, but honor the legacy
-            // primary FilePath during the upgrade window so existing installs do not
-            // suddenly flip back to Wanted before file rows are backfilled.
-            return !hasTrackedFiles && string.IsNullOrWhiteSpace(legacyFilePath);
+            _libraryListService = libraryListService;
+            _contentRootPath = applicationPathService.ContentRootPath;
         }
 
         private static string ResolvePathWithOptionalBase(string? basePath, string candidatePath)
         {
-            var normalizedPath = candidatePath.Trim();
-
-            if (string.IsNullOrEmpty(normalizedPath))
-            {
-                return normalizedPath;
-            }
-
-            if (Path.IsPathRooted(normalizedPath) || string.IsNullOrWhiteSpace(basePath))
-            {
-                return normalizedPath;
-            }
-
-            var relativePath = normalizedPath.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-            // Defensive check: if the candidate path is rooted, do not call Path.Combine
-            // because it would discard the base path argument.
-            if (Path.IsPathRooted(relativePath))
-            {
-                return relativePath;
-            }
-
-            var normalizedBasePath = basePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            return string.IsNullOrEmpty(normalizedBasePath)
-                ? relativePath
-                : normalizedBasePath + Path.DirectorySeparatorChar + relativePath;
+            return FileUtils.CombineWithOptionalBase(basePath, candidatePath);
         }
 
         public class ScanRequest
@@ -644,100 +599,7 @@ namespace Listenarr.Api.Controllers
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
-            var allAudiobooks = await _repo.GetAllAsync();
-            var audiobooks = allAudiobooks
-                .OrderBy(a => a.Title)
-                .ToList();
-
-            if (audiobooks.Count == 0)
-            {
-                return Ok(Array.Empty<LibraryAudiobookListItemDto>());
-            }
-
-            // Because this endpoint already loads the entire audiobook table, fetch file
-            // summaries directly instead of expanding a large in-memory ID list into SQL.
-            var allFiles = await _audioFileRepository.GetAllAsync();
-            var fileSummaries = allFiles.Select(f => new AudiobookFileStatusInfo
-            {
-                AudiobookId = f.AudiobookId,
-                Path = f.Path,
-                Format = f.Format,
-                Container = f.Container,
-                Codec = f.Codec,
-                Bitrate = f.Bitrate
-            }).ToList();
-
-            var filesByAudiobookId = fileSummaries
-                .GroupBy(f => f.AudiobookId)
-                .ToDictionary(g => g.Key, g => (IReadOnlyList<AudiobookFileStatusInfo>)g.ToList());
-
-            var qualityProfileIds = audiobooks
-                .Where(a => a.QualityProfileId.HasValue)
-                .Select(a => a.QualityProfileId!.Value)
-                .Distinct()
-                .ToArray();
-
-            var allQualityProfiles = await _qualityProfileRepository.GetAllAsync();
-            var qualityProfiles = qualityProfileIds.Length == 0
-                ? new List<QualityProfile>()
-                : allQualityProfiles.Where(q => qualityProfileIds.Contains(q.Id)).ToList();
-
-            var qualityProfilesById = qualityProfiles.ToDictionary(q => q.Id);
-
-            var activeDownloadAudiobookIds = await _downloadRepository.GetActiveAudiobookIdsAsync(ActiveLibraryDownloadStatuses);
-
-            var activeDownloadAudiobookIdSet = activeDownloadAudiobookIds.ToHashSet();
-
-            var dto = audiobooks.Select(a =>
-            {
-                filesByAudiobookId.TryGetValue(a.Id, out var files);
-                var hasTrackedFiles = files != null && files.Count > 0;
-                var hasLegacyFileSummary = !string.IsNullOrWhiteSpace(a.FilePath);
-                var hasAnyFile = hasTrackedFiles || hasLegacyFileSummary;
-                var wanted = ComputeWantedFlag(a.Monitored, hasTrackedFiles, a.FilePath);
-                QualityProfile? qualityProfile = null;
-                if (a.QualityProfileId.HasValue)
-                {
-                    qualityProfilesById.TryGetValue(a.QualityProfileId.Value, out qualityProfile);
-                }
-
-                return new LibraryAudiobookListItemDto
-                {
-                    Id = a.Id,
-                    Title = a.Title,
-                    Authors = a.Authors?.ToArray(),
-                    Narrators = a.Narrators?.ToArray(),
-                    PublishYear = a.PublishYear,
-                    PublishedDate = a.PublishedDate,
-                    Series = a.Series,
-                    SeriesNumber = a.SeriesNumber,
-                    Genres = a.Genres?.ToArray(),
-                    Asin = a.Asin,
-                    OpenLibraryId = a.OpenLibraryId,
-                    Publisher = a.Publisher,
-                    Language = a.Language,
-                    Runtime = a.Runtime,
-                    Edition = a.Edition,
-                    ImageUrl = a.ImageUrl,
-                    Monitored = a.Monitored,
-                    BasePath = a.BasePath,
-                    FilePath = a.FilePath,
-                    FileSize = a.FileSize,
-                    FileCount = files?.Count ?? 0,
-                    Quality = a.Quality,
-                    QualityProfileId = a.QualityProfileId,
-                    AuthorAsins = a.AuthorAsins?.ToArray(),
-                    Wanted = wanted,
-                    Status = AudiobookStatusEvaluator.ComputeStatus(
-                         activeDownloadAudiobookIdSet.Contains(a.Id),
-                         hasAnyFile,
-                         a.Quality,
-                         qualityProfile,
-                         files)
-                };
-            }).ToList();
-
-            return Ok(dto);
+            return Ok(await _libraryListService.GetAllAsync());
         }
 
         /// <summary>
@@ -842,7 +704,7 @@ namespace Listenarr.Api.Controllers
                     source = f.Source,
                     createdAt = f.CreatedAt
                 }).ToList(),
-                wanted = ComputeWantedFlag(updated)
+                wanted = AudiobookWantedEvaluator.Compute(updated)
             };
 
             return Ok(audiobookDto);
@@ -1644,7 +1506,7 @@ namespace Listenarr.Api.Controllers
                     var imagePath = await _imageCacheService.GetCachedImagePathAsync(audiobook.Asin);
                     if (imagePath != null)
                     {
-                        var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                        var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                         if (System.IO.File.Exists(fullPath))
                         {
                             System.IO.File.Delete(fullPath);
@@ -1674,7 +1536,7 @@ namespace Listenarr.Api.Controllers
                                 var imagePath = await _imageCacheService.GetCachedImagePathAsync(identifier);
                                 if (!string.IsNullOrEmpty(imagePath))
                                 {
-                                    var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                                    var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                                     if (System.IO.File.Exists(fullPath))
                                     {
                                         System.IO.File.Delete(fullPath);
@@ -2384,7 +2246,7 @@ namespace Listenarr.Api.Controllers
                             var imagePath = await _imageCacheService.GetCachedImagePathAsync(audiobook.Asin);
                             if (imagePath != null)
                             {
-                                var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                                var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                                 if (System.IO.File.Exists(fullPath))
                                 {
                                     System.IO.File.Delete(fullPath);
@@ -2412,7 +2274,7 @@ namespace Listenarr.Api.Controllers
                                         var imagePath = await _imageCacheService.GetCachedImagePathAsync(identifier);
                                         if (!string.IsNullOrEmpty(imagePath))
                                         {
-                                            var fullPath = ResolvePathWithOptionalBase(Directory.GetCurrentDirectory(), imagePath);
+                                            var fullPath = ResolvePathWithOptionalBase(_contentRootPath, imagePath);
                                             if (System.IO.File.Exists(fullPath))
                                             {
                                                 System.IO.File.Delete(fullPath);
@@ -4435,9 +4297,13 @@ namespace Listenarr.Api.Controllers
             if (audiobook == null) return NotFound(new { message = "Audiobook not found" });
             if (request == null) return BadRequest(new { message = "Request body is required" });
 
-            if (string.IsNullOrWhiteSpace(request.DestinationPath))
+            if (string.IsNullOrEmpty(request.DestinationPath))
             {
                 return BadRequest(new { message = "DestinationPath is required" });
+            }
+            if (FileUtils.IsPathInvalidForCurrentOs(request.DestinationPath))
+            {
+                return BadRequest(new { message = "DestinationPath is not valid for this operating system" });
             }
 
             try
@@ -4447,12 +4313,8 @@ namespace Listenarr.Api.Controllers
                 var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
                 var settings = await configService.GetApplicationSettingsAsync();
 
-                var final = request.DestinationPath!;
-                if (!Path.IsPathRooted(final))
-                {
-                    var root = settings.OutputPath ?? string.Empty;
-                    final = Path.Join(root, final.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-                }
+                var final = FileUtils.CombineWithOptionalBase(settings.OutputPath, request.DestinationPath!);
+                final = FileUtils.NormalizeStoredPath(final);
 
                 // If caller explicitly asked to change the DB without moving files, update the BasePath and return early.
                 if (request.MoveFiles == false)
@@ -4474,13 +4336,17 @@ namespace Listenarr.Api.Controllers
                 // Determine source path snapshot to use for the move. Prefer an explicit source from the request
                 // (the frontend should send the original source if it updated the audiobook BasePath before requesting a move),
                 // otherwise fall back to the current audiobook.BasePath as a best-effort.
-                var sourcePath = !string.IsNullOrWhiteSpace(request.SourcePath)
+                var sourcePath = !string.IsNullOrEmpty(request.SourcePath)
                     ? request.SourcePath
                     : audiobook.BasePath;
 
-                if (string.IsNullOrWhiteSpace(sourcePath))
+                if (string.IsNullOrEmpty(sourcePath))
                 {
                     return BadRequest(new { message = "Source path not provided. Supply current source path in the Move request or ensure audiobook has a valid BasePath." });
+                }
+                if (FileUtils.IsPathInvalidForCurrentOs(sourcePath))
+                {
+                    return BadRequest(new { message = "Source path is not valid for this operating system." });
                 }
 
                 // Validate source exists now to provide earlier feedback to clients (avoids enqueueing doomed jobs)
@@ -7446,6 +7312,3 @@ namespace Listenarr.Api.Controllers
 
     }
 }
-
-
-
