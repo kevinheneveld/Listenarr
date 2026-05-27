@@ -5569,53 +5569,32 @@ namespace Listenarr.Api.Controllers
                 .GroupBy(f => f.AudiobookId)
                 .ToDictionary(g => g.Key, g => g.Count());
 
-            // Two-pass grouping:
+            // Two independent grouping passes — each row participates in
+            // BOTH when it qualifies (rather than being mutually exclusive
+            // by ASIN presence as v1 did, which narrowed matches more than
+            // intended).
             //
-            //   Pass 1: by normalized ASIN. Two rows with the same Audible
-            //   ASIN are by definition the same book — the strongest signal
-            //   we have. Catches phantoms where the healthy row's BasePath
-            //   is deeper than the phantom's (the common case after our
-            //   recovery scans realigned BasePaths only on the rows we
-            //   touched).
+            //   Pass 1 (ASIN): rows with a non-empty ASIN, keyed by ASIN.
+            //   Catches phantoms whose BasePath differs from the healthy
+            //   sibling's — the common case where the healthy row points at
+            //   /Author/Title/Narrator and the phantom points at a stale
+            //   parent. With an extra title+author sanity check inside the
+            //   cluster to defend against cross-stamped ASINs.
             //
-            //   Pass 2: by (titleKey, authorKey, basePathKey) for rows
-            //   without an ASIN. Wishlist entries and pre-ASIN-import rows
-            //   fall in here.
+            //   Pass 2 (TAB): all rows with title+author+basePath, keyed by
+            //   (titleKey, authorKey, basePathKey). Catches phantoms with no
+            //   ASIN (wishlist+real pairings) and ASIN-mismatched same-path
+            //   pairs (which get skipped inside the cluster as
+            //   loser_asin_mismatch).
             //
-            // Each row goes into exactly one group (ASIN if present, else
-            // the title/author/basepath key). Within each group we look for
-            // one winner (has files) and one-or-more losers (no files).
-            // When grouping by ASIN we additionally sanity-check that the
-            // winner and each candidate loser agree on normalized title +
-            // author, so an ASIN that got cross-stamped onto an unrelated
-            // book doesn't trigger a wrong merge.
+            // Then losers are unioned across passes. A loser claimed by two
+            // different winners shows up as "conflicting_winners" and is
+            // skipped pending manual review.
             var groups = new Dictionary<string, List<Audiobook>>(StringComparer.Ordinal);
             var groupKindByKey = new Dictionary<string, string>(StringComparer.Ordinal);
 
-            foreach (var a in allAudiobooks)
+            void AddToGroup(Audiobook a, string key, string kind)
             {
-                var asin = (a.Asin ?? string.Empty).Trim().ToUpperInvariant();
-                string key;
-                string kind;
-                if (asin.Length > 0)
-                {
-                    key = "ASIN:" + asin;
-                    kind = "asin";
-                }
-                else
-                {
-                    if (string.IsNullOrWhiteSpace(a.Title)) continue;
-                    var authorForKey = a.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty;
-                    if (string.IsNullOrWhiteSpace(authorForKey)) continue;
-                    if (string.IsNullOrWhiteSpace(a.BasePath)) continue;
-                    var titleKey = NormalizeForFolderMatch(a.Title);
-                    var authorKey = NormalizeForFolderMatch(authorForKey);
-                    var basePathKey = NormalizeOrganizeKey(NormalizeOrganizePath(a.BasePath));
-                    if (string.IsNullOrEmpty(titleKey) || string.IsNullOrEmpty(authorKey) || string.IsNullOrEmpty(basePathKey)) continue;
-                    key = "TAB:" + titleKey + "\0" + authorKey + "\0" + basePathKey;
-                    kind = "titleAuthorBasePath";
-                }
-
                 if (!groups.TryGetValue(key, out var list))
                 {
                     list = new List<Audiobook>();
@@ -5625,8 +5604,38 @@ namespace Listenarr.Api.Controllers
                 list.Add(a);
             }
 
-            var plannedMerges = new List<(Audiobook Winner, List<Audiobook> Losers)>();
+            foreach (var a in allAudiobooks)
+            {
+                var asin = (a.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                if (asin.Length > 0)
+                {
+                    AddToGroup(a, "ASIN:" + asin, "asin");
+                }
+
+                if (!string.IsNullOrWhiteSpace(a.Title) && !string.IsNullOrWhiteSpace(a.BasePath))
+                {
+                    var authorForKey = a.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(authorForKey))
+                    {
+                        var titleKey = NormalizeForFolderMatch(a.Title);
+                        var authorKey = NormalizeForFolderMatch(authorForKey);
+                        var basePathKey = NormalizeOrganizeKey(NormalizeOrganizePath(a.BasePath));
+                        if (!string.IsNullOrEmpty(titleKey) && !string.IsNullOrEmpty(authorKey) && !string.IsNullOrEmpty(basePathKey))
+                        {
+                            AddToGroup(a, "TAB:" + titleKey + "\0" + authorKey + "\0" + basePathKey, "titleAuthorBasePath");
+                        }
+                    }
+                }
+            }
+
             var skippedClusters = new List<object>();
+
+            // loserId → winner mapping, accumulated across both passes.
+            // A loser claimed by two different winners is removed and the
+            // conflict surfaced.
+            var loserClaim = new Dictionary<int, Audiobook>();
+            var conflictingLoserIds = new HashSet<int>();
+            var winnersById = new Dictionary<int, Audiobook>();
 
             foreach (var (key, members) in groups)
             {
@@ -5716,9 +5725,50 @@ namespace Listenarr.Api.Controllers
 
                 if (safeLosers.Count > 0)
                 {
-                    plannedMerges.Add((winner, safeLosers));
+                    winnersById[winner.Id] = winner;
+                    foreach (var loser in safeLosers)
+                    {
+                        if (loserClaim.TryGetValue(loser.Id, out var existingWinner))
+                        {
+                            if (existingWinner.Id != winner.Id)
+                            {
+                                conflictingLoserIds.Add(loser.Id);
+                                skippedClusters.Add(new
+                                {
+                                    reason = "conflicting_winners",
+                                    loserId = loser.Id,
+                                    title = loser.Title,
+                                    winnerIdA = existingWinner.Id,
+                                    winnerIdB = winner.Id,
+                                });
+                            }
+                            // Same winner found again via a different pass — no-op.
+                        }
+                        else
+                        {
+                            loserClaim[loser.Id] = winner;
+                        }
+                    }
                 }
             }
+
+            // Drop conflicted losers from claims.
+            foreach (var conflictId in conflictingLoserIds)
+            {
+                loserClaim.Remove(conflictId);
+            }
+
+            // Rebuild winner→losers list from the unioned claims.
+            var audiobooksById = allAudiobooks.ToDictionary(a => a.Id);
+            var plannedMerges = loserClaim
+                .GroupBy(kv => kv.Value.Id)
+                .Select(g =>
+                {
+                    var winner = winnersById[g.Key];
+                    var losers = g.Select(kv => audiobooksById[kv.Key]).ToList();
+                    return (Winner: winner, Losers: losers);
+                })
+                .ToList();
 
             var mergeDetails = plannedMerges
                 .Select(m => new
