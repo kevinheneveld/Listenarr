@@ -5372,6 +5372,162 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Third recovery endpoint, simpler than the other two: handles books
+        /// whose <c>BasePath</c> points at a specific (non-root) subfolder
+        /// but whose <c>AudiobookFile</c> rows are missing. Same disease as
+        /// the rootbase population — the pre-fix "base path missing" cleanup
+        /// nulled the file pointers — but the BasePath itself survived. No
+        /// inference needed: just verify the directory exists with audio
+        /// files, then enqueue a re-link scan with the existing
+        /// <c>skipMissingBasePathCleanup</c> guard.
+        /// </summary>
+        /// <param name="dryRun">Default <c>true</c>. Returns the candidate
+        /// list (audiobook id, current BasePath, audio-file count on disk)
+        /// without touching anything. Pass <c>false</c> to enqueue scans.
+        /// </param>
+        [HttpPost("recover-orphaned-tracking")]
+        public async Task<IActionResult> RecoverOrphanedTracking([FromQuery] bool dryRun = true, CancellationToken ct = default)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            var allAudiobooks = await _repo.GetAllAsync();
+            var allFiles = await _audioFileRepository.GetAllAsync();
+            var fileCountByAudiobookId = allFiles
+                .GroupBy(f => f.AudiobookId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var recoveredEntries = new List<object>();
+            var skippedEntries = new List<object>();
+            var inspected = 0;
+
+            foreach (var audiobook in allAudiobooks)
+            {
+                if (ct.IsCancellationRequested) break;
+
+                // Population: BasePath is set, BasePath is NOT a configured
+                // root folder (the rootbase endpoint already covers those),
+                // and there are zero tracked files.
+                var basePath = audiobook.BasePath;
+                if (string.IsNullOrWhiteSpace(basePath)) continue;
+                if (IsSourceAtRootFolder(basePath, rootFolders)) continue;
+                var currentFileCount = fileCountByAudiobookId.TryGetValue(audiobook.Id, out var n) ? n : 0;
+                if (currentFileCount > 0) continue;
+
+                inspected++;
+
+                // Sanity-check the BasePath exists on disk.
+                bool dirExists = false;
+                int audioFileCount = 0;
+                try
+                {
+                    dirExists = Directory.Exists(basePath);
+                    if (dirExists)
+                    {
+                        // Count audio files directly in the folder and one
+                        // level deep (Narrator subfolder shape). We don't
+                        // need to enumerate them all — Take a small cap to
+                        // avoid pathological cases.
+                        audioFileCount = Directory.EnumerateFiles(basePath, "*.*", SearchOption.TopDirectoryOnly)
+                            .Count(f => IsAudioExtension(Path.GetExtension(f)));
+                        if (audioFileCount == 0)
+                        {
+                            // Try one level down.
+                            foreach (var sub in Directory.EnumerateDirectories(basePath))
+                            {
+                                audioFileCount += Directory.EnumerateFiles(sub, "*.*", SearchOption.TopDirectoryOnly)
+                                    .Count(f => IsAudioExtension(Path.GetExtension(f)));
+                                if (audioFileCount > 0) break;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Orphaned-tracking recovery: failed to stat {BasePath} for audiobook {AudiobookId}", LogRedaction.SanitizeFilePath(basePath), audiobook.Id);
+                }
+
+                if (!dirExists)
+                {
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "basepath_missing_on_disk",
+                        basePath,
+                    });
+                    continue;
+                }
+                if (audioFileCount == 0)
+                {
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "basepath_has_no_audio",
+                        basePath,
+                    });
+                    continue;
+                }
+
+                var entry = new
+                {
+                    audiobookId = audiobook.Id,
+                    title = audiobook.Title,
+                    basePath,
+                    audioFileCount,
+                };
+
+                if (dryRun)
+                {
+                    recoveredEntries.Add(entry);
+                    continue;
+                }
+
+                try
+                {
+                    if (_scanQueueService != null)
+                    {
+                        var scanJobId = await _scanQueueService.EnqueueScanAsync(
+                            audiobook,
+                            path: basePath,
+                            forceMetadataRefresh: false,
+                            skipMissingBasePathCleanup: true);
+                        _logger.LogInformation(
+                            "Orphaned-tracking recovery: enqueued scan {ScanJobId} for audiobook {AudiobookId} at BasePath {BasePath}",
+                            scanJobId, audiobook.Id, LogRedaction.SanitizeFilePath(basePath));
+                    }
+
+                    recoveredEntries.Add(entry);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogError(ex, "Orphaned-tracking recovery: failed to enqueue scan for audiobook {AudiobookId} ({BasePath})", audiobook.Id, LogRedaction.SanitizeFilePath(basePath));
+                    skippedEntries.Add(new
+                    {
+                        audiobookId = audiobook.Id,
+                        title = audiobook.Title,
+                        reason = "scan_enqueue_failed",
+                        error = ex.Message,
+                        basePath,
+                    });
+                }
+            }
+
+            return Ok(new
+            {
+                dryRun,
+                inspected,
+                recovered = recoveredEntries.Count,
+                skipped = skippedEntries.Count,
+                recoveredDetails = recoveredEntries,
+                skippedDetails = skippedEntries,
+            });
+        }
+
+        /// <summary>
         /// Operator escape hatch: flip every <c>Queued</c> or stale
         /// <c>Processing</c> move job older than the given threshold to
         /// <c>Cancelled</c>. The <c>MoveBackgroundService</c>'s consumer
