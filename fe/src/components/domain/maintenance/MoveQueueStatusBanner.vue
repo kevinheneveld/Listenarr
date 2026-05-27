@@ -158,13 +158,30 @@ let nowTimer: number | null = null
 let pollTimer: number | null = null
 let visibilityHandler: (() => void) | null = null
 
-// The banner is meant to be ambient — render nothing when there's literally
-// no history (totally fresh install) so it doesn't clutter pages where it'd
-// otherwise just say "0 of 0 done".
+// The banner is ambient — only render when there's active work (queued or
+// processing) so historical counts from prior sessions don't linger as a
+// permanent UI tombstone. A failure within RECENT_FAILURE_WINDOW_MS stays
+// visible briefly so the user still notices something just went wrong.
+const RECENT_FAILURE_WINDOW_MS = 10 * 60 * 1000
+
 const visible = computed(() => {
-  if (loadError.value) return true
+  // Require summary to be non-null even if loadError is set — the template
+  // dereferences summary!.completed and related fields, so a banner shown
+  // before the first successful poll would crash.
   if (!summary.value) return false
-  return summary.value.total > 0
+  if (loadError.value) return true
+  if (summary.value.processing > 0 || summary.value.queued > 0) return true
+  // Keep the banner up briefly after a recent failure so it isn't missed.
+  const failedAt = summary.value.recentFailed?.[0]?.updatedAt
+  if (failedAt) {
+    try {
+      const age = now.value - new Date(failedAt).getTime()
+      if (age >= 0 && age < RECENT_FAILURE_WINDOW_MS) return true
+    } catch {
+      /* unparseable timestamp — fall through to hide */
+    }
+  }
+  return false
 })
 
 // Most operations are "X of Y done" where Y is the active set (queued +
