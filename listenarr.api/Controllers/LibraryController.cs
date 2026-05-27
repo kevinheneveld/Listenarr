@@ -5528,6 +5528,248 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Sweep phantom-duplicate rows: audiobooks with no tracked files
+        /// whose title + first author + normalized <c>BasePath</c> match a
+        /// sibling row that DOES have files. These are casualties of the
+        /// pre-fix "base path missing" cleanup running on what was already
+        /// a duplicate row pair — the cleanup nulled the file pointers on
+        /// one of the pair, leaving a metadata-only ghost alongside the
+        /// healthy row.
+        ///
+        /// The dedup tool's title/author pass filters these out via its
+        /// phantom-row guard (so the FE shows "no duplicates" while the
+        /// underlying DB has hundreds of orphan rows). This endpoint
+        /// specifically targets that hidden population.
+        ///
+        /// Safe to apply: the merge is pure DB — Downloads, History, and
+        /// MoveJobs FK references on the loser get reassigned to the
+        /// winner, then the loser row is deleted (cascades drop its
+        /// AudiobookFiles / AudiobookExternalIdentifiers /
+        /// AudiobookSeriesMemberships per the schema). No filesystem
+        /// operations — the winner already owns the files at the shared
+        /// path.
+        ///
+        /// Conservative match: requires title + author + BasePath all match
+        /// after normalization, AND the loser's ASIN is either empty or
+        /// equal to the winner's. Mismatched-ASIN duplicates fall through
+        /// to the regular dedup tool.
+        /// </summary>
+        /// <param name="dryRun">Default <c>true</c>. Returns the candidate
+        /// merge list (per-row winner/loser ids, shared title + BasePath)
+        /// without touching anything. Pass <c>false</c> to execute.</param>
+        [HttpPost("cleanup-phantom-rows")]
+        public async Task<IActionResult> CleanupPhantomRows([FromQuery] bool dryRun = true, CancellationToken ct = default)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<ListenArrDbContext>();
+
+            var allAudiobooks = await _repo.GetAllAsync();
+            var allFiles = await _audioFileRepository.GetAllAsync();
+            var fileCountByAudiobookId = allFiles
+                .GroupBy(f => f.AudiobookId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            // Group by (titleKey, authorKey, basePathKey). Each group is a
+            // candidate cluster. Within each cluster we look for exactly one
+            // winner (has files) and one-or-more losers (no files).
+            var groups = new Dictionary<string, List<Audiobook>>(StringComparer.Ordinal);
+            foreach (var a in allAudiobooks)
+            {
+                if (string.IsNullOrWhiteSpace(a.Title)) continue;
+                var author = a.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(author)) continue;
+                if (string.IsNullOrWhiteSpace(a.BasePath)) continue;
+
+                var titleKey = NormalizeForFolderMatch(a.Title);
+                var authorKey = NormalizeForFolderMatch(author);
+                var basePathKey = NormalizeOrganizeKey(NormalizeOrganizePath(a.BasePath));
+                if (string.IsNullOrEmpty(titleKey) || string.IsNullOrEmpty(authorKey) || string.IsNullOrEmpty(basePathKey)) continue;
+
+                var key = titleKey + "\0" + authorKey + "\0" + basePathKey;
+                if (!groups.TryGetValue(key, out var list))
+                {
+                    list = new List<Audiobook>();
+                    groups[key] = list;
+                }
+                list.Add(a);
+            }
+
+            var plannedMerges = new List<(Audiobook Winner, List<Audiobook> Losers)>();
+            var skippedClusters = new List<object>();
+
+            foreach (var (_, members) in groups)
+            {
+                if (ct.IsCancellationRequested) break;
+                if (members.Count < 2) continue; // not a cluster
+
+                var winners = members.Where(a => fileCountByAudiobookId.GetValueOrDefault(a.Id, 0) > 0).ToList();
+                var losers = members.Where(a => fileCountByAudiobookId.GetValueOrDefault(a.Id, 0) == 0).ToList();
+
+                if (winners.Count == 0) continue; // nobody owns files — outside this tool's scope
+                if (losers.Count == 0) continue;  // everyone has files — handled by the dedup tool
+                if (winners.Count > 1)
+                {
+                    // Multiple file-owning rows at the same path — needs a
+                    // human eye; punt rather than guess.
+                    skippedClusters.Add(new
+                    {
+                        reason = "multiple_winners_at_same_path",
+                        title = members[0].Title,
+                        basePath = members[0].BasePath,
+                        winnerIds = winners.Select(w => w.Id).ToArray(),
+                        loserIds = losers.Select(l => l.Id).ToArray(),
+                    });
+                    continue;
+                }
+
+                var winner = winners[0];
+                var winnerAsin = (winner.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                var safeLosers = new List<Audiobook>();
+                foreach (var loser in losers)
+                {
+                    var loserAsin = (loser.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                    // Loser ASIN must be empty OR match the winner's. Anything
+                    // else means the two rows might represent different
+                    // editions or got cross-stamped — leave for manual review.
+                    if (loserAsin.Length > 0 && loserAsin != winnerAsin)
+                    {
+                        skippedClusters.Add(new
+                        {
+                            reason = "loser_asin_mismatch",
+                            title = loser.Title,
+                            basePath = loser.BasePath,
+                            winnerId = winner.Id,
+                            winnerAsin,
+                            loserId = loser.Id,
+                            loserAsin,
+                        });
+                        continue;
+                    }
+                    safeLosers.Add(loser);
+                }
+
+                if (safeLosers.Count > 0)
+                {
+                    plannedMerges.Add((winner, safeLosers));
+                }
+            }
+
+            var mergeDetails = plannedMerges
+                .Select(m => new
+                {
+                    winnerId = m.Winner.Id,
+                    title = m.Winner.Title,
+                    basePath = m.Winner.BasePath,
+                    loserIds = m.Losers.Select(l => l.Id).ToArray(),
+                })
+                .ToList();
+
+            if (dryRun)
+            {
+                return Ok(new
+                {
+                    dryRun = true,
+                    clustersInspected = groups.Count,
+                    merges = plannedMerges.Count,
+                    losersToDelete = plannedMerges.Sum(m => m.Losers.Count),
+                    skippedClusters = skippedClusters.Count,
+                    mergeDetails,
+                    skippedDetails = skippedClusters,
+                });
+            }
+
+            // Apply: pure DB cleanup. No filesystem touching — the winner
+            // owns the files at the shared path; the loser's "BasePath" was
+            // metadata-only after the pre-fix nullification.
+            var supportsTransactions = !string.Equals(
+                db.Database.ProviderName,
+                "Microsoft.EntityFrameworkCore.InMemory",
+                StringComparison.Ordinal);
+            Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? tx = supportsTransactions
+                ? await db.Database.BeginTransactionAsync(ct)
+                : null;
+
+            int downloadsReassigned = 0, historyReassigned = 0, moveJobsReassigned = 0, rowsDeleted = 0;
+            var executionErrors = new List<object>();
+            try
+            {
+                foreach (var (winner, losers) in plannedMerges)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    var loserIds = losers.Select(l => l.Id).ToArray();
+                    try
+                    {
+                        if (supportsTransactions)
+                        {
+                            downloadsReassigned += await db.Downloads
+                                .Where(d => d.AudiobookId != null && loserIds.Contains(d.AudiobookId.Value))
+                                .ExecuteUpdateAsync(s => s.SetProperty(d => d.AudiobookId, winner.Id), ct);
+                            historyReassigned += await db.History
+                                .Where(h => h.AudiobookId != null && loserIds.Contains(h.AudiobookId.Value))
+                                .ExecuteUpdateAsync(s => s.SetProperty(h => h.AudiobookId, winner.Id), ct);
+                            moveJobsReassigned += await db.MoveJobs
+                                .Where(j => loserIds.Contains(j.AudiobookId))
+                                .ExecuteUpdateAsync(s => s.SetProperty(j => j.AudiobookId, winner.Id), ct);
+                            rowsDeleted += await db.Audiobooks
+                                .Where(a => loserIds.Contains(a.Id))
+                                .ExecuteDeleteAsync(ct);
+                        }
+                        else
+                        {
+                            // InMemory provider fallback (tests).
+                            var downloads = await db.Downloads.Where(d => d.AudiobookId != null && loserIds.Contains(d.AudiobookId.Value)).ToListAsync(ct);
+                            foreach (var d in downloads) d.AudiobookId = winner.Id;
+                            downloadsReassigned += downloads.Count;
+                            var history = await db.History.Where(h => h.AudiobookId != null && loserIds.Contains(h.AudiobookId.Value)).ToListAsync(ct);
+                            foreach (var h in history) h.AudiobookId = winner.Id;
+                            historyReassigned += history.Count;
+                            var jobs = await db.MoveJobs.Where(j => loserIds.Contains(j.AudiobookId)).ToListAsync(ct);
+                            foreach (var j in jobs) j.AudiobookId = winner.Id;
+                            moveJobsReassigned += jobs.Count;
+                            var rows = await db.Audiobooks.Where(a => loserIds.Contains(a.Id)).ToListAsync(ct);
+                            db.Audiobooks.RemoveRange(rows);
+                            rowsDeleted += rows.Count;
+                            await db.SaveChangesAsync(ct);
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        _logger.LogError(ex, "Phantom cleanup: merge failed for winner {WinnerId} losers [{LoserIds}]", winner.Id, string.Join(",", loserIds));
+                        executionErrors.Add(new { winnerId = winner.Id, loserIds, error = ex.Message });
+                    }
+                }
+                if (tx != null) await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                if (tx != null) await tx.RollbackAsync(ct);
+                throw;
+            }
+            finally
+            {
+                tx?.Dispose();
+            }
+
+            _logger.LogInformation(
+                "Phantom cleanup applied: {Merges} merges, {Deleted} rows deleted, {Downloads} downloads reassigned, {History} history reassigned, {MoveJobs} move jobs reassigned, {Errors} errors",
+                plannedMerges.Count, rowsDeleted, downloadsReassigned, historyReassigned, moveJobsReassigned, executionErrors.Count);
+
+            return Ok(new
+            {
+                dryRun = false,
+                clustersInspected = groups.Count,
+                merges = plannedMerges.Count,
+                rowsDeleted,
+                downloadsReassigned,
+                historyReassigned,
+                moveJobsReassigned,
+                skippedClusters = skippedClusters.Count,
+                executionErrors,
+                skippedDetails = skippedClusters,
+            });
+        }
+
+        /// <summary>
         /// Operator escape hatch: flip every <c>Queued</c> or stale
         /// <c>Processing</c> move job older than the given threshold to
         /// <c>Cancelled</c>. The <c>MoveBackgroundService</c>'s consumer
