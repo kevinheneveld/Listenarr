@@ -5569,27 +5569,58 @@ namespace Listenarr.Api.Controllers
                 .GroupBy(f => f.AudiobookId)
                 .ToDictionary(g => g.Key, g => g.Count());
 
-            // Group by (titleKey, authorKey, basePathKey). Each group is a
-            // candidate cluster. Within each cluster we look for exactly one
-            // winner (has files) and one-or-more losers (no files).
+            // Two-pass grouping:
+            //
+            //   Pass 1: by normalized ASIN. Two rows with the same Audible
+            //   ASIN are by definition the same book — the strongest signal
+            //   we have. Catches phantoms where the healthy row's BasePath
+            //   is deeper than the phantom's (the common case after our
+            //   recovery scans realigned BasePaths only on the rows we
+            //   touched).
+            //
+            //   Pass 2: by (titleKey, authorKey, basePathKey) for rows
+            //   without an ASIN. Wishlist entries and pre-ASIN-import rows
+            //   fall in here.
+            //
+            // Each row goes into exactly one group (ASIN if present, else
+            // the title/author/basepath key). Within each group we look for
+            // one winner (has files) and one-or-more losers (no files).
+            // When grouping by ASIN we additionally sanity-check that the
+            // winner and each candidate loser agree on normalized title +
+            // author, so an ASIN that got cross-stamped onto an unrelated
+            // book doesn't trigger a wrong merge.
             var groups = new Dictionary<string, List<Audiobook>>(StringComparer.Ordinal);
+            var groupKindByKey = new Dictionary<string, string>(StringComparer.Ordinal);
+
             foreach (var a in allAudiobooks)
             {
-                if (string.IsNullOrWhiteSpace(a.Title)) continue;
-                var author = a.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty;
-                if (string.IsNullOrWhiteSpace(author)) continue;
-                if (string.IsNullOrWhiteSpace(a.BasePath)) continue;
+                var asin = (a.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                string key;
+                string kind;
+                if (asin.Length > 0)
+                {
+                    key = "ASIN:" + asin;
+                    kind = "asin";
+                }
+                else
+                {
+                    if (string.IsNullOrWhiteSpace(a.Title)) continue;
+                    var authorForKey = a.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(authorForKey)) continue;
+                    if (string.IsNullOrWhiteSpace(a.BasePath)) continue;
+                    var titleKey = NormalizeForFolderMatch(a.Title);
+                    var authorKey = NormalizeForFolderMatch(authorForKey);
+                    var basePathKey = NormalizeOrganizeKey(NormalizeOrganizePath(a.BasePath));
+                    if (string.IsNullOrEmpty(titleKey) || string.IsNullOrEmpty(authorKey) || string.IsNullOrEmpty(basePathKey)) continue;
+                    key = "TAB:" + titleKey + "\0" + authorKey + "\0" + basePathKey;
+                    kind = "titleAuthorBasePath";
+                }
 
-                var titleKey = NormalizeForFolderMatch(a.Title);
-                var authorKey = NormalizeForFolderMatch(author);
-                var basePathKey = NormalizeOrganizeKey(NormalizeOrganizePath(a.BasePath));
-                if (string.IsNullOrEmpty(titleKey) || string.IsNullOrEmpty(authorKey) || string.IsNullOrEmpty(basePathKey)) continue;
-
-                var key = titleKey + "\0" + authorKey + "\0" + basePathKey;
                 if (!groups.TryGetValue(key, out var list))
                 {
                     list = new List<Audiobook>();
                     groups[key] = list;
+                    groupKindByKey[key] = kind;
                 }
                 list.Add(a);
             }
@@ -5597,11 +5628,12 @@ namespace Listenarr.Api.Controllers
             var plannedMerges = new List<(Audiobook Winner, List<Audiobook> Losers)>();
             var skippedClusters = new List<object>();
 
-            foreach (var (_, members) in groups)
+            foreach (var (key, members) in groups)
             {
                 if (ct.IsCancellationRequested) break;
                 if (members.Count < 2) continue; // not a cluster
 
+                var kind = groupKindByKey.TryGetValue(key, out var k) ? k : "unknown";
                 var winners = members.Where(a => fileCountByAudiobookId.GetValueOrDefault(a.Id, 0) > 0).ToList();
                 var losers = members.Where(a => fileCountByAudiobookId.GetValueOrDefault(a.Id, 0) == 0).ToList();
 
@@ -5609,13 +5641,15 @@ namespace Listenarr.Api.Controllers
                 if (losers.Count == 0) continue;  // everyone has files — handled by the dedup tool
                 if (winners.Count > 1)
                 {
-                    // Multiple file-owning rows at the same path — needs a
-                    // human eye; punt rather than guess.
+                    // Multiple file-owning rows in the same cluster — needs
+                    // a human eye; punt rather than guess.
                     skippedClusters.Add(new
                     {
-                        reason = "multiple_winners_at_same_path",
+                        reason = "multiple_winners_in_cluster",
+                        groupKind = kind,
                         title = members[0].Title,
                         basePath = members[0].BasePath,
+                        asin = members[0].Asin,
                         winnerIds = winners.Select(w => w.Id).ToArray(),
                         loserIds = losers.Select(l => l.Id).ToArray(),
                     });
@@ -5624,26 +5658,58 @@ namespace Listenarr.Api.Controllers
 
                 var winner = winners[0];
                 var winnerAsin = (winner.Asin ?? string.Empty).Trim().ToUpperInvariant();
+                var winnerTitleKey = NormalizeForFolderMatch(winner.Title ?? string.Empty);
+                var winnerAuthorKey = NormalizeForFolderMatch(winner.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty);
+
                 var safeLosers = new List<Audiobook>();
                 foreach (var loser in losers)
                 {
                     var loserAsin = (loser.Asin ?? string.Empty).Trim().ToUpperInvariant();
-                    // Loser ASIN must be empty OR match the winner's. Anything
-                    // else means the two rows might represent different
-                    // editions or got cross-stamped — leave for manual review.
-                    if (loserAsin.Length > 0 && loserAsin != winnerAsin)
+
+                    if (kind == "asin")
                     {
-                        skippedClusters.Add(new
+                        // Grouped by ASIN, so ASINs already match. Sanity-
+                        // check title + first author still agree — defends
+                        // against ASINs cross-stamped onto unrelated rows.
+                        var loserTitleKey = NormalizeForFolderMatch(loser.Title ?? string.Empty);
+                        var loserAuthorKey = NormalizeForFolderMatch(loser.Authors?.FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? string.Empty);
+                        if (loserTitleKey != winnerTitleKey || loserAuthorKey != winnerAuthorKey)
                         {
-                            reason = "loser_asin_mismatch",
-                            title = loser.Title,
-                            basePath = loser.BasePath,
-                            winnerId = winner.Id,
-                            winnerAsin,
-                            loserId = loser.Id,
-                            loserAsin,
-                        });
-                        continue;
+                            skippedClusters.Add(new
+                            {
+                                reason = "asin_match_but_title_or_author_differs",
+                                asin = winnerAsin,
+                                winnerId = winner.Id,
+                                winnerTitle = winner.Title,
+                                winnerAuthor = winner.Authors?.FirstOrDefault(),
+                                loserId = loser.Id,
+                                loserTitle = loser.Title,
+                                loserAuthor = loser.Authors?.FirstOrDefault(),
+                            });
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        // Grouped by title+author+basePath (loser had no
+                        // ASIN). If the loser somehow has a non-empty ASIN
+                        // by the time we get here that doesn't match the
+                        // winner's, refuse — that's a real edition divergence
+                        // for the regular dedup tool to surface.
+                        if (loserAsin.Length > 0 && loserAsin != winnerAsin)
+                        {
+                            skippedClusters.Add(new
+                            {
+                                reason = "loser_asin_mismatch",
+                                title = loser.Title,
+                                basePath = loser.BasePath,
+                                winnerId = winner.Id,
+                                winnerAsin,
+                                loserId = loser.Id,
+                                loserAsin,
+                            });
+                            continue;
+                        }
                     }
                     safeLosers.Add(loser);
                 }
