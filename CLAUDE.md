@@ -72,7 +72,11 @@ Two types of commits live in `kevin/live`:
 - **Upstream-worthy**: the actual fix/feature commit (identical to what's in the PR branch). These will eventually merge upstream and disappear from the diff.
 - **Personal-only**: prefix with `[personal]` — e.g., `[personal] default sort by date added`. These are UI preferences, behavior tweaks, or setup-specific things that would never make sense as upstream PRs. Know that these will always need to be rebased over.
 
-### Rebasing `kevin/live` after upstream advances
+### Reconciling `kevin/live` with new canary
+
+Pick the right tool for the size of the advance:
+
+**Small advance (handful of upstream commits)** — rebase, for a linear history:
 
 ```bash
 ./scripts/sync-upstream.sh          # brings canary current
@@ -81,6 +85,22 @@ git rebase canary                   # replay kevin/live commits on top of new ca
 # Resolve conflicts — [personal] commits are the most likely conflict sources
 git push fork kevin/live --force-with-lease
 ```
+
+**Large advance (dozens of upstream commits, especially when upstream has done architectural refactors)** — merge, because rebasing the same conflict per replayed commit becomes a multi-hour grind:
+
+```bash
+./scripts/sync-upstream.sh
+git checkout kevin/live
+git checkout -b kevin/live-merge-test     # work in a throwaway first
+git merge canary                          # resolve all conflicts in one pass
+# build + test + browser-smoke, then:
+git checkout kevin/live
+git merge --ff-only kevin/live-merge-test
+git push fork kevin/live --force-with-lease   # if history was rewritten elsewhere
+git branch -D kevin/live-merge-test
+```
+
+The merge commit lingers in kevin/live history forever, but for a large catch-up that's a fair price vs. rebasing per-commit. After a large merge, return to the small-rebase rhythm for subsequent canary advances.
 
 ### Check divergence from upstream
 
