@@ -304,6 +304,20 @@ namespace Listenarr.Application.Audiobooks
             var normalizedNew = NormalizePath(newFolderPath);
             if (!IsPathWithinAllowedRoots(normalizedCurrent, allowedRoots) || !IsPathWithinAllowedRoots(normalizedNew, allowedRoots))
                 return (false, "Destination path is outside the allowed library roots.");
+
+            // Refuse to rename when the source IS a configured library root.
+            // IsPathWithinAllowedRoots returns true here ("within" includes
+            // equality), but the downstream FileMover would attempt to move
+            // the entire root directory and — in the fallback copy+delete
+            // path — wipe every other audiobook sharing the root. This is
+            // the rename-flow analogue of the organize-library/MoveExecutor
+            // source-at-root guard. FileMover also defensively refuses if
+            // its source has no parent (Linux "/" / Windows "C:\\") but we
+            // catch the library-root case earlier with a clearer message
+            // since FileMover doesn't know about configured roots.
+            if (IsPathAConfiguredRoot(normalizedCurrent, allowedRoots))
+                return (false, "Source folder is a configured library root and cannot be renamed in bulk; re-scan to correct BasePath first.");
+
             if (!Directory.Exists(normalizedCurrent))
             {
                 audiobook.BasePath = normalizedNew;
@@ -504,6 +518,16 @@ namespace Listenarr.Application.Audiobooks
 
         private static bool IsPathWithinAllowedRoots(string path, IReadOnlyCollection<string> allowedRoots)
             => !string.IsNullOrWhiteSpace(path) && allowedRoots.Any(root => IsSamePathOrWithin(path, root));
+
+        /// <summary>
+        /// Strict equality variant of <see cref="IsPathWithinAllowedRoots"/>:
+        /// returns true only when <paramref name="path"/> is itself a
+        /// configured root, not a subdirectory of one. Used to short-circuit
+        /// the rename flow before it can hand a library-root path to
+        /// <see cref="IFileMover.MoveDirectoryAsync"/>.
+        /// </summary>
+        private static bool IsPathAConfiguredRoot(string path, IReadOnlyCollection<string> allowedRoots)
+            => !string.IsNullOrWhiteSpace(path) && allowedRoots.Any(root => PathsEqual(path, root));
 
         private static string ComputeCurrentBasePath(Audiobook audiobook)
         {

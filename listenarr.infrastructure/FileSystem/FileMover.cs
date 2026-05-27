@@ -56,6 +56,75 @@ namespace Listenarr.Infrastructure.FileSystem
 
         public async Task<bool> MoveDirectoryAsync(string sourceDir, string destDir)
         {
+            // Defensive refusals BEFORE any FS action. This method's fallback
+            // path does CopyDirRecursive(source, dest) + Directory.Delete(
+            // source, recursive: true), so unguarded these inputs can wipe
+            // the wrong tree:
+            //
+            //  - source == destination → no-op (succeeds without touching
+            //    anything)
+            //  - destination is inside source → CopyDirRecursive would
+            //    enumerate its own output and the recursive Delete would
+            //    nuke the live result (same shape as the move-queue
+            //    recursion bug)
+            //  - source is inside destination → flattening into ancestor;
+            //    the post-copy delete of source would damage destination
+            //  - source is at a filesystem root → the post-copy delete
+            //    would wipe everything sharing that root (this is the
+            //    same case MoveExecutor refuses for the move queue; the
+            //    library controller's RenameService is responsible for
+            //    the library-root variant since FileMover doesn't know
+            //    about configured root folders)
+            if (string.IsNullOrWhiteSpace(sourceDir))
+            {
+                _logger.LogWarning("MoveDirectoryAsync refused: source path is empty.");
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(destDir))
+            {
+                _logger.LogWarning("MoveDirectoryAsync refused: destination path is empty.");
+                return false;
+            }
+            string sourceFull;
+            string destFull;
+            try
+            {
+                sourceFull = Path.GetFullPath(sourceDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                destFull = Path.GetFullPath(destDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception normEx) when (normEx is not OperationCanceledException && normEx is not OutOfMemoryException && normEx is not StackOverflowException)
+            {
+                _logger.LogWarning(normEx, "MoveDirectoryAsync refused: could not normalize source/dest paths.");
+                return false;
+            }
+
+            if (string.Equals(sourceFull, destFull, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("MoveDirectoryAsync no-op: source equals destination ({Source}).", sourceDir);
+                return true;
+            }
+
+            var sep = Path.DirectorySeparatorChar;
+            var sourceWithSep = sourceFull + sep;
+            var destWithSep = destFull + sep;
+            if (destWithSep.StartsWith(sourceWithSep, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("MoveDirectoryAsync refused: destination {Dest} is inside source {Source} — copy+delete fallback would wipe the result.", destDir, sourceDir);
+                return false;
+            }
+            if (sourceWithSep.StartsWith(destWithSep, StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogWarning("MoveDirectoryAsync refused: source {Source} is inside destination {Dest} (flattening into ancestor not supported).", sourceDir, destDir);
+                return false;
+            }
+
+            var sourceParent = Path.GetDirectoryName(sourceFull);
+            if (string.IsNullOrEmpty(sourceParent) || IsAtFilesystemRoot(sourceParent))
+            {
+                _logger.LogWarning("MoveDirectoryAsync refused: source {Source} has no usable parent directory — fallback delete would wipe a filesystem root.", sourceDir);
+                return false;
+            }
+
             // Try move with retries
             var attempt = 0;
             var delay = 1000;
@@ -464,6 +533,22 @@ namespace Listenarr.Infrastructure.FileSystem
             {
                 throw new InvalidOperationException($"Unable to perform {action} on {source} to {destination}", exception);
             }
+        }
+
+        /// <summary>
+        /// True when the path refers to the root of its volume — i.e. has no
+        /// parent we can safely write to. On Linux that's "/"; on Windows
+        /// it's drive roots like "C:". Used by <see cref="MoveDirectoryAsync"/>
+        /// to refuse moves whose fallback delete would wipe a filesystem
+        /// root.
+        /// </summary>
+        private static bool IsAtFilesystemRoot(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return true;
+            var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (string.IsNullOrEmpty(trimmed)) return true;
+            if (trimmed.Length == 2 && trimmed[1] == ':') return true; // Windows drive root
+            return false;
         }
     }
 }
