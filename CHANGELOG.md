@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Online metadata backfill modal:** A new "Compare with online metadata…" button on the Edit Audiobook modal opens a per-field comparison against Audible. When the book already has an ASIN the modal jumps straight to a side-by-side review where each field has an opt-in overwrite checkbox (defaulting to OFF for fields that already have values, ON for empty fields). When there is no ASIN, the user picks the matching edition from a title/author candidate list — refinable inline, with a "paste an Audible URL / ASIN" escape hatch for titles that Audible's keyword search doesn't surface. When the saved ASIN returns no usable metadata (regionally restricted or delisted titles), the modal falls back to a title/author search with a visible notice rather than presenting an empty Fresh column. Apply submits a single `PUT /library/{id}` carrying only the fields the user chose to overwrite. No new backend endpoints — the modal composes the existing `/search/audible`, `/metadata/{asin}`, and `/library/{id}` endpoints.
+
 ### Fixed
 - **`searchAudibleByTitleAndAuthor` silently dropped real matches:** The unified `POST /search` endpoint returns a flat array of Audible-shaped result objects (see `SearchController.cs`: `return Ok(flatMapped)`), but the FE service method typed the response as the wrapped `{ totalResults, results }` envelope and treated an array response as an object without `.results` — so every hit was discarded and callers saw "no matches" even when IntelligentSearch had found one. The method now normalizes both shapes.
 

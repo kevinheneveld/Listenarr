@@ -60,10 +60,22 @@
 
           <!-- Metadata -->
           <div class="form-group">
-            <label class="form-label" for="metadata-title">
-              <PhInfo></PhInfo>
-              Metadata
-            </label>
+            <div class="metadata-header">
+              <label class="form-label" for="metadata-title">
+                <PhInfo></PhInfo>
+                Metadata
+              </label>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm metadata-backfill-btn"
+                :disabled="!props.audiobook"
+                title="Compare this book's metadata against Audible and pick which fields to overwrite."
+                @click="openMetadataBackfill"
+              >
+                <PhDownloadSimple :size="14" />
+                Compare with online metadata…
+              </button>
+            </div>
             <div class="form-control-card">
               <div class="metadata-grid">
                 <div class="metadata-field metadata-field--wide">
@@ -761,6 +773,13 @@
     @cancel="cancelMoveConfirm"
     @confirm="handleMoveConfirm"
   />
+
+  <MetadataBackfillModal
+    :visible="showMetadataBackfill"
+    :audiobook="props.audiobook ?? null"
+    @close="showMetadataBackfill = false"
+    @applied="onMetadataBackfillApplied"
+  />
 </template>
 
 <script setup lang="ts">
@@ -791,6 +810,7 @@ import {
   PhTag,
   PhLink,
   PhWarning,
+  PhDownloadSimple,
 } from '@phosphor-icons/vue'
 import { useConfigurationStore } from '@/stores/configuration'
 import RootFolderSelect from '@/components/form/RootFolderSelect.vue'
@@ -800,6 +820,7 @@ import RadioCard from '@/components/settings/RadioCard.vue'
 import FolderBrowserModal from '@/components/feedback/FolderBrowserModal.vue'
 import { Modal, ModalHeader, ModalBody } from '@/components/feedback'
 import MoveAudiobookModal from '@/components/feedback/MoveAudiobookModal.vue'
+import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 // FormRow and CheckboxCard not used in this component script; UI uses local markup
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { usePathLengthCheck } from '@/composables/usePathLengthCheck'
@@ -2018,6 +2039,18 @@ function close() {
   moveJob.value = null
   emit('close')
 }
+
+// ── Online metadata backfill ───────────────────────────────────────────────
+// The modal applies changes directly via PUT /library/{id} and emits `applied`
+// when done so we can refresh the parent's view of the audiobook.
+const showMetadataBackfill = ref(false)
+function openMetadataBackfill() {
+  showMetadataBackfill.value = true
+}
+function onMetadataBackfillApplied() {
+  showMetadataBackfill.value = false
+  emit('saved')
+}
 </script>
 
 <style scoped>
@@ -2106,6 +2139,24 @@ function close() {
 .form-group {
   display: flex;
   flex-direction: column;
+}
+
+.metadata-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+.metadata-header .form-label {
+  margin-bottom: 0;
+}
+.metadata-backfill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
 }
 
 .identifier-list {
