@@ -3186,6 +3186,31 @@ namespace Listenarr.Api.Controllers
                     continue;
                 }
 
+                // Apply-feasibility checks. MoveExecutor refuses these at
+                // execute time; surfacing them here keeps un-moveable rows
+                // out of the will_move bucket so the user isn't told an
+                // operation is queued and then watches it fail one by one.
+                // Skip these for the canonical-equality case — if target
+                // equals current, target-exists-with-content is just the
+                // audiobook's own files, not a conflict.
+                if (!IsCurrentPathEqualToTarget(currentPath, target))
+                {
+                    if (IsTargetAncestorOfSource(currentPath, target))
+                    {
+                        row.Status = OrganizePreviewStatus.InvalidTarget;
+                        row.Reason = "Target is an ancestor of source; the move would flatten the source into one of its own parent directories. Adjust the Folder Naming Pattern or relocate the source manually.";
+                        rows.Add(row);
+                        continue;
+                    }
+                    if (TargetExistsWithContent(target))
+                    {
+                        row.Status = OrganizePreviewStatus.InvalidTarget;
+                        row.Reason = "Target directory already exists on disk and contains files. Resolve the existing content (move or delete) before organizing this row.";
+                        rows.Add(row);
+                        continue;
+                    }
+                }
+
                 row.TargetPath = target;
                 var key = NormalizeOrganizeKey(target);
                 if (!targetGroups.TryGetValue(key, out var members))
@@ -3512,6 +3537,75 @@ namespace Listenarr.Api.Controllers
                 if (currentKey == rootKey) return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Returns true when <paramref name="currentPath"/> and <paramref name="target"/>
+        /// normalize to the same key — the canonical-equality case used by the
+        /// already_canonical bucket. Bucketing the "target on disk exists with
+        /// content" case below would otherwise misclassify these rows: the
+        /// audiobook's own files trivially make `target` non-empty.
+        /// </summary>
+        private static bool IsCurrentPathEqualToTarget(string? currentPath, string target)
+        {
+            var currentKey = NormalizeOrganizeKey(NormalizeOrganizePath(currentPath));
+            var targetKey = NormalizeOrganizeKey(NormalizeOrganizePath(target));
+            return !string.IsNullOrEmpty(currentKey) && currentKey == targetKey;
+        }
+
+        /// <summary>
+        /// Returns true when the move would flatten the source into one of its
+        /// own ancestors — e.g. source <c>/audiobooks/Author/Title/Narrator</c>
+        /// targeting <c>/audiobooks/Author/Title</c> after a pattern change that
+        /// removed a directory level. <c>MoveExecutor</c> refuses this with
+        /// "Target is an ancestor of source; refusing to flatten". Mirroring the
+        /// check here keeps these rows out of will_move so the preview reflects
+        /// what apply would actually do.
+        /// </summary>
+        private static bool IsTargetAncestorOfSource(string? source, string target)
+        {
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target)) return false;
+            string sourceFull;
+            string targetFull;
+            try
+            {
+                sourceFull = Path.GetFullPath(source);
+                targetFull = Path.GetFullPath(target);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                // Unparseable path — let the apply-time guard surface it instead.
+                return false;
+            }
+            if (string.Equals(sourceFull, targetFull, StringComparison.OrdinalIgnoreCase)) return false;
+            var sep = Path.DirectorySeparatorChar;
+            var sourceWithSep = sourceFull.TrimEnd(sep) + sep;
+            var targetWithSep = targetFull.TrimEnd(sep) + sep;
+            return sourceWithSep.StartsWith(targetWithSep, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Returns true when the target directory exists on disk and is not
+        /// empty. <c>MoveExecutor</c> refuses moves into populated targets with
+        /// "Target directory already exists and contains files" — surfacing the
+        /// same condition at preview time keeps these rows out of will_move.
+        /// Callers must rule out the canonical-equality case (target == current)
+        /// before invoking this — see <see cref="IsCurrentPathEqualToTarget"/>.
+        /// </summary>
+        private static bool TargetExistsWithContent(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target)) return false;
+            try
+            {
+                if (!Directory.Exists(target)) return false;
+                return Directory.EnumerateFileSystemEntries(target).Any();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                // Permission or IO error reading the target — let the apply-
+                // time guard surface the real problem rather than guessing.
+                return false;
+            }
         }
 
         /// <summary>
