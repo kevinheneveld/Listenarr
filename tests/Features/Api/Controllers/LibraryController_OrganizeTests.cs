@@ -364,12 +364,151 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.Empty(jobs);
         }
 
+        [Fact]
+        public async Task Preview_TargetDirectoryOccupied_IsInvalidTarget()
+        {
+            // Real temp directory tree so the preview can actually stat the target.
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithFolderNamingPattern("{Author}/{Title}")
+                .WithOutputPath(root)
+                .Build());
+            // Replace the base-seed root (path = "/audiobooks") with one
+            // pointing at the temp directory so the preview's filesystem
+            // checks actually look at our test fixture.
+            foreach (var existing in await _rootFolderRepository.GetAllAsync())
+            {
+                await _rootFolderRepository.RemoveAsync(existing.Id);
+            }
+            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
+                .WithName("Library")
+                .WithPath(root)
+                .WithIsDefault()
+                .Build());
+
+            // Audiobook's current path is /<tmp>/Misplaced; target computes to
+            // /<tmp>/Author X/Occupied. Pre-populate the target with a foreign
+            // file so it exists and is non-empty — apply would refuse, so the
+            // preview must surface this row as invalid_target rather than
+            // will_move.
+            var currentPath = Path.Combine(root, "Misplaced");
+            Directory.CreateDirectory(currentPath);
+            var targetPath = Path.Combine(root, "Author X", "Occupied");
+            Directory.CreateDirectory(targetPath);
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "foreign.txt"), "stranger danger");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Occupied",
+                Authors = new List<string> { "Author X" },
+                BasePath = currentPath,
+            });
+            await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
+            Assert.Contains("already exists", row.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, preview.WillMoveCount);
+            Assert.Equal(1, preview.InvalidTargetCount);
+        }
+
+        [Fact]
+        public async Task Preview_TargetIsAncestorOfSource_IsInvalidTarget()
+        {
+            // Audiobook lives at /audiobooks/Author Y/Title/Narrator but the
+            // configured pattern only produces /audiobooks/Author Y/Title —
+            // the target is an ancestor of the source. MoveExecutor refuses
+            // this with "Target is an ancestor of source; refusing to flatten",
+            // so the preview must surface it as invalid_target.
+            //
+            // Uses the in-memory Root because no on-disk existence check is
+            // needed for the ancestor case.
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Title",
+                Authors = new List<string> { "Author Y" },
+                BasePath = $"{Root}/Author Y/Title/Narrator",
+            });
+            await AttachFileAsync(ab);
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
+            Assert.Contains("ancestor", row.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, preview.WillMoveCount);
+            Assert.Equal(1, preview.InvalidTargetCount);
+        }
+
+        [Fact]
+        public async Task Preview_TargetEqualsCurrentAndExists_IsAlreadyCanonical()
+        {
+            // Regression guard: the new target-occupied check must NOT fire
+            // for the already_canonical case, where the target on disk is
+            // populated with the audiobook's OWN files.
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithFolderNamingPattern("{Author}/{Title}")
+                .WithOutputPath(root)
+                .Build());
+            // Replace the base-seed root (path = "/audiobooks") with one
+            // pointing at the temp directory so the preview's filesystem
+            // checks actually look at our test fixture.
+            foreach (var existing in await _rootFolderRepository.GetAllAsync())
+            {
+                await _rootFolderRepository.RemoveAsync(existing.Id);
+            }
+            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
+                .WithName("Library")
+                .WithPath(root)
+                .WithIsDefault()
+                .Build());
+
+            var canonical = Path.Combine(root, "Author Z", "Settled");
+            Directory.CreateDirectory(canonical);
+            await File.WriteAllTextAsync(Path.Combine(canonical, "book.m4b"), "real audiobook content");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Settled",
+                Authors = new List<string> { "Author Z" },
+                BasePath = canonical,
+            });
+            await AttachFileAsync(ab, $"{canonical}/book.m4b");
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.AlreadyCanonical, row.Status);
+            Assert.Equal(1, preview.AlreadyCanonicalCount);
+            Assert.Equal(0, preview.InvalidTargetCount);
+        }
+
         private async Task<OrganizeLibraryPreviewDto> GetPreviewAsync()
         {
             var controller = _provider.GetRequiredService<LibraryController>();
             var actionResult = await controller.GetOrganizePreview() as OkObjectResult;
             Assert.NotNull(actionResult);
             return Assert.IsType<OrganizeLibraryPreviewDto>(actionResult!.Value);
+        }
+
+        private sealed class TempDirectory : IDisposable
+        {
+            public string Path { get; }
+            public TempDirectory()
+            {
+                Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"listenarr-organize-tests-{Guid.NewGuid():N}");
+                Directory.CreateDirectory(Path);
+            }
+            public void Dispose()
+            {
+                try { Directory.Delete(Path, recursive: true); }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    /* Best effort — test cleanup. */
+                }
+            }
         }
     }
 }
