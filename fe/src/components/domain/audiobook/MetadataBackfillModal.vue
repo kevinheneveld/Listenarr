@@ -135,6 +135,12 @@ type Phase = 'idle' | 'searching' | 'pick-candidate' | 'fetching' | 'review' | '
 
 const phase = ref<Phase>('idle')
 const errorMessage = ref<string | null>(null)
+// Informational notice surfaced when an ASIN lookup returned no usable
+// metadata (404, empty payload, or transient error) and we automatically
+// fell back to a title/author search. Distinct from errorMessage so the
+// candidate list isn't framed as a failure — the user has a workable next
+// step. Cleared on every reset() / new lookup.
+const fallbackNotice = ref<string | null>(null)
 const candidates = ref<AudibleSearchResult[]>([])
 const chosenAsin = ref<string | null>(null)
 const fresh = ref<FreshMetadata | null>(null)
@@ -244,6 +250,7 @@ async function loadEmbeddedMetadata() {
 function reset() {
   phase.value = 'idle'
   errorMessage.value = null
+  fallbackNotice.value = null
   candidates.value = []
   chosenAsin.value = null
   fresh.value = null
@@ -393,16 +400,66 @@ function backToCandidates() {
 async function fetchPreview(asin: string) {
   phase.value = 'fetching'
   errorMessage.value = null
+  fallbackNotice.value = null
+
+  // Try the canonical ASIN lookup first. Two failure modes feed the same
+  // fallback path: a thrown error (404, network) and a 200 OK with an
+  // empty payload (Audible occasionally returns just the ASIN echo for
+  // titles that are regionally restricted, delisted, or under a different
+  // store than `props.region`). Either way, we'd otherwise show the user
+  // an empty Fresh column with "Apply 0 changes" — which is a dead end.
+  let fetched: FreshMetadata | null = null
+  let lookupError: string | null = null
   try {
     const raw = await apiService.getAudibleMetadata<unknown>(asin, props.region)
-    fresh.value = mapFresh(raw)
+    const mapped = mapFresh(raw)
+    if (hasUsableMetadata(mapped)) {
+      fetched = mapped
+    }
+  } catch (err) {
+    logger.warn('MetadataBackfillModal: ASIN lookup failed; will fall back to title/author search', err)
+    lookupError = err instanceof Error ? err.message : 'ASIN lookup failed'
+  }
+
+  if (fetched) {
+    fresh.value = fetched
     selected.value = defaultSelection(props.audiobook, fresh.value)
     phase.value = 'review'
-  } catch (err) {
-    logger.error('MetadataBackfillModal: preview fetch failed', err)
-    errorMessage.value = err instanceof Error ? err.message : 'Failed to fetch metadata.'
-    phase.value = candidates.value.length > 0 ? 'pick-candidate' : 'review'
+    return
   }
+
+  // ASIN lookup didn't give us anything usable. If the user actively picked
+  // a candidate (`chosenAsin` was set explicitly via pickCandidate), surface
+  // it as an error rather than silently falling back — they made a choice
+  // we couldn't honour. If the ASIN came from the audiobook's existing
+  // saved value (the auto-load path from `start()`), fall back to a
+  // title/author search so the user has *something* to act on instead of
+  // an empty Fresh column.
+  const cameFromExistingAudiobookAsin = props.audiobook?.asin
+    && (props.audiobook.asin || '').trim().toUpperCase() === asin.toUpperCase()
+    && candidates.value.length === 0
+
+  if (cameFromExistingAudiobookAsin) {
+    fallbackNotice.value =
+      `Audible returned no metadata for ASIN ${asin}. Showing closest matches by title and author so you can pick a different edition.`
+    await searchCandidates()
+    return
+  }
+
+  errorMessage.value = lookupError ?? 'Audible returned no usable metadata for that ASIN.'
+  phase.value = candidates.value.length > 0 ? 'pick-candidate' : 'review'
+}
+
+// "Usable" = at least the core identity fields (title, authors) are present.
+// Audible occasionally returns an envelope containing only the ASIN echo for
+// titles it can't actually serve metadata for (regionally restricted, etc.).
+// Without title+authors we can't show the user anything meaningful in the
+// review pane, so we treat the response as a miss.
+function hasUsableMetadata(m: FreshMetadata | null): boolean {
+  if (!m) return false
+  const title = (m.title ?? '').trim()
+  const authors = Array.isArray(m.authors) ? m.authors.filter((a) => a && a.trim()) : []
+  return title.length > 0 || authors.length > 0
 }
 
 // Pull fields out of the Audible response (the API returns nested types like
@@ -808,6 +865,15 @@ function candidateYear(c: AudibleSearchResult): string {
             <span>{{ errorMessage }}</span>
           </div>
 
+          <div
+            v-if="fallbackNotice && phase === 'pick-candidate'"
+            class="status-row notice"
+            role="status"
+          >
+            <PhWarning />
+            <span>{{ fallbackNotice }}</span>
+          </div>
+
           <!-- Phase 1: candidate picker -->
           <template v-if="phase === 'pick-candidate'">
             <ul v-if="rankedCandidates.length" class="candidate-list">
@@ -1058,6 +1124,12 @@ function candidateYear(c: AudibleSearchResult): string {
 }
 .status-row.error {
   color: #e74c3c;
+}
+.status-row.notice {
+  color: #d4b04a;
+  background: rgba(212, 176, 74, 0.08);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
 }
 
 .phase-help {
