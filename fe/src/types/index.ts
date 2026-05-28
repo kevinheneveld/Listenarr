@@ -994,6 +994,14 @@ export interface AudibleSearchResult {
   narrators?: AudibleNarrator[]
   releaseDate?: string
   link?: string
+  /**
+   * Lowercase Audible region code (`us`, `uk`, `ca`, `au`, …) that this result
+   * came from. The backend tags each result with its origin store
+   * (`SearchController.cs` → `region = a!.Region ?? region`) so multi-region
+   * UIs can surface where a match came from and route the subsequent
+   * per-ASIN metadata lookup to the right store.
+   */
+  region?: string
 }
 
 /**
