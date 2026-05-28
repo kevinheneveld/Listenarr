@@ -191,6 +191,29 @@ const searchRegion = ref<string>('auto')
 // search has run (or after reset).
 const searchedRegion = ref<string | null>(null)
 
+// ── Omnibus / anthology detection ──────────────────────────────────────────
+//
+// When the user has a single-story file in their library that belongs to a
+// larger bundle (omnibus, anthology, collected works), the only Audible
+// record for that title is often the bundle. Applying *all* fresh values
+// then overwrites the story-specific title and runtime with the omnibus's
+// — bad outcome. We detect the case by comparing the fresh runtime to
+// the book's current runtime: when fresh is ≥ OMNIBUS_RUNTIME_RATIO larger,
+// we surface a banner and pre-uncheck the fields that should stay
+// story-specific (title, subtitle, runtime). The user can still re-check
+// them manually if the heuristic was wrong.
+//
+// 3× is conservative enough that a long standalone novel paired against
+// its own ASIN won't accidentally trip the detector, but tight enough to
+// catch the typical "2-hour story file vs 12-hour omnibus" case. The
+// threshold is intentionally simple — a more sophisticated detector would
+// look at series numbering, "Books 1-3" patterns in title, etc., but
+// runtime is the highest-signal one-number heuristic available.
+const OMNIBUS_RUNTIME_RATIO = 3
+const OMNIBUS_STICKY_FIELDS: ReadonlyArray<FieldKey> = ['title', 'subtitle', 'runtime']
+const omnibusSuspected = ref(false)
+const omnibusRatio = ref<number | null>(null)
+
 // Surfaced above the candidate list when the auto-fallback walked past US
 // to find results — gives the user a visible "why are these all UK?"
 // explanation. Suppressed when the user explicitly picked a region (the
@@ -295,6 +318,10 @@ function reset() {
   // book should start fresh on Auto, not inherit a one-off override.
   searchRegion.value = 'auto'
   searchedRegion.value = null
+  // Omnibus detector is per-book; clear so a previous book's match
+  // doesn't leak into the next session.
+  omnibusSuspected.value = false
+  omnibusRatio.value = null
 }
 
 // ── Candidate ranking by narrator overlap ──────────────────────────────────
@@ -504,6 +531,7 @@ async function fetchPreview(asin: string, region?: string) {
   if (fetched) {
     fresh.value = fetched
     selected.value = defaultSelection(props.audiobook, fresh.value)
+    applyOmnibusHeuristic(props.audiobook, fresh.value, selected.value)
     phase.value = 'review'
     return
   }
@@ -665,6 +693,37 @@ function defaultSelection(book: Audiobook | null, metadata: FreshMetadata | null
     if (isEmpty(cur)) set.add(key)
   }
   return set
+}
+
+// Detect "the user matched a story-sized file against an omnibus-sized
+// record" and adjust the default selection in place: clear the sticky
+// story-specific fields (title, subtitle, runtime) so the user has to
+// explicitly opt in to overwriting them. Sets `omnibusSuspected` /
+// `omnibusRatio` to drive the banner. Quiet no-op when current runtime
+// is unknown or the ratio is below the threshold.
+function applyOmnibusHeuristic(
+  book: Audiobook | null,
+  metadata: FreshMetadata | null,
+  selection: Set<FieldKey>,
+): void {
+  omnibusSuspected.value = false
+  omnibusRatio.value = null
+  if (!book || !metadata) return
+  const cur = typeof book.runtime === 'number' ? book.runtime : 0
+  const fresh = typeof metadata.runtime === 'number' ? metadata.runtime : 0
+  if (cur <= 0 || fresh <= 0) return
+  const ratio = fresh / cur
+  if (ratio < OMNIBUS_RUNTIME_RATIO) return
+  omnibusSuspected.value = true
+  omnibusRatio.value = ratio
+  for (const key of OMNIBUS_STICKY_FIELDS) selection.delete(key)
+}
+
+function formatHoursForRuntime(minutes: number | undefined): string {
+  if (!minutes || minutes <= 0) return '?'
+  const h = minutes / 60
+  // 12.3h reads better than "12 hours 18 minutes" in a compact banner.
+  return `${h.toFixed(h >= 10 ? 0 : 1)}h`
 }
 
 interface FieldRow {
@@ -1033,6 +1092,22 @@ function candidateYear(c: AudibleSearchResult): string {
                 />
                 Select all that differ
               </label>
+            </div>
+
+            <div v-if="omnibusSuspected" class="omnibus-banner" role="status">
+              <PhWarning />
+              <div class="omnibus-banner-text">
+                <strong>This Audible record is much longer than your file</strong>
+                <span class="muted">
+                  ({{ formatHoursForRuntime(fresh?.runtime) }} vs
+                  {{ formatHoursForRuntime(audiobook?.runtime) }})
+                </span>
+                — likely an omnibus or anthology that contains your story.
+                We've pre-unchecked <strong>Title</strong>, <strong>Subtitle</strong>, and
+                <strong>Runtime</strong> so they won't be overwritten with the
+                bundle's values. The other fields (cover, series, author,
+                description) are usually still good to import.
+              </div>
             </div>
 
             <table class="compare-table">
@@ -1453,6 +1528,27 @@ function candidateYear(c: AudibleSearchResult): string {
   color: #ccc;
   font-size: 0.9rem;
   cursor: pointer;
+}
+
+.omnibus-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  margin: 0 0 0.75rem;
+  background: rgba(212, 176, 74, 0.10);
+  border: 1px solid rgba(212, 176, 74, 0.35);
+  border-radius: 4px;
+  color: #e6d59c;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.omnibus-banner svg {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+.omnibus-banner-text strong {
+  color: #fff;
 }
 
 .compare-table {
