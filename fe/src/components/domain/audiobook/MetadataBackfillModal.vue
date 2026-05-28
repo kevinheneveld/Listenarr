@@ -152,6 +152,59 @@ const selected = ref<Set<FieldKey>>(new Set())
 const overrideTitle = ref('')
 const overrideAuthor = ref('')
 
+// ── Region selection / fallback ─────────────────────────────────────────────
+//
+// Audible runs a handful of regional stores and the same book is often
+// available in some but not others — usually the non-US English stores
+// (UK in particular) carry titles the US store doesn't, e.g. omnibus
+// editions, BBC audio dramas, and some indie releases. When `searchRegion`
+// is the sentinel `'auto'` the candidate search walks `REGION_FALLBACK_CHAIN`
+// in order and stops at the first region that returns at least one match,
+// so the common case (US has it) is still a single request. When the user
+// picks a specific region from the dropdown, that region is used directly
+// without fallback — useful when US returns the wrong edition but the user
+// knows another store carries the right one.
+//
+// The chosen region also drives the subsequent per-ASIN `getAudibleMetadata`
+// call when the user clicks a candidate, because a candidate's ASIN is only
+// guaranteed resolvable against the store it came from.
+type RegionOption = { code: string; label: string }
+const REGION_OPTIONS: ReadonlyArray<RegionOption> = [
+  { code: 'auto', label: 'Auto (US, then UK/CA/AU)' },
+  { code: 'us', label: 'US (audible.com)' },
+  { code: 'uk', label: 'UK (audible.co.uk)' },
+  { code: 'ca', label: 'CA (audible.ca)' },
+  { code: 'au', label: 'AU (audible.com.au)' },
+]
+const REGION_FALLBACK_CHAIN: ReadonlyArray<string> = ['us', 'uk', 'ca', 'au']
+const REGION_DISPLAY: Record<string, string> = { us: 'US', uk: 'UK', ca: 'CA', au: 'AU' }
+const searchRegion = ref<string>('auto')
+const searchedRegion = ref<string | null>(null)
+const searchRegionNotice = computed<string | null>(() => {
+  if (searchRegion.value !== 'auto') return null
+  if (!searchedRegion.value || searchedRegion.value === 'us') return null
+  const label = REGION_DISPLAY[searchedRegion.value] || searchedRegion.value.toUpperCase()
+  return `US returned no matches. Showing results from ${label}.`
+})
+function regionLabel(code: string | null | undefined): string {
+  if (!code) return ''
+  return REGION_DISPLAY[code.toLowerCase()] || code.toUpperCase()
+}
+
+// ── Omnibus / anthology detection ──────────────────────────────────────────
+// When the user has a single-story file in their library that belongs to a
+// larger bundle (omnibus, anthology, collected works), the only Audible
+// record for that title is often the bundle. Applying *all* fresh values
+// then overwrites the story-specific title and runtime with the omnibus's.
+// We detect the case by comparing the fresh runtime to the book's current
+// runtime: when fresh is ≥ OMNIBUS_RUNTIME_RATIO larger, we surface a
+// banner and pre-uncheck the sticky story-specific fields. The user can
+// still re-check them manually if the heuristic was wrong.
+const OMNIBUS_RUNTIME_RATIO = 3
+const OMNIBUS_STICKY_FIELDS: ReadonlyArray<FieldKey> = ['title', 'subtitle', 'runtime']
+const omnibusSuspected = ref(false)
+const omnibusRatio = ref<number | null>(null)
+
 // In-browser audio preview of the owned file. Lets the user audition the
 // narrator before committing to a candidate — Audible often lists multiple
 // editions of the same book under different ASINs (different narrators or
@@ -264,6 +317,14 @@ function reset() {
   pasteAsinInput.value = ''
   pasteAsinError.value = null
   embedded.value = null
+  // Region selection is per-session — re-opening the modal for a different
+  // book should start fresh on Auto, not inherit a one-off override.
+  searchRegion.value = 'auto'
+  searchedRegion.value = null
+  // Omnibus detector is per-book; clear so a previous book's match doesn't
+  // leak into the next session.
+  omnibusSuspected.value = false
+  omnibusRatio.value = null
 }
 
 // ── Candidate ranking by narrator overlap ──────────────────────────────────
@@ -357,24 +418,64 @@ async function searchCandidates() {
 
   phase.value = 'searching'
   errorMessage.value = null
-  try {
-    const response = await apiService.searchAudibleByTitleAndAuthor(
-      title,
-      author,
-      1,
-      25,
-      props.region,
-    )
-    candidates.value = response?.results || []
-    phase.value = 'pick-candidate'
-    if (candidates.value.length === 0) {
-      errorMessage.value =
-        'No matches found for that title and author. Try editing them above and search again.'
+
+  // Build the ordered list of regions to try. 'auto' walks the fallback
+  // chain; a specific region locks to that store only — no fallback —
+  // when the user explicitly picks UK we don't second-guess them and
+  // fall back to US.
+  const regionsToTry: string[] = (() => {
+    if (searchRegion.value !== 'auto') return [searchRegion.value]
+    const primary = (props.region || 'us').toLowerCase()
+    if (primary === 'us') return [...REGION_FALLBACK_CHAIN]
+    return [primary, ...REGION_FALLBACK_CHAIN.filter((r) => r !== primary)]
+  })()
+
+  let firstError: string | null = null
+  for (const region of regionsToTry) {
+    try {
+      const response = await apiService.searchAudibleByTitleAndAuthor(
+        title,
+        author,
+        1,
+        25,
+        region,
+      )
+      const results = response?.results || []
+      if (results.length > 0) {
+        // Tag each result with the region it actually came from. The
+        // backend already sets `region` per-result, but older results
+        // or any normalisation path that loses it would default to
+        // unknown — fall back to the region we just queried.
+        candidates.value = results.map((r) => ({ ...r, region: r.region || region }))
+        searchedRegion.value = region
+        phase.value = 'pick-candidate'
+        return
+      }
+    } catch (err) {
+      logger.warn(
+        `MetadataBackfillModal: candidate search failed in ${region}; continuing fallback chain`,
+        err,
+      )
+      if (!firstError) {
+        firstError = err instanceof Error ? err.message : 'Search failed.'
+      }
+      // Don't break — try the next region. A region-specific outage
+      // shouldn't kill the whole search.
     }
-  } catch (err) {
-    logger.error('MetadataBackfillModal: candidate search failed', err)
-    errorMessage.value = err instanceof Error ? err.message : 'Search failed.'
-    phase.value = 'pick-candidate'
+  }
+
+  // Every region tried returned empty (or threw).
+  candidates.value = []
+  searchedRegion.value = null
+  phase.value = 'pick-candidate'
+  if (firstError && regionsToTry.length === 1) {
+    errorMessage.value = firstError
+  } else if (regionsToTry.length > 1) {
+    errorMessage.value =
+      `No matches in any region (tried ${regionsToTry.map((r) => REGION_DISPLAY[r] || r.toUpperCase()).join(', ')}). Try editing the title or author above and search again.`
+  } else {
+    errorMessage.value =
+      'No matches found for that title and author. Try editing them above and search again.'
   }
 }
 
@@ -382,7 +483,13 @@ function pickCandidate(asin: string | undefined | null) {
   if (!asin) return
   chosenAsin.value = asin
   errorMessage.value = null
-  void fetchPreview(asin)
+  // Route the per-ASIN lookup to the candidate's own region so a UK
+  // candidate's ASIN gets resolved against audible.co.uk (looking it up
+  // in US would 404).
+  const candidate = candidates.value.find((c) => c.asin === asin)
+  const lookupRegion =
+    candidate?.region || searchedRegion.value || props.region
+  void fetchPreview(asin, lookupRegion)
 }
 
 function backToCandidates() {
@@ -397,7 +504,7 @@ function backToCandidates() {
 
 // ── Phase 2: preview fetch ─────────────────────────────────────────────────
 
-async function fetchPreview(asin: string) {
+async function fetchPreview(asin: string, region?: string) {
   phase.value = 'fetching'
   errorMessage.value = null
   fallbackNotice.value = null
@@ -406,12 +513,17 @@ async function fetchPreview(asin: string) {
   // fallback path: a thrown error (404, network) and a 200 OK with an
   // empty payload (Audible occasionally returns just the ASIN echo for
   // titles that are regionally restricted, delisted, or under a different
-  // store than `props.region`). Either way, we'd otherwise show the user
+  // store than the lookup region). Either way, we'd otherwise show the user
   // an empty Fresh column with "Apply 0 changes" — which is a dead end.
+  //
+  // Lookup region is the candidate's own region when we got here via
+  // pickCandidate (UK candidate → UK lookup), and falls back to the prop
+  // default for the auto-load path from `start()`.
+  const lookupRegion = region || props.region
   let fetched: FreshMetadata | null = null
   let lookupError: string | null = null
   try {
-    const raw = await apiService.getAudibleMetadata<unknown>(asin, props.region)
+    const raw = await apiService.getAudibleMetadata<unknown>(asin, lookupRegion)
     const mapped = mapFresh(raw)
     if (hasUsableMetadata(mapped)) {
       fetched = mapped
@@ -424,6 +536,7 @@ async function fetchPreview(asin: string) {
   if (fetched) {
     fresh.value = fetched
     selected.value = defaultSelection(props.audiobook, fresh.value)
+    applyOmnibusHeuristic(props.audiobook, fresh.value, selected.value)
     phase.value = 'review'
     return
   }
@@ -585,6 +698,36 @@ function defaultSelection(book: Audiobook | null, metadata: FreshMetadata | null
     if (isEmpty(cur)) set.add(key)
   }
   return set
+}
+
+// Detect "the user matched a story-sized file against an omnibus-sized
+// record" and adjust the default selection in place: clear the sticky
+// story-specific fields (title, subtitle, runtime) so the user has to
+// explicitly opt in to overwriting them. Sets `omnibusSuspected` /
+// `omnibusRatio` to drive the banner. Quiet no-op when current runtime
+// is unknown or the ratio is below the threshold.
+function applyOmnibusHeuristic(
+  book: Audiobook | null,
+  metadata: FreshMetadata | null,
+  selection: Set<FieldKey>,
+): void {
+  omnibusSuspected.value = false
+  omnibusRatio.value = null
+  if (!book || !metadata) return
+  const cur = typeof book.runtime === 'number' ? book.runtime : 0
+  const fresh = typeof metadata.runtime === 'number' ? metadata.runtime : 0
+  if (cur <= 0 || fresh <= 0) return
+  const ratio = fresh / cur
+  if (ratio < OMNIBUS_RUNTIME_RATIO) return
+  omnibusSuspected.value = true
+  omnibusRatio.value = ratio
+  for (const key of OMNIBUS_STICKY_FIELDS) selection.delete(key)
+}
+
+function formatHoursForRuntime(minutes: number | undefined): string {
+  if (!minutes || minutes <= 0) return '?'
+  const h = minutes / 60
+  return `${h.toFixed(h >= 10 ? 0 : 1)}h`
 }
 
 interface FieldRow {
@@ -818,6 +961,23 @@ function candidateYear(c: AudibleSearchResult): string {
                   placeholder="Author name (optional)"
                 />
               </label>
+              <label class="candidate-search-field candidate-search-region">
+                <span class="candidate-search-label">Region</span>
+                <select
+                  v-model="searchRegion"
+                  class="form-input candidate-region-select"
+                  :disabled="phase === 'searching'"
+                  title="Audible runs separate regional stores; UK in particular carries titles US doesn't. Auto tries US first then walks UK/CA/AU until something matches."
+                >
+                  <option
+                    v-for="opt in REGION_OPTIONS"
+                    :key="opt.code"
+                    :value="opt.code"
+                  >
+                    {{ opt.label }}
+                  </option>
+                </select>
+              </label>
               <button
                 type="submit"
                 class="btn btn-secondary search-again-btn"
@@ -874,6 +1034,15 @@ function candidateYear(c: AudibleSearchResult): string {
             <span>{{ fallbackNotice }}</span>
           </div>
 
+          <div
+            v-if="searchRegionNotice && phase === 'pick-candidate'"
+            class="status-row notice region-fallback-notice"
+            role="status"
+          >
+            <PhWarning />
+            <span>{{ searchRegionNotice }}</span>
+          </div>
+
           <!-- Phase 1: candidate picker -->
           <template v-if="phase === 'pick-candidate'">
             <ul v-if="rankedCandidates.length" class="candidate-list">
@@ -903,6 +1072,9 @@ function candidateYear(c: AudibleSearchResult): string {
                       · narr. {{ candidateNarrators(c) }}
                     </span>
                     <span v-if="candidateYear(c)" class="muted">· {{ candidateYear(c) }}</span>
+                    <span v-if="c.region" class="badge badge-region" :title="`From audible.${c.region.toLowerCase() === 'us' ? 'com' : c.region.toLowerCase() === 'uk' ? 'co.uk' : c.region.toLowerCase() === 'au' ? 'com.au' : c.region.toLowerCase()}`">
+                      {{ regionLabel(c.region) }}
+                    </span>
                     <span v-if="c.asin" class="badge">{{ c.asin }}</span>
                     <span v-else class="badge badge-warn">No ASIN</span>
                   </div>
@@ -945,6 +1117,22 @@ function candidateYear(c: AudibleSearchResult): string {
                 />
                 Select all that differ
               </label>
+            </div>
+
+            <div v-if="omnibusSuspected" class="omnibus-banner" role="status">
+              <PhWarning />
+              <div class="omnibus-banner-text">
+                <strong>This Audible record is much longer than your file</strong>
+                <span class="muted">
+                  ({{ formatHoursForRuntime(fresh?.runtime) }} vs
+                  {{ formatHoursForRuntime(audiobook?.runtime) }})
+                </span>
+                — likely an omnibus or anthology that contains your story.
+                We've pre-unchecked <strong>Title</strong>, <strong>Subtitle</strong>, and
+                <strong>Runtime</strong> so they won't be overwritten with the
+                bundle's values. The other fields (cover, series, author,
+                description) are usually still good to import.
+              </div>
             </div>
 
             <table class="compare-table">
@@ -1253,6 +1441,11 @@ function candidateYear(c: AudibleSearchResult): string {
   background: rgba(255, 165, 0, 0.18);
   color: #ffa500;
 }
+.badge-region {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ddd;
+  letter-spacing: 0.04em;
+}
 
 .search-again-btn {
   display: inline-flex;
@@ -1262,7 +1455,7 @@ function candidateYear(c: AudibleSearchResult): string {
 
 .candidate-search-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 1fr) auto;
   gap: 0.6rem 0.75rem;
   align-items: end;
   margin: 0.5rem 0 0.75rem;
@@ -1281,7 +1474,18 @@ function candidateYear(c: AudibleSearchResult): string {
   font-size: 0.8rem;
   color: var(--text-muted, #888);
 }
-@media (max-width: 540px) {
+.candidate-region-select {
+  min-width: 12rem;
+}
+@media (max-width: 720px) {
+  .candidate-search-form {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .candidate-search-form .search-again-btn {
+    justify-self: end;
+  }
+}
+@media (max-width: 480px) {
   .candidate-search-form {
     grid-template-columns: 1fr;
   }
@@ -1364,6 +1568,27 @@ function candidateYear(c: AudibleSearchResult): string {
   color: #ccc;
   font-size: 0.9rem;
   cursor: pointer;
+}
+
+.omnibus-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  margin: 0 0 0.75rem;
+  background: rgba(212, 176, 74, 0.10);
+  border: 1px solid rgba(212, 176, 74, 0.35);
+  border-radius: 4px;
+  color: #e6d59c;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.omnibus-banner svg {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+.omnibus-banner-text strong {
+  color: #fff;
 }
 
 .compare-table {
