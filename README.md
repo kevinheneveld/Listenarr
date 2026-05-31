@@ -19,6 +19,51 @@
 
 ---
 
+> [!NOTE]
+> **This is a personal fork of [Listenarrs/Listenarr](https://github.com/Listenarrs/Listenarr).**
+> It tracks upstream `canary` closely and adds the features below. Many of these are being
+> contributed back upstream as individual PRs. For the official project, releases, and support,
+> please go to **[Listenarrs/Listenarr](https://github.com/Listenarrs/Listenarr)**.
+
+## Added in this fork
+
+Built on top of upstream and running on a live instance. Jump to a feature, or see all screenshots in [`docs/fork-screenshots/`](docs/fork-screenshots/).
+
+### 📊 Library metrics dashboard
+Book-centric metrics with have/missing splits, requested-vs-imported activity over time, and drill-downs by author, narrator, genre, and language.
+
+<p align="center">
+  <img src="docs/fork-screenshots/dashboard.png" alt="Library metrics dashboard" width="800">
+</p>
+
+### 🔎 Online metadata backfill
+A modal that compares your stored metadata against Audible field-by-field so you can selectively backfill. Multi-region Audible search with automatic fallback, ASIN-to-title/author fallback when an ASIN returns nothing usable, omnibus detection, and narrator-aware candidate ranking.
+
+<p align="center">
+  <img src="docs/fork-screenshots/metadata-backfill.png" alt="Online metadata backfill modal" width="800">
+</p>
+
+### 🧹 Library maintenance & duplicate cleanup
+Find Duplicates with title/author **and** ASIN collision detection, phantom-row cleanup for hidden duplicate ghosts, recovery endpoints for audiobooks stuck at a broken or library-root `BasePath`, and guards that refuse the library-root move/rename catastrophe.
+
+<p align="center">
+  <img src="docs/fork-screenshots/find-duplicates.png" alt="Duplicate and phantom-row detection" width="800">
+</p>
+
+### 🗂️ Library-wide Organize sweep & move-queue progress
+Preview-then-apply Organize sweep across the whole library, plus a live move-queue status banner showing the currently-processing title, file count, and bytes per job.
+
+<p align="center">
+  <img src="docs/fork-screenshots/organize-sweep.png" alt="Organize sweep and move-queue progress banner" width="800">
+</p>
+
+### ✏️ Editing & browsing quality-of-life
+Autocomplete on Authors / Narrators / Genres / Tags in the edit modal, Series + Narrator columns in the list view, filter and sort state persisted in the URL, and an extract-file-to-new-audiobook flow with duplicate handling.
+
+> Screenshots above are placeholders — see [`docs/fork-screenshots/README.md`](docs/fork-screenshots/README.md) and **scrub hostnames/paths/credentials before committing images.**
+
+---
+
 Listenarr is a fast, feature-rich, cross-platform audiobook management server. Built with a focus on being a complete solution for all your audiobook downloading needs. Set up your own server and get ready to streamline your audiobook listening!
 
 <p align="center">

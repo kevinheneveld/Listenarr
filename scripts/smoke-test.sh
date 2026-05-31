@@ -2,7 +2,7 @@
 # smoke-test.sh — Quick health check against the live Listenarr instance
 #
 # Usage:
-#   ./scripts/smoke-test.sh                   # Test against your-server.local (default)
+#   ./scripts/smoke-test.sh                   # Test against localhost (default)
 #   LISTENARR_HOST=127.0.0.1 ./scripts/smoke-test.sh  # Test against a specific host
 #
 # Exit codes:
@@ -12,7 +12,7 @@
 set -uo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
-HOST="${LISTENARR_HOST:-your-server.local}"
+HOST="${LISTENARR_HOST:-localhost}"
 PORT="${LISTENARR_PORT:-4545}"
 BASE="http://${HOST}:${PORT}"
 

@@ -13,7 +13,7 @@
 # Other assumptions baked in:
 #   - The remote host runs the standalone `docker-compose` v2.x binary,
 #     not the `docker compose` plugin.
-#   - The compose file lives at /srv/listenarr/docker-compose.yml on the host.
+#   - The compose file lives at ${COMPOSE_DIR}/docker-compose.yml on the host.
 #
 # Usage:
 #   ./scripts/deploy-local.sh                      # Full deploy from kevin/live (sync source → build on host → swap compose → health → smoke)
@@ -42,7 +42,7 @@ fi
 : "${MEDIA_SSH:?MEDIA_SSH not set — copy .deploy-local.env.example to .deploy-local.env and fill it in}"
 : "${MEDIA_IP:?MEDIA_IP not set — copy .deploy-local.env.example to .deploy-local.env and fill it in}"
 BUILD_DIR_REMOTE="${BUILD_DIR_REMOTE:-/root/listenarr-build/listenarr-src}"
-COMPOSE_DIR="/srv/listenarr"
+COMPOSE_DIR="${COMPOSE_DIR:?COMPOSE_DIR not set — copy .deploy-local.env.example to .deploy-local.env and fill it in}"
 CONFIG_DIR="${COMPOSE_DIR}/config"
 TIMESTAMP=$(date +%Y%m%d-%H%M)
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-kevin/live}"
@@ -212,7 +212,7 @@ fi
 # ── Done ─────────────────────────────────────────────────────────────────────
 log "Deploy complete!"
 log "  Image:       ${TAG}"
-log "  Live URL:    https://your-host.example"
+log "  Live URL:    ${LIVE_URL:-<set LIVE_URL in .deploy-local.env>}"
 log "  Note:        For frontend bundle changes, also load the SPA in a browser"
 log "               (incognito preferred) and watch the console. HTTP smoke is"
 log "               necessary but not sufficient for JS module-init failures."
