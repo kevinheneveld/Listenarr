@@ -39,8 +39,16 @@ Book-centric metrics with have/missing splits, requested-vs-imported activity ov
 ### 🔎 Online metadata backfill
 A modal that compares your stored metadata against Audible field-by-field so you can selectively backfill. Multi-region Audible search with automatic fallback, ASIN-to-title/author fallback when an ASIN returns nothing usable, omnibus detection, and narrator-aware candidate ranking.
 
+Launch it from the edit modal, refine the search (region + narrator-aware ranking), then review and apply changes field-by-field:
+
 <p align="center">
-  <img src="docs/fork-screenshots/metadata-backfill.png" alt="Online metadata backfill modal" width="800">
+  <img src="docs/fork-screenshots/metadata-backfill-1.png" alt="Edit modal with Fill missing from online action" width="800">
+</p>
+<p align="center">
+  <img src="docs/fork-screenshots/metadata-backfill-2.png" alt="Compare with online metadata — multi-region search and narrator matching" width="800">
+</p>
+<p align="center">
+  <img src="docs/fork-screenshots/metadata-backfill-3.png" alt="Field-by-field comparison of current vs Audible metadata" width="800">
 </p>
 
 ### 🧹 Library maintenance & duplicate cleanup
