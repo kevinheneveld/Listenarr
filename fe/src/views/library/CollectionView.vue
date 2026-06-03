@@ -973,6 +973,21 @@ function normalizeCollectionText(value: string | undefined | null): string {
     .trim()
 }
 
+// Series names parsed from file/folder scans can drop punctuation or a leading
+// article relative to the canonical name (e.g. a filename "A Seekers Tale" vs the
+// stored series "Seeker's Tale"). Normalize those away so the same series is
+// recognized regardless of which spelling produced the URL slug. Kept separate
+// from normalizeCollectionText so author/narrator matching (where a leading "A."
+// initial is significant) is unaffected.
+function normalizeSeriesName(value: string | undefined | null): string {
+  if (!value) return ''
+  // Drop possessive apostrophes first so "Seeker's" and "Seekers" collapse to the
+  // same token (normalizeCollectionText would otherwise split it into "seeker s"),
+  // then strip a leading article so "A Seekers Tale" matches "Seeker's Tale".
+  const withoutApostrophes = value.replace(/['’`]/g, '')
+  return normalizeCollectionText(withoutApostrophes).replace(/^(?:a|an|the)\s+/, '')
+}
+
 function normalizeIdentifier(value: string | undefined | null): string {
   if (!value) return ''
   return value.replace(/[^A-Za-z0-9]/g, '').toUpperCase()
@@ -1006,7 +1021,7 @@ function matchesCurrentCollection(book: Audiobook): boolean {
   }
 
   if (type.value === 'series') {
-    return normalizeCollectionText(book.series) === normalizeCollectionText(name.value)
+    return normalizeSeriesName(book.series) === normalizeSeriesName(name.value)
   }
 
   if (isGenreCollection.value) {
@@ -1148,6 +1163,17 @@ function getSortValue(book: CollectionDisplayItem): string {
 const libraryCollectionAudiobooks = computed(() =>
   libraryStore.audiobooks.filter((book) => matchesCurrentCollection(book)),
 )
+
+// The series name in the URL is a slug that can differ from the canonical name
+// stored on the library books (punctuation, a dropped leading article, etc.).
+// Prefer the authoritative series name from a matching library book so external
+// metadata lookups search the real title instead of the raw slug; fall back to
+// the URL name when nothing in the library matches.
+const resolvedSeriesName = computed(() => {
+  if (!isSeriesCollection.value) return name.value
+  const match = libraryCollectionAudiobooks.value.find((book) => book.series?.trim())
+  return match?.series?.trim() || name.value
+})
 
 const remoteCatalogBooks = computed<RemoteCatalogBook[]>(() => {
   if (isAuthorCollection.value) {
@@ -1334,8 +1360,9 @@ const authorSimilarAuthors = computed<RelatedAuthorItem[]>(() =>
 )
 const seriesHeroName = computed(
   () =>
-    safeText(seriesCatalog.value?.series?.name || seriesLookup.value?.name || name.value) ||
-    name.value,
+    safeText(
+      seriesCatalog.value?.series?.name || seriesLookup.value?.name || resolvedSeriesName.value,
+    ) || resolvedSeriesName.value,
 )
 const seriesHeroAsin = computed(
   () => safeText(seriesLookup.value?.asin || seriesCatalog.value?.series?.asin || '') || '',
@@ -1519,10 +1546,12 @@ async function loadAuthorCatalog(refresh = false): Promise<AuthorCatalogResponse
     if (requestId !== authorCatalogRequestId.value) return null
 
     if (!response) {
+      // No external catalog entry for this author (metadata provider 404). Not a
+      // hard error: matching library books still render and the empty state is
+      // shown otherwise. Only genuine failures (caught below) surface a message.
       if (!refresh) {
         authorCatalog.value = null
       }
-      authorCatalogError.value = 'Failed to load the full author catalog.'
       return null
     }
 
@@ -1611,17 +1640,20 @@ async function loadSeriesCatalog(refresh = false): Promise<SeriesCatalogResponse
 
   try {
     const response = await apiService.getSeriesCatalog(
-      name.value,
+      resolvedSeriesName.value,
       seriesCatalogRegion.value,
       refresh,
     )
     if (requestId !== seriesCatalogRequestId.value) return null
 
     if (!response) {
+      // No external catalog entry for this series (metadata provider 404). This
+      // is not a hard error: any matching library books still render, and the
+      // empty state is shown when there are none. Only genuine failures (caught
+      // below) surface an error message.
       if (!refresh) {
         seriesCatalog.value = null
       }
-      seriesCatalogError.value = 'Failed to load the full series catalog.'
       return null
     }
 
@@ -1666,7 +1698,7 @@ async function loadSeriesLookup(
 
   try {
     const response = await apiService.getSeriesLookup(
-      name.value,
+      resolvedSeriesName.value,
       seriesCatalogRegion.value,
       seriesAsin,
       refresh,
@@ -1738,7 +1770,7 @@ async function loadSeriesMonitoringStatus() {
 
   try {
     const response = await apiService.getSeriesMonitoringStatus(
-      name.value,
+      resolvedSeriesName.value,
       seriesCatalogRegion.value,
       preferredSeriesMonitoringLanguage.value,
     )
@@ -2027,13 +2059,13 @@ async function toggleSeriesMonitoring() {
       seriesMonitoringStatus.value = null
       toast.success(
         'Series unmonitored',
-        `"${name.value}" will no longer be checked for future audiobooks.`,
+        `"${resolvedSeriesName.value}" will no longer be checked for future audiobooks.`,
       )
       return
     }
 
     const response = await apiService.monitorSeries({
-      name: name.value,
+      name: resolvedSeriesName.value,
       asin: seriesCatalog.value?.series?.asin || seriesLookup.value?.asin,
       region: seriesCatalogRegion.value,
       language: preferredSeriesMonitoringLanguage.value,

@@ -68,6 +68,10 @@ namespace Listenarr.Application.Audiobooks
         private readonly IAudiobookRepository _audiobookRepository;
         private readonly ILogger<SeriesCatalogService> _logger;
 
+        // Cap how many owned books we probe against Audible when recovering a series ASIN,
+        // so a large library can't fan out into many metadata calls on a cache miss.
+        private const int MaxOwnedBookResolutionAttempts = 3;
+
         public SeriesCatalogService(
             AudibleService audibleService,
             IAudiobookRepository audiobookRepository,
@@ -184,34 +188,119 @@ namespace Listenarr.Application.Audiobooks
             string region,
             SeriesCacheEntry? cachedEntry)
         {
+            // Tier 1: a previously-resolved ASIN (persisted cache) is authoritative.
             if (cachedEntry != null && !string.IsNullOrWhiteSpace(cachedEntry.SeriesAsin))
             {
                 return MapCachedSeries(cachedEntry, normalizedName, region);
             }
 
-            var series = await _audibleService.LookupSeriesAsync(normalizedName, region);
-            if (!string.IsNullOrWhiteSpace(series?.Asin))
+            // Tier 2: derive the series from a book the user already owns. This is
+            // preferred over a plain name search because a stored series name can be
+            // mistyped or differently formatted, in which case a name search can return
+            // a confidently-wrong series (e.g. "Seekers Tale" -> the unrelated "Seekers").
+            // A book we own resolves to its authoritative series ASIN via Audible's own
+            // metadata for that book, so we trust it ahead of the name search.
+            var fromOwnedBook = await TryResolveSeriesFromOwnedBookAsync(normalizedName, region);
+            if (fromOwnedBook != null && !string.IsNullOrWhiteSpace(fromOwnedBook.Asin))
             {
-                return series;
+                return fromOwnedBook;
+            }
+
+            // Tier 3: fall back to a name-based lookup (series we don't own a book in).
+            return await _audibleService.LookupSeriesAsync(normalizedName, region);
+        }
+
+        /// <summary>
+        /// Recovers a series' authoritative ASIN from a book the user already owns in that
+        /// series, looking the book up on Audible by its own ASIN where possible and falling
+        /// back to a title+author search. Returns null when no owned book resolves cleanly.
+        /// Best-effort: any failure is logged and treated as "not recovered".
+        /// </summary>
+        private async Task<SeriesLookupItem?> TryResolveSeriesFromOwnedBookAsync(
+            string normalizedName,
+            string region)
+        {
+            var targetKey = NormalizeSeriesCacheKey(normalizedName);
+            if (string.IsNullOrEmpty(targetKey))
+            {
+                return null;
             }
 
             try
             {
-                if (!string.IsNullOrWhiteSpace(series?.Asin))
+                var library = await _audiobookRepository.GetLibraryAsync() ?? new List<Audiobook>();
+                var ownedBooks = library
+                    .Where(book => NormalizeSeriesCacheKey(book.Series) == targetKey)
+                    // Books with a known ASIN resolve most reliably; try them first.
+                    .OrderByDescending(book => !string.IsNullOrWhiteSpace(book.Asin))
+                    .Take(MaxOwnedBookResolutionAttempts)
+                    .ToList();
+
+                foreach (var book in ownedBooks)
                 {
-                    var cachedByAsin = await _audiobookRepository.GetCachedSeriesByAsinAsync(series.Asin, region);
-                    if (cachedByAsin != null)
+                    var seriesAsin = await DeriveSeriesAsinFromBookAsync(book, targetKey, region);
+                    if (string.IsNullOrWhiteSpace(seriesAsin))
                     {
-                        return MapCachedSeries(cachedByAsin, normalizedName, region);
+                        continue;
+                    }
+
+                    var series = await _audibleService.GetSeriesByAsinAsync(seriesAsin, region);
+                    if (series != null && !string.IsNullOrWhiteSpace(series.Asin))
+                    {
+                        _logger.LogInformation(
+                            "Recovered series {Series} (ASIN {SeriesAsin}) from owned book {BookAsin}",
+                            normalizedName, series.Asin, book.Asin);
+                        return series;
                     }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
-                _logger.LogWarning(ex, "Failed to resolve cached series ASIN for {Series}", normalizedName);
+                _logger.LogWarning(ex, "Owned-book series recovery failed for {Series}", normalizedName);
             }
 
-            return series;
+            return null;
+        }
+
+        /// <summary>
+        /// Resolves the ASIN of the target series from a single owned book, using the book's
+        /// own ASIN where possible and falling back to a title+author search. Only an ASIN
+        /// whose series name matches the target is returned, so a book that belongs to
+        /// multiple series cannot resolve to the wrong one.
+        /// </summary>
+        private async Task<string?> DeriveSeriesAsinFromBookAsync(Audiobook book, string targetKey, string region)
+        {
+            if (!string.IsNullOrWhiteSpace(book.Asin))
+            {
+                var metadata = await _audibleService.GetBookMetadataAsync(book.Asin, region);
+                var asin = MatchSeriesAsinByName(metadata?.Series, targetKey);
+                if (!string.IsNullOrWhiteSpace(asin))
+                {
+                    return asin;
+                }
+            }
+
+            var author = book.Authors?.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+            if (!string.IsNullOrWhiteSpace(book.Title) && !string.IsNullOrWhiteSpace(author))
+            {
+                var response = await _audibleService.SearchByTitleAndAuthorAsync(book.Title!, author!, 1, 5, region);
+                var asin = MatchSeriesAsinByName(response?.Results?.FirstOrDefault()?.Series, targetKey);
+                if (!string.IsNullOrWhiteSpace(asin))
+                {
+                    return asin;
+                }
+            }
+
+            return null;
+        }
+
+        private static string? MatchSeriesAsinByName(IEnumerable<AudibleSeries>? series, string targetKey)
+        {
+            return series?
+                .FirstOrDefault(entry =>
+                    !string.IsNullOrWhiteSpace(entry?.Asin) &&
+                    NormalizeSeriesCacheKey(entry.Name) == targetKey)
+                ?.Asin;
         }
 
         private async Task<SeriesCacheEntry?> ResolvePersistedCacheAsync(string normalizedName, string region)

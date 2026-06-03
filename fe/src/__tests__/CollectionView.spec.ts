@@ -1284,4 +1284,95 @@ describe('CollectionView', () => {
       'Updated the author image, description, related authors, and catalog.',
     )
   })
+
+  it('matches library books when the URL slug drops a leading article and queries the canonical series name', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    mockGetSeriesCatalog.mockResolvedValue(null)
+    mockGetSeriesLookup.mockResolvedValue(null)
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/collection/:type/:name', name: 'collection', component: CollectionView },
+      ],
+    })
+
+    // URL slug parsed from a filename ("A Seekers Tale") differs from the
+    // canonical series stored on the book ("Seeker's Tale").
+    await router.push('/collection/series/A%20Seekers%20Tale')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    const localLibrary = [
+      {
+        id: 1,
+        title: 'In Ashes Born',
+        authors: ['Nathan Lowell'],
+        series: "Seeker's Tale",
+        seriesNumber: '1',
+        asin: 'BOOK1',
+        imageUrl: 'book1.jpg',
+        files: [],
+      },
+    ] as unknown as import('@/types').Audiobook[]
+    store.audiobooks = localLibrary
+    mockGetLibrary.mockResolvedValue(localLibrary)
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(CollectionView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['EditAudiobookModal', 'CustomSelect', 'AddLibraryModal'],
+      },
+    })
+
+    await flushPromises()
+
+    // The library book is matched despite the dropped leading article...
+    expect(wrapper.find('.error-state').exists()).toBe(false)
+    expect(wrapper.text()).toContain('In Ashes Born')
+    // ...and external metadata is fetched using the canonical stored name.
+    expect(mockGetSeriesCatalog).toHaveBeenCalledWith("Seeker's Tale", 'us', false)
+  })
+
+  it('shows an empty state instead of an error when the series has no catalog entry and no library matches', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    // Metadata provider has no entry for this series (404 -> null), and nothing
+    // in the library matches. This must not render the "Error Loading Library" card.
+    mockGetSeriesCatalog.mockResolvedValue(null)
+    mockGetSeriesLookup.mockResolvedValue(null)
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/collection/:type/:name', name: 'collection', component: CollectionView },
+      ],
+    })
+
+    await router.push('/collection/series/Nonexistent%20Series')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    store.audiobooks = [] as unknown as import('@/types').Audiobook[]
+    mockGetLibrary.mockResolvedValue([])
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(CollectionView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['EditAudiobookModal', 'CustomSelect', 'AddLibraryModal'],
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('.error-state').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No audiobooks found')
+  })
 })

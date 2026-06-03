@@ -150,5 +150,185 @@ namespace Listenarr.Tests.Features.Api.Services
                     entry.CatalogBooks[0].Title == "The Final Empire")),
                 Times.Once);
         }
+
+        [Fact]
+        public async Task GetCatalogAsync_RecoversSeriesFromOwnedBook_AndPrefersItOverWrongNameSearch()
+        {
+            using var httpClientForAudible = new HttpClient();
+            var audible = new Mock<AudibleService>(httpClientForAudible, Mock.Of<ILogger<AudibleService>>()) { CallBase = false };
+            var audiobookRepository = new Mock<IAudiobookRepository>();
+            var logger = new Mock<ILogger<SeriesCatalogService>>();
+
+            // Cache miss.
+            audiobookRepository
+                .Setup(repository => repository.GetCachedSeriesByNameAsync("Seeker's Tale", "us"))
+                .ReturnsAsync((SeriesCacheEntry?)null);
+
+            // The user owns a book in this series.
+            audiobookRepository
+                .Setup(repository => repository.GetLibraryAsync())
+                .ReturnsAsync(new List<Audiobook>
+                {
+                    new()
+                    {
+                        Id = 1,
+                        Title = "In Ashes Born",
+                        Series = "Seeker's Tale",
+                        Asin = "BOOK1",
+                        Authors = new List<string> { "Nathan Lowell" }
+                    }
+                });
+
+            audiobookRepository
+                .Setup(repository => repository.UpsertCachedSeriesAsync(It.IsAny<SeriesCacheEntry>()))
+                .ReturnsAsync((SeriesCacheEntry entry) => entry);
+
+            // A plain name search would resolve a confidently-wrong series.
+            audible
+                .Setup(service => service.LookupSeriesAsync(It.IsAny<string>(), It.IsAny<string>()))
+                .ReturnsAsync(new SeriesLookupItem { Asin = "WRONG_SERIES", Name = "Seekers" });
+
+            // The owned book resolves to the authoritative series ASIN via its own metadata.
+            audible
+                .Setup(service => service.GetBookMetadataAsync("BOOK1", "us", It.IsAny<bool>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleBookResponse
+                {
+                    Asin = "BOOK1",
+                    Title = "In Ashes Born",
+                    Series = new List<AudibleSeries> { new() { Asin = "CORRECT_SERIES", Name = "Seeker's Tale", Position = "1" } }
+                });
+
+            audible
+                .Setup(service => service.GetSeriesByAsinAsync("CORRECT_SERIES", "us"))
+                .ReturnsAsync(new SeriesLookupItem { Asin = "CORRECT_SERIES", Name = "Seeker's Tale" });
+
+            audible
+                .Setup(service => service.GetTypedBooksBySeriesAsinAsync("CORRECT_SERIES", "us"))
+                .ReturnsAsync(new List<AudibleSearchResult>
+                {
+                    new() { Asin = "BOOK1", Title = "In Ashes Born", Language = "english" }
+                });
+
+            var service = new SeriesCatalogService(audible.Object, audiobookRepository.Object, logger.Object);
+
+            var result = await service.GetCatalogAsync("Seeker's Tale", "us", 10);
+
+            Assert.NotNull(result);
+            Assert.Equal("CORRECT_SERIES", result!.Series.Asin);
+            Assert.Equal("Seeker's Tale", result.Series.Name);
+
+            // Owned-book recovery is preferred; the wrong name search is never relied on.
+            audible.Verify(service => service.LookupSeriesAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+            audible.Verify(service => service.GetTypedBooksBySeriesAsinAsync("CORRECT_SERIES", "us"), Times.Once);
+
+            // The recovered ASIN is persisted so subsequent loads resolve by ASIN.
+            audiobookRepository.Verify(
+                repository => repository.UpsertCachedSeriesAsync(It.Is<SeriesCacheEntry>(entry =>
+                    entry.SeriesAsin == "CORRECT_SERIES")),
+                Times.Once);
+        }
+
+        [Fact]
+        public async Task GetCatalogAsync_FallsBackToNameSearch_WhenNoOwnedBookMatches()
+        {
+            using var httpClientForAudible = new HttpClient();
+            var audible = new Mock<AudibleService>(httpClientForAudible, Mock.Of<ILogger<AudibleService>>()) { CallBase = false };
+            var audiobookRepository = new Mock<IAudiobookRepository>();
+            var logger = new Mock<ILogger<SeriesCatalogService>>();
+
+            audiobookRepository
+                .Setup(repository => repository.GetCachedSeriesByNameAsync("Wheel of Time", "us"))
+                .ReturnsAsync((SeriesCacheEntry?)null);
+
+            // Library has no book in this series.
+            audiobookRepository
+                .Setup(repository => repository.GetLibraryAsync())
+                .ReturnsAsync(new List<Audiobook>());
+
+            audiobookRepository
+                .Setup(repository => repository.UpsertCachedSeriesAsync(It.IsAny<SeriesCacheEntry>()))
+                .ReturnsAsync((SeriesCacheEntry entry) => entry);
+
+            audible
+                .Setup(service => service.LookupSeriesAsync("Wheel of Time", "us"))
+                .ReturnsAsync(new SeriesLookupItem { Asin = "WOT", Name = "Wheel of Time" });
+
+            audible
+                .Setup(service => service.GetTypedBooksBySeriesAsinAsync("WOT", "us"))
+                .ReturnsAsync(new List<AudibleSearchResult>
+                {
+                    new() { Asin = "B", Title = "The Eye of the World", Language = "english" }
+                });
+
+            var service = new SeriesCatalogService(audible.Object, audiobookRepository.Object, logger.Object);
+
+            var result = await service.GetCatalogAsync("Wheel of Time", "us", 10);
+
+            Assert.NotNull(result);
+            Assert.Equal("WOT", result!.Series.Asin);
+
+            // No owned book, so no book metadata is probed; name search is used.
+            audible.Verify(
+                service => service.GetBookMetadataAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string?>()),
+                Times.Never);
+            audible.Verify(service => service.LookupSeriesAsync("Wheel of Time", "us"), Times.Once);
+        }
+
+        [Fact]
+        public async Task GetCatalogAsync_OwnedBookInMultipleSeries_ResolvesOnlyTheMatchingSeries()
+        {
+            using var httpClientForAudible = new HttpClient();
+            var audible = new Mock<AudibleService>(httpClientForAudible, Mock.Of<ILogger<AudibleService>>()) { CallBase = false };
+            var audiobookRepository = new Mock<IAudiobookRepository>();
+            var logger = new Mock<ILogger<SeriesCatalogService>>();
+
+            audiobookRepository
+                .Setup(repository => repository.GetCachedSeriesByNameAsync("Seeker's Tale", "us"))
+                .ReturnsAsync((SeriesCacheEntry?)null);
+
+            audiobookRepository
+                .Setup(repository => repository.GetLibraryAsync())
+                .ReturnsAsync(new List<Audiobook>
+                {
+                    new() { Id = 1, Title = "In Ashes Born", Series = "Seeker's Tale", Asin = "BOOK1" }
+                });
+
+            audiobookRepository
+                .Setup(repository => repository.UpsertCachedSeriesAsync(It.IsAny<SeriesCacheEntry>()))
+                .ReturnsAsync((SeriesCacheEntry entry) => entry);
+
+            // The book belongs to two series; only the one whose name matches must be used.
+            audible
+                .Setup(service => service.GetBookMetadataAsync("BOOK1", "us", It.IsAny<bool>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleBookResponse
+                {
+                    Asin = "BOOK1",
+                    Title = "In Ashes Born",
+                    Series = new List<AudibleSeries>
+                    {
+                        new() { Asin = "GOLDEN_AGE", Name = "Golden Age of the Solar Clipper" },
+                        new() { Asin = "CORRECT_SERIES", Name = "Seeker's Tale" }
+                    }
+                });
+
+            audible
+                .Setup(service => service.GetSeriesByAsinAsync("CORRECT_SERIES", "us"))
+                .ReturnsAsync(new SeriesLookupItem { Asin = "CORRECT_SERIES", Name = "Seeker's Tale" });
+
+            audible
+                .Setup(service => service.GetTypedBooksBySeriesAsinAsync("CORRECT_SERIES", "us"))
+                .ReturnsAsync(new List<AudibleSearchResult>
+                {
+                    new() { Asin = "BOOK1", Title = "In Ashes Born", Language = "english" }
+                });
+
+            var service = new SeriesCatalogService(audible.Object, audiobookRepository.Object, logger.Object);
+
+            var result = await service.GetCatalogAsync("Seeker's Tale", "us", 10);
+
+            Assert.NotNull(result);
+            Assert.Equal("CORRECT_SERIES", result!.Series.Asin);
+            audible.Verify(service => service.GetSeriesByAsinAsync("GOLDEN_AGE", It.IsAny<string>()), Times.Never);
+        }
     }
 }

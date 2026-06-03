@@ -462,8 +462,12 @@ class ApiService {
       return await this.request<AuthorCatalogResponse>(
         `/metadata/author/books?${params.toString()}`,
       )
-    } catch {
-      return null
+    } catch (err) {
+      // A 404 means the metadata provider has no entry for this author — a
+      // legitimate "not found", not a failure. Surface every other error so the
+      // caller can show real detail instead of a generic message.
+      if ((err as ErrorWithStatus)?.status === 404) return null
+      throw err
     }
   }
 
@@ -506,8 +510,12 @@ class ApiService {
       return await this.request<SeriesCatalogResponse>(
         `/metadata/series/books?${params.toString()}`,
       )
-    } catch {
-      return null
+    } catch (err) {
+      // A 404 means the metadata provider has no entry for this series — a
+      // legitimate "not found", not a failure. Surface every other error so the
+      // caller can show real detail instead of a generic message.
+      if ((err as ErrorWithStatus)?.status === 404) return null
+      throw err
     }
   }
 
