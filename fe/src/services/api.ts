@@ -612,6 +612,15 @@ class ApiService {
     })
   }
 
+  // Pin an explicit series ASIN onto an existing monitored series and re-sync using it, so a
+  // corrected "Wrong series?" choice sticks instead of being re-resolved by name on the next sync.
+  async repointSeries(id: number, asin: string): Promise<MonitorSeriesResponse> {
+    return this.request<MonitorSeriesResponse>(`/series/monitoring/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ asin }),
+    })
+  }
+
   async searchByTitle(
     query: string,
     options?: RequestInit & { region?: string; language?: string },

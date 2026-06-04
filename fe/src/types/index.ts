@@ -569,6 +569,8 @@ export interface MonitoredSeries {
   id: number
   seriesName: string
   seriesAsin?: string
+  /** True when the ASIN was explicitly pinned via the "Wrong series?" picker. */
+  asinPinned?: boolean
   region: string
   language: string
   createdAt: string
@@ -585,6 +587,8 @@ export interface SeriesMonitoringStatusResponse {
 
 export interface MonitorSeriesResponse {
   message: string
+  /** True when a repoint collapsed this series into an existing monitor for the same ASIN. */
+  merged?: boolean
   monitoredSeries: MonitoredSeries
   addedCount: number
   existingCount: number

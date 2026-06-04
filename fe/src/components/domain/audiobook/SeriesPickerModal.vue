@@ -53,24 +53,35 @@ const error = ref<string | null>(null)
 const candidates = ref<SeriesCandidate[]>([])
 const selectedAsin = ref<string | null>(null)
 const submitting = ref(false)
+// Manual fallbacks: re-search Audible by a typed name, or paste a known series ASIN. These
+// rescue the case where the page's slug doesn't resolve (e.g. a renamed/orphaned series) and
+// the owned-book-derived candidates come back empty.
+const searchQuery = ref('')
+const manualAsin = ref('')
 
 const hasCandidates = computed(() => candidates.value.length > 0)
+const trimmedManualAsin = computed(() => manualAsin.value.trim())
 
 function close() {
   if (submitting.value) return
   emit('close')
 }
 
-async function loadCandidates() {
+async function loadCandidates(query?: string) {
+  const lookupName = (query ?? props.seriesName)?.trim()
+  if (!lookupName) {
+    error.value = 'Enter a series name to search for.'
+    return
+  }
   loading.value = true
   error.value = null
   candidates.value = []
   selectedAsin.value = null
   try {
-    const result = await apiService.getSeriesCandidates(props.seriesName, props.region || 'us')
+    const result = await apiService.getSeriesCandidates(lookupName, props.region || 'us')
     if (!result || result.candidates.length === 0) {
       error.value =
-        'No candidate series found. Audible may not have an entry for this series, or none of your books in it could be matched.'
+        'No candidate series found. Try a different name above, or paste the Audible series ASIN below.'
       return
     }
     candidates.value = result.candidates
@@ -85,13 +96,19 @@ async function loadCandidates() {
   }
 }
 
-async function confirm() {
-  if (!selectedAsin.value || submitting.value) return
+function runSearch() {
+  if (submitting.value || loading.value) return
+  void loadCandidates(searchQuery.value)
+}
+
+async function applyAsin(asin: string) {
+  const chosen = asin?.trim()
+  if (!chosen || submitting.value) return
   submitting.value = true
   try {
     const catalog = await apiService.selectSeries(
       props.seriesName,
-      selectedAsin.value,
+      chosen,
       props.region || 'us',
     )
     if (!catalog || !catalog.series?.asin) {
@@ -108,6 +125,16 @@ async function confirm() {
   }
 }
 
+function confirm() {
+  if (!selectedAsin.value) return
+  void applyAsin(selectedAsin.value)
+}
+
+function confirmManualAsin() {
+  if (!trimmedManualAsin.value) return
+  void applyAsin(trimmedManualAsin.value)
+}
+
 function badgeLabel(candidate: SeriesCandidate): string {
   if (candidate.source === 'library') {
     return candidate.ownedMatchCount > 1
@@ -120,7 +147,11 @@ function badgeLabel(candidate: SeriesCandidate): string {
 watch(
   () => props.visible,
   (visible) => {
-    if (visible) void loadCandidates()
+    if (visible) {
+      searchQuery.value = props.seriesName ?? ''
+      manualAsin.value = ''
+      void loadCandidates()
+    }
   },
   { immediate: true },
 )
@@ -143,6 +174,20 @@ watch(
             <strong>{{ seriesName }}</strong
             >. Matches derived from books you already own are listed first.
           </p>
+
+          <div class="picker-search">
+            <input
+              v-model="searchQuery"
+              class="picker-input"
+              type="text"
+              placeholder="Search Audible by series name…"
+              :disabled="submitting"
+              @keyup.enter="runSearch"
+            />
+            <button class="btn" :disabled="loading || submitting" @click="runSearch">
+              Search
+            </button>
+          </div>
 
           <div v-if="loading" class="picker-state">
             <PhSpinner class="spin" :size="22" />
@@ -190,6 +235,31 @@ watch(
               </label>
             </li>
           </ul>
+
+          <div class="picker-manual">
+            <label class="picker-manual-label" for="series-manual-asin">
+              Know the Audible series ASIN? Paste it to use it directly:
+            </label>
+            <div class="picker-manual-row">
+              <input
+                id="series-manual-asin"
+                v-model="manualAsin"
+                class="picker-input"
+                type="text"
+                placeholder="e.g. B07YCKVJJT"
+                :disabled="submitting"
+                @keyup.enter="confirmManualAsin"
+              />
+              <button
+                class="btn btn-primary"
+                :disabled="!trimmedManualAsin || submitting"
+                @click="confirmManualAsin"
+              >
+                <PhSpinner v-if="submitting" class="spin" :size="16" />
+                <span>Use this ASIN</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <footer class="modal-footer">
@@ -287,6 +357,46 @@ watch(
 
 .picker-error {
   color: var(--color-danger, #e57373);
+}
+
+.picker-search {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.picker-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  background: var(--color-surface-alt, #2a2a2a);
+  border: 1px solid var(--color-border, #333);
+  border-radius: 6px;
+  color: inherit;
+  font-size: 0.9rem;
+}
+
+.picker-input:focus {
+  outline: none;
+  border-color: var(--color-primary, #2196f3);
+}
+
+.picker-manual {
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--color-border, #333);
+}
+
+.picker-manual-label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary, #bbb);
+}
+
+.picker-manual-row {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .candidate-list {

@@ -176,6 +176,54 @@ namespace Listenarr.Application.Audiobooks
             return await _series.DeleteAsync(id, cancellationToken);
         }
 
+        public async Task<MonitorSeriesOperationResult?> RepointSeriesAsync(
+            int id,
+            string asin,
+            CancellationToken cancellationToken = default)
+        {
+            var normalizedAsin = NormalizeOptionalIdentifier(asin);
+            if (string.IsNullOrWhiteSpace(normalizedAsin))
+            {
+                throw new ArgumentException("A series ASIN is required.", nameof(asin));
+            }
+
+            var monitoredSeries = await _series.GetByIdAsync(id, cancellationToken);
+            if (monitoredSeries == null)
+            {
+                return null;
+            }
+
+            // If another monitored series already tracks this ASIN, repointing onto it would create a
+            // duplicate monitor (the orphaned-rename case: a stale "A Smugglers Tale" row repointed at
+            // the ASIN a healthy "Smuggler's Tales" row already watches). Collapse instead: drop the
+            // redundant source row and pin + re-sync the existing survivor.
+            var allSeries = await _series.GetAllAsync(cancellationToken);
+            var survivor = allSeries.FirstOrDefault(s =>
+                s.Id != id &&
+                string.Equals(NormalizeOptionalIdentifier(s.SeriesAsin), normalizedAsin, StringComparison.OrdinalIgnoreCase));
+
+            var merged = false;
+            if (survivor != null)
+            {
+                await _series.DeleteAsync(id, cancellationToken);
+                monitoredSeries = await _series.GetByIdAsync(survivor.Id, cancellationToken) ?? survivor;
+                merged = true;
+            }
+
+            monitoredSeries.SeriesAsin = normalizedAsin;
+            monitoredSeries.AsinPinned = true;
+            monitoredSeries.UpdatedAt = DateTime.UtcNow;
+            monitoredSeries = await _series.UpsertAsync(monitoredSeries, cancellationToken);
+
+            var syncResult = await SyncSeriesInternalAsync(monitoredSeries, cancellationToken);
+            return new MonitorSeriesOperationResult
+            {
+                MonitoredSeries = monitoredSeries,
+                SyncResult = syncResult,
+                Merged = merged
+            };
+        }
+
         public async Task<MonitorSeriesSyncResult> SyncSeriesAsync(int id, CancellationToken cancellationToken = default)
         {
             var monitoredSeries = await _series.GetByIdAsync(id, cancellationToken);
@@ -221,13 +269,28 @@ namespace Listenarr.Application.Audiobooks
 
             try
             {
-                var catalog = await _seriesCatalogService.GetCatalogAsync(
-                    monitoredSeries.SeriesName,
-                    monitoredSeries.Region,
-                    limit: 500,
-                    language: null,
-                    forceRefresh: true,
-                    cancellationToken: cancellationToken);
+                // When the user has pinned a series ASIN (via the "Wrong series?" picker), resolve
+                // the catalog by that ASIN so a wrong name-resolution can't reassert itself. The
+                // by-ASIN path populates books identically to the name path. Otherwise fall back to
+                // the historical name-based resolution.
+                var usePinnedAsin = monitoredSeries.AsinPinned
+                    && !string.IsNullOrWhiteSpace(monitoredSeries.SeriesAsin);
+
+                var catalog = usePinnedAsin
+                    ? await _seriesCatalogService.GetCatalogByAsinAsync(
+                        monitoredSeries.SeriesName,
+                        monitoredSeries.SeriesAsin!,
+                        monitoredSeries.Region,
+                        limit: 500,
+                        language: null,
+                        cancellationToken: cancellationToken)
+                    : await _seriesCatalogService.GetCatalogAsync(
+                        monitoredSeries.SeriesName,
+                        monitoredSeries.Region,
+                        limit: 500,
+                        language: null,
+                        forceRefresh: true,
+                        cancellationToken: cancellationToken);
 
                 if (catalog == null)
                 {
@@ -240,7 +303,11 @@ namespace Listenarr.Application.Audiobooks
                     return result;
                 }
 
-                monitoredSeries.SeriesAsin = NormalizeOptionalIdentifier(catalog.Series.Asin) ?? monitoredSeries.SeriesAsin;
+                // Never let name-resolution overwrite a user-pinned ASIN.
+                if (!monitoredSeries.AsinPinned)
+                {
+                    monitoredSeries.SeriesAsin = NormalizeOptionalIdentifier(catalog.Series.Asin) ?? monitoredSeries.SeriesAsin;
+                }
 
                 var existingLibrary = await _audiobooks.GetAllAsync();
 
