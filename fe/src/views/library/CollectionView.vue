@@ -1521,6 +1521,33 @@ async function onMissingBooksAdded() {
 async function onSeriesPicked(catalog: SeriesCatalogResponse) {
   showSeriesPicker.value = false
   seriesCatalogError.value = null
+
+  // If this series is monitored, pin the chosen ASIN onto the monitored entry so future
+  // syncs resolve by it instead of re-resolving (and possibly mis-resolving) by name.
+  const pickedAsin = catalog.series?.asin
+  const monitoredId = seriesMonitoringStatus.value?.id
+  if (monitoredId && pickedAsin) {
+    try {
+      const response = await apiService.repointSeries(monitoredId, pickedAsin)
+      seriesMonitoringStatus.value = response.monitoredSeries
+      if (response.merged) {
+        toast.info(
+          'Merged into existing series',
+          'This series was already monitored under another entry; the duplicate was removed and the existing one is now pinned to it.',
+        )
+      }
+    } catch (err) {
+      errorTracking.captureException(err as Error, {
+        component: 'CollectionView',
+        operation: 'onSeriesPicked.repointSeries',
+      })
+      toast.warning(
+        'Series shown, but not pinned',
+        'The correct series is displayed, but pinning it for future monitoring failed. Try again from "Wrong series?".',
+      )
+    }
+  }
+
   // Paint the chosen catalog immediately for instant feedback, then fully reload so the
   // hero image, ASIN, description, and monitoring state all reflect the chosen series
   // (the pick is now persisted in the series cache, so the reload resolves to it).

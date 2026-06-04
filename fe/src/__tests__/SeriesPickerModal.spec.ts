@@ -83,7 +83,9 @@ describe('SeriesPickerModal', () => {
     })
     await flushPromises()
 
-    await wrapper.find('.btn-primary').trigger('click')
+    // The footer "Use this series" button confirms the selected candidate (the modal body now
+    // also has a "Use this ASIN" primary button for the manual paste path).
+    await wrapper.find('.modal-footer .btn-primary').trigger('click')
     await flushPromises()
 
     expect(mockSelectSeries).toHaveBeenCalledWith('After', 'B015EXHCEE', 'us')
@@ -100,5 +102,43 @@ describe('SeriesPickerModal', () => {
 
     expect(wrapper.text()).toContain('No candidate series found')
     expect(mockSelectSeries).not.toHaveBeenCalled()
+  })
+
+  it('resolves a manually pasted series ASIN when no candidates match', async () => {
+    mockGetSeriesCandidates.mockResolvedValue({ query: 'A Smugglers Tale', candidates: [] })
+    const catalog = {
+      series: { asin: 'B07YCKVJJT', name: "Smuggler's Tales" },
+      books: [],
+      totalBooks: 3,
+    }
+    mockSelectSeries.mockResolvedValue(catalog)
+
+    const wrapper = mount(SeriesPickerModal, {
+      props: { visible: true, seriesName: 'A Smugglers Tale', region: 'us' },
+    })
+    await flushPromises()
+
+    await wrapper.find('#series-manual-asin').setValue('B07YCKVJJT')
+    await wrapper.find('.picker-manual-row .btn-primary').trigger('click')
+    await flushPromises()
+
+    expect(mockSelectSeries).toHaveBeenCalledWith('A Smugglers Tale', 'B07YCKVJJT', 'us')
+    expect(wrapper.emitted('selected')?.[0]?.[0]).toEqual(catalog)
+  })
+
+  it('re-searches Audible by a typed name', async () => {
+    mockGetSeriesCandidates.mockResolvedValue({ query: 'A Smugglers Tale', candidates: [] })
+
+    const wrapper = mount(SeriesPickerModal, {
+      props: { visible: true, seriesName: 'A Smugglers Tale', region: 'us' },
+    })
+    await flushPromises()
+    expect(mockGetSeriesCandidates).toHaveBeenCalledWith('A Smugglers Tale', 'us')
+
+    await wrapper.find('.picker-search .picker-input').setValue("Smuggler's Tales")
+    await wrapper.find('.picker-search .btn').trigger('click')
+    await flushPromises()
+
+    expect(mockGetSeriesCandidates).toHaveBeenLastCalledWith("Smuggler's Tales", 'us')
   })
 })

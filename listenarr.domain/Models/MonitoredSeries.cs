@@ -30,6 +30,13 @@ namespace Listenarr.Domain.Models
 
         public string? SeriesAsin { get; set; }
 
+        /// <summary>
+        /// True when <see cref="SeriesAsin"/> was set explicitly by the user (e.g. via the
+        /// "Wrong series?" picker) and must be treated as authoritative: sync resolves the
+        /// catalog by this ASIN instead of by name, and name-resolution must not overwrite it.
+        /// </summary>
+        public bool AsinPinned { get; set; }
+
         public string Region { get; set; } = "us";
 
         public string Language { get; set; } = "all";

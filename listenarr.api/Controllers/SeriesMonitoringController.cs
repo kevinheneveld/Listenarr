@@ -106,6 +106,50 @@ namespace Listenarr.Api.Controllers
             }
         }
 
+        [HttpPut("{id:int}")]
+        [ProducesResponseType(typeof(MonitorSeriesResponse), StatusCodes.Status200OK)]
+        public async Task<ActionResult<MonitorSeriesResponse>> RepointSeries(
+            int id,
+            [FromBody] RepointSeriesRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Asin))
+            {
+                return BadRequest("A series ASIN is required.");
+            }
+
+            try
+            {
+                var result = await _seriesMonitoringService.RepointSeriesAsync(id, request.Asin, cancellationToken);
+                if (result?.MonitoredSeries == null)
+                {
+                    return NotFound();
+                }
+
+                return Ok(new MonitorSeriesResponse
+                {
+                    Message = result.Merged
+                        ? "Series merged into the existing monitored series for that ASIN"
+                        : "Series re-pointed",
+                    Merged = result.Merged,
+                    MonitoredSeries = ToResponse(result.MonitoredSeries),
+                    AddedCount = result.SyncResult.AddedCount,
+                    ExistingCount = result.SyncResult.ExistingCount,
+                    FailedCount = result.SyncResult.FailedCount,
+                    ErrorMessage = result.SyncResult.ErrorMessage
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to re-point monitored series {SeriesId}", id);
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
         [HttpDelete("{id:int}")]
         public async Task<IActionResult> UnmonitorSeries(int id, CancellationToken cancellationToken = default)
         {
@@ -133,6 +177,7 @@ namespace Listenarr.Api.Controllers
                 Id = monitoredSeries.Id,
                 SeriesName = monitoredSeries.SeriesName,
                 SeriesAsin = monitoredSeries.SeriesAsin,
+                AsinPinned = monitoredSeries.AsinPinned,
                 Region = monitoredSeries.Region,
                 Language = monitoredSeries.Language,
                 CreatedAt = monitoredSeries.CreatedAt,
@@ -141,6 +186,11 @@ namespace Listenarr.Api.Controllers
                 LastSuccessfulSyncAt = monitoredSeries.LastSuccessfulSyncAt,
                 LastError = monitoredSeries.LastError
             };
+        }
+
+        public sealed class RepointSeriesRequest
+        {
+            public string Asin { get; set; } = string.Empty;
         }
 
         public sealed class SeriesMonitoringStatusResponse
@@ -153,6 +203,8 @@ namespace Listenarr.Api.Controllers
         public sealed class MonitorSeriesResponse
         {
             public string Message { get; set; } = string.Empty;
+
+            public bool Merged { get; set; }
 
             public MonitoredSeriesResponse MonitoredSeries { get; set; } = new();
 
@@ -172,6 +224,8 @@ namespace Listenarr.Api.Controllers
             public string SeriesName { get; set; } = string.Empty;
 
             public string? SeriesAsin { get; set; }
+
+            public bool AsinPinned { get; set; }
 
             public string Region { get; set; } = "us";
 
