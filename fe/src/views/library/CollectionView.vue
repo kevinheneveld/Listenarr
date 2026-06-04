@@ -320,6 +320,15 @@
               <PhMagnifyingGlass />
               Wrong series?
             </button>
+            <button
+              v-if="missingWorks.length > 0"
+              class="toolbar-btn series-addmissing-btn"
+              @click="showAddMissingModal = true"
+              :title="`Add the ${missingWorks.length} missing book(s) in this series`"
+            >
+              <PhPlus />
+              Add missing ({{ missingWorks.length }})
+            </button>
           </div>
         </div>
         <div class="toolbar-filters">
@@ -807,6 +816,17 @@
       @close="showSeriesPicker = false"
       @selected="onSeriesPicked"
     />
+
+    <AddSelectedBooksModal
+      v-if="showAddMissingModal"
+      :visible="showAddMissingModal"
+      :books="missingWorks"
+      :series-name="isSeriesCollection ? resolvedSeriesName : undefined"
+      :series-asin="isSeriesCollection ? seriesHeroAsin : undefined"
+      :region="seriesCatalogRegion"
+      @close="showAddMissingModal = false"
+      @done="onMissingBooksAdded"
+    />
   </div>
 </template>
 
@@ -848,6 +868,7 @@ import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import SeriesPickerModal from '@/components/domain/audiobook/SeriesPickerModal.vue'
+import AddSelectedBooksModal from '@/components/domain/audiobook/AddSelectedBooksModal.vue'
 import { showConfirm } from '@/composables/useConfirm'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import CustomSelect from '@/components/form/CustomSelect.vue'
@@ -938,6 +959,7 @@ const seriesCatalogLoading = ref(false)
 const seriesCatalogError = ref<string | null>(null)
 const seriesCatalogRequestId = ref(0)
 const showSeriesPicker = ref(false)
+const showAddMissingModal = ref(false)
 const seriesLookup = ref<SeriesLookupResponse | null>(null)
 const seriesLookupLoading = ref(false)
 const seriesLookupRequestId = ref(0)
@@ -1482,6 +1504,19 @@ const seriesResolutionLooksWrong = computed(() => {
   if (catalogTitles.size === 0) return false
   return !owned.some((book) => catalogTitles.has(normalizeCollectionText(book.title)))
 })
+
+// Missing (not-owned) works in this collection, as add-metadata for the bulk-add modal.
+const missingWorks = computed(() =>
+  audiobooks.value
+    .filter((book) => !book.inLibrary && book.addMetadata)
+    .map((book) => book.addMetadata as NonNullable<typeof book.addMetadata>),
+)
+
+async function onMissingBooksAdded() {
+  showAddMissingModal.value = false
+  // One refresh after the batch (not per-add) so the added books re-render as in-library.
+  await libraryStore.fetchLibrary()
+}
 
 async function onSeriesPicked(catalog: SeriesCatalogResponse) {
   showSeriesPicker.value = false
