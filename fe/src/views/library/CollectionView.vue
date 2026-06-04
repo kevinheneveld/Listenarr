@@ -1036,6 +1036,41 @@ function buildTitleAuthorKey(title: string | undefined, authors: string[] | unde
   return `${normalizeCollectionText(title)}::${normalizeAuthorKey(authors)}`
 }
 
+// A "work" key collapses the many Audible *editions* of the same book (regional/publisher
+// re-releases, narrators) into one logical book. Audible catalogs for a series routinely list
+// the same title several times; the user thinks in terms of books, not editions, and the
+// download search is title-based anyway. This is a good-enough default — it cleanly merges the
+// common identical-title and author/brand-prefixed cases; genuinely ambiguous stragglers are
+// left for the user to curate in the selection UI rather than chasing a perfect key.
+function buildWorkKey(title: string | undefined, authors: string[] | undefined): string {
+  let key = title || ''
+  const colon = key.indexOf(':')
+  if (colon > 0) key = key.slice(0, colon) // drop subtitle (usually series/edition info)
+  key = normalizeCollectionText(key)
+  for (const author of authors || []) {
+    const an = normalizeCollectionText(author)
+    if (an && (key === an || key.startsWith(an + ' '))) {
+      key = key.slice(an.length).trim()
+      key = key.replace(/^s\s+/, '') // orphaned possessive from "Author's Title"
+    }
+  }
+  key = key
+    .replace(/\bbook\s+\d+\b/g, ' ')
+    .replace(/\s+\d+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return key || normalizeCollectionText(title)
+}
+
+// Audible series catalogs sometimes include the sub-series / bundle itself as a "book"
+// (e.g. "Jack Ryan (chronological order) (abridged)"). Those aren't real books and shouldn't
+// count toward the works or appear as addable rows.
+function isSeriesBundleEntry(book: RemoteCatalogBook): boolean {
+  const title = (book.title || '').toLowerCase()
+  if (/\((?:chronological|publication)\s+order\)/.test(title)) return true
+  return buildWorkKey(book.title, book.authors).length === 0
+}
+
 function createSyntheticId(seed: string): number {
   let hash = 0
   for (let index = 0; index < seed.length; index += 1) {
@@ -1239,41 +1274,67 @@ const audiobooks = computed<CollectionDisplayItem[]>(() => {
   let mergedItems: CollectionDisplayItem[]
   if (isMetadataCollection.value) {
     const matchedLibraryIds = new Set<number>()
-    const seenRemoteCatalogKeys = new Set<string>()
+    const shownWorkKeys = new Set<string>()
     const sourcePrefix = isAuthorCollection.value ? 'author-catalog' : 'series-catalog'
     const languageFilter = isAuthorCollection.value
       ? preferredAuthorCatalogLanguageFilter.value
       : preferredSeriesCatalogLanguageFilter.value
-    // Dedup catalog books against the WHOLE library, not just books filed under this
-    // collection's slug. A book can be owned under a different (e.g. mis-parsed) series name —
-    // matching only the slug subset would show it as "Not Added" and offer an Add that the
-    // backend rejects with 409 "already exists". Matching the full library by ASIN/ISBN
-    // recognizes it as owned and renders it in-library instead.
-    const catalogItems = remoteCatalogBooks.value.flatMap((book) => {
-      const libraryMatch = findLibraryMatch(book, libraryStore.audiobooks)
+
+    // Collapse the catalog's many editions into one entry per logical work (see buildWorkKey).
+    // Group editions by work, preserving first-seen order; drop sub-series/bundle noise entries.
+    const workOrder: string[] = []
+    const editionsByWork = new Map<string, RemoteCatalogBook[]>()
+    for (const book of remoteCatalogBooks.value) {
+      if (isSeriesBundleEntry(book)) continue
+      const workKey = buildWorkKey(book.title, book.authors)
+      const existing = editionsByWork.get(workKey)
+      if (existing) {
+        existing.push(book)
+      } else {
+        editionsByWork.set(workKey, [book])
+        workOrder.push(workKey)
+      }
+    }
+
+    const catalogItems = workOrder.flatMap((workKey) => {
+      const editions = editionsByWork.get(workKey) || []
+
+      // Owned if ANY edition of the work matches a library book — across the WHOLE library, not
+      // just books filed under this collection's slug. A book owned under a different (e.g.
+      // mis-parsed) series name would otherwise show as "Not Added" and offer an Add the backend
+      // rejects with 409 "already exists".
+      let libraryMatch: Audiobook | undefined
+      for (const edition of editions) {
+        libraryMatch = findLibraryMatch(edition, libraryStore.audiobooks)
+        if (libraryMatch) break
+      }
+
+      shownWorkKeys.add(workKey)
+
       if (libraryMatch) {
-        if (matchedLibraryIds.has(libraryMatch.id)) {
-          return []
-        }
+        if (matchedLibraryIds.has(libraryMatch.id)) return []
         matchedLibraryIds.add(libraryMatch.id)
         return [mapLibraryItem(libraryMatch)]
       }
 
-      if (!shouldIncludeRemoteCatalogBook(book, languageFilter)) {
-        return []
-      }
-
-      const catalogItem = mapCatalogItem(book, sourcePrefix)
-      if (seenRemoteCatalogKeys.has(catalogItem.key)) {
-        return []
-      }
-
-      seenRemoteCatalogKeys.add(catalogItem.key)
-      return [catalogItem]
+      // Not owned: show a single representative edition (the first that passes the language
+      // filter). Edition/narrator/abridged preference for the representative is a later refinement.
+      const representative = editions.find((edition) =>
+        shouldIncludeRemoteCatalogBook(edition, languageFilter),
+      )
+      return representative ? [mapCatalogItem(representative, sourcePrefix)] : []
     })
 
+    // Owned books filed under this slug but not matched to a catalog work (and not a duplicate of
+    // a work already shown — collapses duplicate library rows of the same book into one entry).
     const unmatchedLibraryItems = localItems
       .filter((book) => !matchedLibraryIds.has(book.id))
+      .filter((book) => {
+        const workKey = buildWorkKey(book.title, book.authors)
+        if (shownWorkKeys.has(workKey)) return false
+        shownWorkKeys.add(workKey)
+        return true
+      })
       .map(mapLibraryItem)
 
     mergedItems = [...catalogItems, ...unmatchedLibraryItems]
@@ -1340,11 +1401,14 @@ const authorNotAddedCount = computed(() => totalNotAddedAudiobooks.value.length)
 const seriesLibraryCount = computed(() => totalAddedAudiobooks.value.length)
 const seriesNotAddedCount = computed(() => totalNotAddedAudiobooks.value.length)
 const seriesVisibleBookCount = computed(() => audiobooks.value.length)
-const seriesCatalogTotalCount = computed(
-  () =>
-    seriesCatalog.value?.totalBooks ??
-    seriesLookup.value?.totalBooks ??
-    seriesVisibleBookCount.value,
+// Total = the deduped works we show (have + missing), not the raw edition count from Audible
+// (which double-counts regional/narrator re-releases of the same book).
+const seriesCatalogTotalCount = computed(() =>
+  isSeriesCollection.value && audiobooks.value.length > 0
+    ? audiobooks.value.length
+    : (seriesCatalog.value?.totalBooks ??
+      seriesLookup.value?.totalBooks ??
+      seriesVisibleBookCount.value),
 )
 
 const authorHeroName = computed(

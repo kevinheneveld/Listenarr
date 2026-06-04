@@ -1446,4 +1446,50 @@ describe('CollectionView', () => {
     expect(wrapper.text()).toContain('1 ready to add')
     expect(wrapper.text()).toContain('The Final Empire')
   })
+
+  it('collapses multiple catalog editions of the same title into one work', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    // Five raw editions across THREE titles (regional/narrator re-releases share a title).
+    mockGetSeriesCatalog.mockResolvedValue({
+      series: { asin: 'SERIES123', name: 'Mistborn' },
+      totalBooks: 5,
+      books: [
+        { asin: 'E1', title: 'The Final Empire', authors: ['Brandon Sanderson'], language: 'english', series: 'Mistborn', seriesNumber: '1' },
+        { asin: 'E2', title: 'The Final Empire', authors: ['Brandon Sanderson'], language: 'english', series: 'Mistborn', seriesNumber: '1' },
+        { asin: 'E3', title: 'The Well of Ascension', authors: ['Brandon Sanderson'], language: 'english', series: 'Mistborn', seriesNumber: '2' },
+        { asin: 'E4', title: 'The Well of Ascension', authors: ['Brandon Sanderson'], language: 'english', series: 'Mistborn', seriesNumber: '2' },
+        { asin: 'E5', title: 'The Hero of Ages', authors: ['Brandon Sanderson'], language: 'english', series: 'Mistborn', seriesNumber: '3' },
+      ],
+    })
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/collection/:type/:name', name: 'collection', component: CollectionView },
+      ],
+    })
+    await router.push('/collection/series/Mistborn')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    store.audiobooks = [] as unknown as import('@/types').Audiobook[]
+    mockGetLibrary.mockResolvedValue([])
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(CollectionView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['EditAudiobookModal', 'CustomSelect', 'AddLibraryModal'],
+      },
+    })
+
+    await flushPromises()
+
+    // 5 editions -> 3 works.
+    expect(wrapper.text()).toContain('3 total books')
+    expect(wrapper.text()).toContain('3 ready to add')
+  })
 })
