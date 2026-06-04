@@ -522,6 +522,22 @@ export interface SeriesLookupResponse {
   totalBooks?: number
 }
 
+export interface SeriesCandidate {
+  asin: string
+  name?: string
+  image?: string
+  bookCount?: number
+  /** "library" when derived from a book you own, otherwise "audible". */
+  source: 'library' | 'audible'
+  ownedMatchCount: number
+}
+
+export interface SeriesCandidatesResponse {
+  query: string
+  bestGuessAsin?: string
+  candidates: SeriesCandidate[]
+}
+
 export interface MonitoredAuthor {
   id: number
   authorName: string

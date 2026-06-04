@@ -38,6 +38,30 @@ namespace Listenarr.Application.Interfaces
             string name,
             string region = "us",
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Returns candidate series for a (possibly mistyped/mis-parsed) series name so the
+        /// user can pick the correct one. Candidates derived from books the user already owns
+        /// in the series rank first (and carry the real Audible series even when its name
+        /// doesn't match the supplied slug), followed by name-search matches.
+        /// </summary>
+        Task<SeriesCandidateResult> GetSeriesCandidatesAsync(
+            string name,
+            string region = "us",
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Resolves the catalog for an explicitly-chosen series ASIN and persists it against
+        /// the supplied <paramref name="name"/> (slug), overwriting any prior — possibly
+        /// wrong — cache entry for that slug so the user's choice sticks on later loads.
+        /// </summary>
+        Task<SeriesCatalogFetchResult?> GetCatalogByAsinAsync(
+            string name,
+            string asin,
+            string region = "us",
+            int limit = 250,
+            string? language = null,
+            CancellationToken cancellationToken = default);
     }
 
     public sealed class SeriesCatalogFetchResult
@@ -47,5 +71,32 @@ namespace Listenarr.Application.Interfaces
         public List<AudibleSearchResult> Books { get; set; } = new();
 
         public int TotalBooks => Books.Count;
+    }
+
+    /// <summary>A single pickable series candidate.</summary>
+    public sealed class SeriesCandidate
+    {
+        public string Asin { get; set; } = string.Empty;
+
+        public string? Name { get; set; }
+
+        public string? Image { get; set; }
+
+        public int? BookCount { get; set; }
+
+        /// <summary>"library" when derived from a book the user owns, otherwise "audible".</summary>
+        public string Source { get; set; } = "audible";
+
+        /// <summary>How many owned books in the collection point at this series.</summary>
+        public int OwnedMatchCount { get; set; }
+    }
+
+    public sealed class SeriesCandidateResult
+    {
+        public string Query { get; set; } = string.Empty;
+
+        public string? BestGuessAsin { get; set; }
+
+        public List<SeriesCandidate> Candidates { get; set; } = new();
     }
 }

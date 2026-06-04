@@ -311,6 +311,15 @@
               <component v-else :is="isCurrentSeriesMonitored ? PhEye : PhPlus" />
               {{ isCurrentSeriesMonitored ? 'Monitoring Series' : 'Monitor Series' }}
             </button>
+            <button
+              class="toolbar-btn series-pick-btn"
+              :disabled="seriesMetadataRefreshBusy"
+              @click="showSeriesPicker = true"
+              title="This isn't the right series? Pick the correct one"
+            >
+              <PhMagnifyingGlass />
+              Wrong series?
+            </button>
           </div>
         </div>
         <div class="toolbar-filters">
@@ -322,6 +331,15 @@
           />
         </div>
       </div>
+    </div>
+
+    <!-- Low-confidence resolution hint: the resolved series catalog shares no owned book -->
+    <div v-if="seriesResolutionLooksWrong" class="series-mismatch-hint">
+      <PhWarningCircle :size="18" />
+      <span>
+        This may be the wrong series — none of your books in it appear in the matched catalog.
+      </span>
+      <button class="btn btn-small" @click="showSeriesPicker = true">Pick the correct series</button>
     </div>
 
     <!-- Audiobooks Grid -->
@@ -779,6 +797,16 @@
       @close="closeAddLibraryModal"
       @added="handleBookAdded"
     />
+
+    <SeriesPickerModal
+      v-if="isSeriesCollection && showSeriesPicker"
+      :visible="showSeriesPicker"
+      :series-name="name"
+      :region="seriesCatalogRegion"
+      :current-asin="seriesHeroAsin"
+      @close="showSeriesPicker = false"
+      @selected="onSeriesPicked"
+    />
   </div>
 </template>
 
@@ -806,6 +834,7 @@ import {
   PhPlus,
   PhGlobe,
   PhFolderOpen,
+  PhMagnifyingGlass,
 } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import { useLibraryStore } from '@/stores/library'
@@ -818,6 +847,7 @@ import AddLibraryModal from '@/components/domain/audiobook/AddLibraryModal.vue'
 import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
+import SeriesPickerModal from '@/components/domain/audiobook/SeriesPickerModal.vue'
 import { showConfirm } from '@/composables/useConfirm'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import CustomSelect from '@/components/form/CustomSelect.vue'
@@ -907,6 +937,7 @@ const seriesCatalog = ref<SeriesCatalogResponse | null>(null)
 const seriesCatalogLoading = ref(false)
 const seriesCatalogError = ref<string | null>(null)
 const seriesCatalogRequestId = ref(0)
+const showSeriesPicker = ref(false)
 const seriesLookup = ref<SeriesLookupResponse | null>(null)
 const seriesLookupLoading = ref(false)
 const seriesLookupRequestId = ref(0)
@@ -1213,8 +1244,13 @@ const audiobooks = computed<CollectionDisplayItem[]>(() => {
     const languageFilter = isAuthorCollection.value
       ? preferredAuthorCatalogLanguageFilter.value
       : preferredSeriesCatalogLanguageFilter.value
+    // Dedup catalog books against the WHOLE library, not just books filed under this
+    // collection's slug. A book can be owned under a different (e.g. mis-parsed) series name —
+    // matching only the slug subset would show it as "Not Added" and offer an Add that the
+    // backend rejects with 409 "already exists". Matching the full library by ASIN/ISBN
+    // recognizes it as owned and renders it in-library instead.
     const catalogItems = remoteCatalogBooks.value.flatMap((book) => {
-      const libraryMatch = findLibraryMatch(book, localItems)
+      const libraryMatch = findLibraryMatch(book, libraryStore.audiobooks)
       if (libraryMatch) {
         if (matchedLibraryIds.has(libraryMatch.id)) {
           return []
@@ -1367,6 +1403,31 @@ const seriesHeroName = computed(
 const seriesHeroAsin = computed(
   () => safeText(seriesLookup.value?.asin || seriesCatalog.value?.series?.asin || '') || '',
 )
+
+// Low-confidence signal: we resolved a catalog, the user owns books in this collection,
+// but none of those owned books appear in the resolved catalog by title — a strong hint the
+// series resolved to the wrong thing (e.g. a mis-parsed name matching an unrelated series).
+const seriesResolutionLooksWrong = computed(() => {
+  if (!isSeriesCollection.value) return false
+  const catalog = seriesCatalog.value
+  const owned = libraryCollectionAudiobooks.value
+  if (!catalog || (catalog.books?.length ?? 0) === 0 || owned.length === 0) return false
+  const catalogTitles = new Set(
+    catalog.books.map((book) => normalizeCollectionText(book.title)).filter(Boolean),
+  )
+  if (catalogTitles.size === 0) return false
+  return !owned.some((book) => catalogTitles.has(normalizeCollectionText(book.title)))
+})
+
+async function onSeriesPicked(catalog: SeriesCatalogResponse) {
+  showSeriesPicker.value = false
+  seriesCatalogError.value = null
+  // Paint the chosen catalog immediately for instant feedback, then fully reload so the
+  // hero image, ASIN, description, and monitoring state all reflect the chosen series
+  // (the pick is now persisted in the series cache, so the reload resolves to it).
+  seriesCatalog.value = catalog
+  await loadCollectionData(true)
+}
 const seriesHeroRawImageUrl = computed(() => {
   return (
     seriesLookup.value?.cachedPath ||
@@ -3774,6 +3835,38 @@ defineExpose({
   height: calc(100vh - 164px);
   color: #ccc;
   text-align: center;
+}
+
+.series-mismatch-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid rgba(255, 183, 77, 0.4);
+  background: rgba(255, 183, 77, 0.1);
+  border-radius: 8px;
+  color: #ffcc80;
+  font-size: 0.9rem;
+}
+
+.series-mismatch-hint span {
+  flex: 1;
+}
+
+.series-mismatch-hint .btn-small {
+  flex: none;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 183, 77, 0.6);
+  background: transparent;
+  color: #ffcc80;
+  cursor: pointer;
+}
+
+.series-mismatch-hint .btn-small:hover {
+  background: rgba(255, 183, 77, 0.18);
 }
 
 .loading-state i,

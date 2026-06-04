@@ -209,7 +209,11 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
 
             return await _db.AuthorCacheEntries
                 .AsNoTracking()
-                .OrderByDescending(entry => entry.LastFetchedAt.GetValueOrDefault(entry.UpdatedAt))
+                // Use null-coalescing (translates to SQL COALESCE) rather than
+                // Nullable.GetValueOrDefault, which the SQLite provider cannot translate and
+                // would throw at runtime — silently disabling this cache via the caller's
+                // catch. See AddSeriesCacheEntries / cache read paths.
+                .OrderByDescending(entry => entry.LastFetchedAt ?? entry.UpdatedAt)
                 .FirstOrDefaultAsync(entry =>
                     entry.AuthorNameNormalized == normalizedName &&
                     entry.Region == normalizedRegion);
@@ -227,7 +231,11 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
 
             return await _db.AuthorCacheEntries
                 .AsNoTracking()
-                .OrderByDescending(entry => entry.LastFetchedAt.GetValueOrDefault(entry.UpdatedAt))
+                // Use null-coalescing (translates to SQL COALESCE) rather than
+                // Nullable.GetValueOrDefault, which the SQLite provider cannot translate and
+                // would throw at runtime — silently disabling this cache via the caller's
+                // catch. See AddSeriesCacheEntries / cache read paths.
+                .OrderByDescending(entry => entry.LastFetchedAt ?? entry.UpdatedAt)
                 .FirstOrDefaultAsync(entry =>
                     entry.AuthorAsin != null &&
                     entry.AuthorAsin.ToUpper() == normalizedAsin &&
@@ -312,7 +320,11 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
 
             return await _db.SeriesCacheEntries
                 .AsNoTracking()
-                .OrderByDescending(entry => entry.LastFetchedAt.GetValueOrDefault(entry.UpdatedAt))
+                // Use null-coalescing (translates to SQL COALESCE) rather than
+                // Nullable.GetValueOrDefault, which the SQLite provider cannot translate and
+                // would throw at runtime — silently disabling this cache via the caller's
+                // catch. See AddSeriesCacheEntries / cache read paths.
+                .OrderByDescending(entry => entry.LastFetchedAt ?? entry.UpdatedAt)
                 .FirstOrDefaultAsync(entry =>
                     entry.SeriesNameNormalized == normalizedName &&
                     entry.Region == normalizedRegion);
@@ -330,7 +342,11 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
 
             return await _db.SeriesCacheEntries
                 .AsNoTracking()
-                .OrderByDescending(entry => entry.LastFetchedAt.GetValueOrDefault(entry.UpdatedAt))
+                // Use null-coalescing (translates to SQL COALESCE) rather than
+                // Nullable.GetValueOrDefault, which the SQLite provider cannot translate and
+                // would throw at runtime — silently disabling this cache via the caller's
+                // catch. See AddSeriesCacheEntries / cache read paths.
+                .OrderByDescending(entry => entry.LastFetchedAt ?? entry.UpdatedAt)
                 .FirstOrDefaultAsync(entry =>
                     entry.SeriesAsin != null &&
                     entry.SeriesAsin.ToUpper() == normalizedAsin &&
@@ -392,6 +408,57 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             }
 
             existing.LastFetchedAt = seriesCacheEntry.LastFetchedAt ?? existing.LastFetchedAt ?? now;
+            existing.UpdatedAt = now;
+
+            await _db.SaveChangesAsync();
+            return existing;
+        }
+
+        public async Task<SeriesCacheEntry> UpsertCachedSeriesForSlugAsync(string slug, SeriesCacheEntry entry)
+        {
+            ArgumentNullException.ThrowIfNull(entry);
+
+            var key = NormalizeSeriesName(slug);
+            var normalizedRegion = AudiobookIdentifierNormalizer.NormalizeRegion(entry.Region) ?? "us";
+            var normalizedAsin = NormalizeAsin(entry.SeriesAsin);
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                // No slug to key on — fall back to the ASIN/name-keyed upsert.
+                return await UpsertCachedSeriesAsync(entry);
+            }
+
+            // Key strictly on the slug so we overwrite the row the series page reads back,
+            // even when the chosen series' name/ASIN differ from the original resolution.
+            var existing = await _db.SeriesCacheEntries.FirstOrDefaultAsync(candidate =>
+                candidate.SeriesNameNormalized == key &&
+                candidate.Region == normalizedRegion);
+
+            var now = DateTime.UtcNow;
+            if (existing == null)
+            {
+                existing = new SeriesCacheEntry { CreatedAt = now };
+                _db.SeriesCacheEntries.Add(existing);
+            }
+
+            existing.SeriesNameNormalized = key;
+            existing.SeriesName = string.IsNullOrWhiteSpace(entry.SeriesName)
+                ? (string.IsNullOrWhiteSpace(existing.SeriesName) ? slug.Trim() : existing.SeriesName)
+                : entry.SeriesName.Trim();
+            existing.SeriesAsin = string.IsNullOrWhiteSpace(normalizedAsin) ? existing.SeriesAsin : normalizedAsin;
+            existing.Region = normalizedRegion;
+            existing.ImageUrl = entry.ImageUrl ?? existing.ImageUrl;
+            // Replace (don't coalesce) the description: a slug re-point means this is now a
+            // different series, so a stale description from the previously-resolved (wrong)
+            // series must not survive — even if the chosen series has none.
+            existing.Description = entry.Description;
+
+            if (entry.CatalogBooks != null)
+            {
+                existing.CatalogBooks = entry.CatalogBooks;
+            }
+
+            existing.LastFetchedAt = entry.LastFetchedAt ?? now;
             existing.UpdatedAt = now;
 
             await _db.SaveChangesAsync();

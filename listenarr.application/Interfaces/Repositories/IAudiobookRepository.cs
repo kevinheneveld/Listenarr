@@ -36,6 +36,14 @@ namespace Listenarr.Application.Interfaces.Repositories
         Task<SeriesCacheEntry?> GetCachedSeriesByNameAsync(string name, string region);
         Task<SeriesCacheEntry?> GetCachedSeriesByAsinAsync(string asin, string region);
         Task<SeriesCacheEntry> UpsertCachedSeriesAsync(SeriesCacheEntry seriesCacheEntry);
+        /// <summary>
+        /// Upserts a series cache entry keyed strictly by the normalized <paramref name="slug"/>
+        /// (the name the series page was reached by), independent of the resolved series name or
+        /// ASIN. Used when the user explicitly picks the correct series for a slug whose default
+        /// resolution was wrong — it overwrites the existing slug-keyed row so the pick sticks,
+        /// rather than matching on the resolved series' ASIN/name like <see cref="UpsertCachedSeriesAsync"/>.
+        /// </summary>
+        Task<SeriesCacheEntry> UpsertCachedSeriesForSlugAsync(string slug, SeriesCacheEntry entry);
         Task<Audiobook> AddAsync(Audiobook audiobook);
         Task<bool> UpdateAsync(Audiobook audiobook);
         Task<bool> DeleteAsync(Audiobook audiobook);

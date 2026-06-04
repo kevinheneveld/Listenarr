@@ -1375,4 +1375,75 @@ describe('CollectionView', () => {
     expect(wrapper.find('.error-state').exists()).toBe(false)
     expect(wrapper.text()).toContain('No audiobooks found')
   })
+
+  it('treats a catalog book owned under a different series name as in-library (not "ready to add")', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    mockGetSeriesCatalog.mockResolvedValue({
+      series: { asin: 'SERIES123', name: 'Mistborn' },
+      totalBooks: 2,
+      books: [
+        {
+          asin: 'OWNED-ELSEWHERE',
+          title: 'The Final Empire',
+          authors: ['Brandon Sanderson'],
+          language: 'english',
+          metadataSource: 'Audible',
+          series: 'Mistborn',
+          seriesNumber: '1',
+        },
+        {
+          asin: 'TRULY-MISSING',
+          title: 'The Well of Ascension',
+          authors: ['Brandon Sanderson'],
+          language: 'english',
+          metadataSource: 'Audible',
+          series: 'Mistborn',
+          seriesNumber: '2',
+        },
+      ],
+    })
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/collection/:type/:name', name: 'collection', component: CollectionView },
+      ],
+    })
+
+    await router.push('/collection/series/Mistborn')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    // The owned book is filed under a DIFFERENT series name, but shares the catalog ASIN.
+    const localLibrary = [
+      {
+        id: 1,
+        title: 'The Final Empire',
+        authors: ['Brandon Sanderson'],
+        series: 'Some Other Series Name',
+        asin: 'OWNED-ELSEWHERE',
+        imageUrl: 'x.jpg',
+        files: [],
+      },
+    ] as unknown as import('@/types').Audiobook[]
+    store.audiobooks = localLibrary
+    mockGetLibrary.mockResolvedValue(localLibrary)
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(CollectionView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['EditAudiobookModal', 'CustomSelect', 'AddLibraryModal'],
+      },
+    })
+
+    await flushPromises()
+
+    // Only the genuinely-missing book counts as ready to add (not the owned-elsewhere one).
+    expect(wrapper.text()).toContain('1 ready to add')
+    expect(wrapper.text()).toContain('The Final Empire')
+  })
 })

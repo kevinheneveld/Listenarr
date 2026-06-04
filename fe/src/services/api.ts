@@ -49,6 +49,7 @@ import type {
   SeriesMonitoringStatusResponse,
   SeriesCatalogResponse,
   SeriesLookupResponse,
+  SeriesCandidatesResponse,
   ManualImportPreviewResponse,
   ManualImportRequest,
   ManualImportResult,
@@ -514,6 +515,40 @@ class ApiService {
       // A 404 means the metadata provider has no entry for this series — a
       // legitimate "not found", not a failure. Surface every other error so the
       // caller can show real detail instead of a generic message.
+      if ((err as ErrorWithStatus)?.status === 404) return null
+      throw err
+    }
+  }
+
+  // Candidate series for a (possibly mistyped/mis-parsed) name, so the user can pick the
+  // correct one. Owned-book-derived candidates rank first. Returns null on failure.
+  async getSeriesCandidates(
+    name: string,
+    region: string = 'us',
+  ): Promise<SeriesCandidatesResponse | null> {
+    try {
+      const params = new URLSearchParams({ name, region })
+      return await this.request<SeriesCandidatesResponse>(
+        `/metadata/series/candidates?${params.toString()}`,
+      )
+    } catch {
+      return null
+    }
+  }
+
+  // Persist the user's explicitly-chosen series for a name (overwrites a prior wrong
+  // resolution) and return its catalog.
+  async selectSeries(
+    name: string,
+    asin: string,
+    region: string = 'us',
+  ): Promise<SeriesCatalogResponse | null> {
+    try {
+      return await this.request<SeriesCatalogResponse>('/metadata/series/select', {
+        method: 'POST',
+        body: JSON.stringify({ name, asin, region, limit: 250 }),
+      })
+    } catch (err) {
       if ((err as ErrorWithStatus)?.status === 404) return null
       throw err
     }
