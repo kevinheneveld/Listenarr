@@ -46,6 +46,11 @@ namespace Listenarr.Application.Downloads
         internal readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _nextClientPoll = new();
         private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _clientFailureCounts = new();
 
+        // Stalled-download reaper: remembers the last observed progress (and when it was observed)
+        // per download Id so we can detect downloads that make no progress for a configured timeout.
+        // In-memory (like _nextClientPoll): a restart simply restarts each download's stall window.
+        internal readonly System.Collections.Concurrent.ConcurrentDictionary<string, (decimal Progress, DateTime At)> _stallSnapshots = new();
+
         internal void ScheduleNextClientPoll(DownloadClientConfiguration client, double interval)
         {
             // Add small jitter to avoid synchronized polls: +/- 5s
@@ -147,6 +152,18 @@ namespace Listenarr.Application.Downloads
                 return;
             }
 
+            var reaperOptions = StalledReaperOptions.FromEnvironment();
+            // Drop stall snapshots for downloads that are no longer active (imported, removed, etc.)
+            // so the in-memory store can't grow unbounded.
+            if (!_stallSnapshots.IsEmpty)
+            {
+                var activeIds = activeDownloads.Select(d => d.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var staleId in _stallSnapshots.Keys.Where(k => !activeIds.Contains(k)).ToList())
+                {
+                    _stallSnapshots.TryRemove(staleId, out _);
+                }
+            }
+
             // Lets assume downloads have been updated by now
             if (DateTime.UtcNow - _lastFullBroadcast > TimeSpan.FromSeconds(120))
             {
@@ -184,10 +201,22 @@ namespace Listenarr.Application.Downloads
                     var previousDownloads = clientDownloads.Select(item => item.Clone()).ToList();
                     var updatedDownloads = await downloadClientGateway.FetchDownloadsAsync(client, clientDownloads, cancellationToken);
 
+                    var reapCandidates = new List<Download>();
+                    var now = DateTime.UtcNow;
+
                     foreach (Download download in updatedDownloads)
                     {
                         var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
                         await downloadService.UpdateAsync(download);
+
+                        // Stall reaper: update this download's progress snapshot and flag it if it has
+                        // made no progress past the timeout. Detection runs whenever the reaper is
+                        // enabled (dry-run included); only the removal action below is gated on dry-run.
+                        if (reaperOptions.Enabled)
+                        {
+                            EvaluateStallSnapshot(download, now, reaperOptions, reapCandidates);
+                        }
+
                         var previousDownload = previousDownloads.FirstOrDefault(d => d.Id == download.Id);
                         if (previousDownload == null)
                         {
@@ -195,6 +224,14 @@ namespace Listenarr.Application.Downloads
                         }
 
                         await TriggerCallbacks(client, download, previousDownload, cancellationToken);
+                    }
+
+                    // Reap stalled downloads as a separate pass AFTER the fetch loop so the Failed
+                    // transition does not re-enter TriggerCallbacks/OnDownloadFailed (which would
+                    // double-remove and possibly auto-search the same dead torrent).
+                    if (reaperOptions.Enabled && reapCandidates.Count > 0)
+                    {
+                        await ReapStalledDownloadsAsync(client, reapCandidates, reaperOptions, scope, cancellationToken);
                     }
                 }
                 catch (DownloadClientAdapterPollingException exception)
@@ -212,6 +249,114 @@ namespace Listenarr.Application.Downloads
 
                 ScheduleNextClientPollOnSuccess(client);
             }
+        }
+
+        /// <summary>
+        /// Update a download's in-memory progress snapshot and, if it has been stalled past the
+        /// configured timeout, add it to <paramref name="reapCandidates"/>. Pure decision logic lives
+        /// in <see cref="StalledDownloadReaper.Evaluate"/>; this method only owns the snapshot store.
+        /// </summary>
+        private void EvaluateStallSnapshot(Download download, DateTime now, StalledReaperOptions options, List<Download> reapCandidates)
+        {
+            (decimal Progress, DateTime At)? previous =
+                _stallSnapshots.TryGetValue(download.Id, out var snap) ? snap : null;
+
+            var evaluation = StalledDownloadReaper.Evaluate(
+                download.Status, download.Progress, previous, now, options.TimeoutMinutes);
+
+            _stallSnapshots[download.Id] = (evaluation.SnapshotProgress, evaluation.SnapshotAt);
+
+            if (evaluation.ShouldReap)
+            {
+                reapCandidates.Add(download);
+            }
+        }
+
+        /// <summary>
+        /// Acts on downloads the stall timer flagged as dead. Defaults to a non-destructive DRY-RUN
+        /// that only reports what would be reaped. When armed (dry-run disabled) it transitions each
+        /// download to Failed (excluding it from every recurring active loop), removes it from the
+        /// download client, and records a history entry. It deliberately does NOT auto-search, so a
+        /// dead torrent is not immediately re-grabbed.
+        /// </summary>
+        private async Task ReapStalledDownloadsAsync(
+            DownloadClientConfiguration client,
+            List<Download> candidates,
+            StalledReaperOptions options,
+            IServiceScope scope,
+            CancellationToken cancellationToken)
+        {
+            // Each sample line carries the diagnostics Kevin needs to sign off: the last-known client
+            // state (stalledDL / metaDL / queuedDL / "unmatched" ghost), current progress, and how
+            // long the row has existed. A row showing state=queuedDL is the one recoverable case to
+            // eyeball before arming.
+            var samples = string.Join("; ", candidates.Take(10).Select(DescribeReapCandidate));
+
+            if (options.DryRun)
+            {
+                logger.LogWarning(
+                    "[STALL-REAPER][DRY-RUN] Would reap {Count} stalled download(s) on client {ClientName} " +
+                    "(no progress for >= {Timeout} min; would removeFromClient=true, deleteFiles={DeleteFiles}). " +
+                    "Set {DryRunEnv}=false to arm removal. Sample: {Samples}",
+                    candidates.Count, client.Name, options.TimeoutMinutes, options.DeleteFiles,
+                    StalledReaperOptions.DryRunEnv, samples);
+                return;
+            }
+
+            logger.LogWarning(
+                "[STALL-REAPER] Reaping {Count} stalled download(s) on client {ClientName} " +
+                "(no progress for >= {Timeout} min, deleteFiles={DeleteFiles}). Sample: {Samples}",
+                candidates.Count, client.Name, options.TimeoutMinutes, options.DeleteFiles, samples);
+
+            var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
+            var downloadClientGateway = scope.ServiceProvider.GetRequiredService<IDownloadClientGateway>();
+            var downloadHistoryService = scope.ServiceProvider.GetRequiredService<IDownloadHistoryService>();
+
+            var reason = $"Reaped by stall timer: no download progress for >= {options.TimeoutMinutes} minutes";
+
+            foreach (var download in candidates)
+            {
+                try
+                {
+                    // Remove from the client first (best-effort). Ghost rows with no live torrent
+                    // simply no-op here. Partial files of an abandoned download are junk, so honour
+                    // the deleteFiles option to reclaim disk space.
+                    var clientItemId = download.GetExternalId();
+                    if (!string.IsNullOrWhiteSpace(clientItemId))
+                    {
+                        await downloadClientGateway.RemoveAsync(client, clientItemId, options.DeleteFiles, cancellationToken);
+                    }
+
+                    download.Failed(reason);
+                    await downloadService.UpdateAsync(download);
+
+                    await downloadHistoryService.RecordDownloadFailedAsync(
+                        download.Id,
+                        download.DownloadClientId,
+                        download.Title ?? "Unknown",
+                        reason);
+
+                    _stallSnapshots.TryRemove(download.Id, out _);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    logger.LogWarning(ex, "[STALL-REAPER] Failed to reap stalled download {DownloadId}", LogRedaction.SanitizeText(download.Id));
+                }
+            }
+        }
+
+        /// <summary>
+        /// One-line diagnostic for a reap candidate used in the dry-run/armed report:
+        /// title plus last-known client state, progress, and age. "unmatched" state means no live
+        /// client torrent/nzb matched the row (a ghost) on the last poll.
+        /// </summary>
+        private static string DescribeReapCandidate(Download d)
+        {
+            var title = LogRedaction.SanitizeText(string.IsNullOrWhiteSpace(d.Title) ? d.Id : d.Title);
+            var state = d.GetMetadataString("ClientState");
+            if (string.IsNullOrWhiteSpace(state)) state = "unmatched";
+            var ageHours = (DateTime.UtcNow - d.StartedAt).TotalHours;
+            return $"\"{title}\" [state={state}, progress={d.Progress:0.##}%, age={ageHours:0.#}h]";
         }
 
         /// <summary>
