@@ -210,6 +210,20 @@ namespace Listenarr.Application.Downloads
             // to true to ensure only indexers are queried (no Amazon/Audible scraping).
             var searchResults = await searchService.SearchAsync(searchQuery, isAutomaticSearch: true);
 
+            // Recall fallback: if the "<title> <author>" query found nothing, retry once with a
+            // relaxed title-only query before giving up.
+            if (searchResults == null || searchResults.Count == 0)
+            {
+                var fallbackQuery = Listenarr.Application.Search.SearchQueryBuilder.BuildTitleOnly(audiobook);
+                if (!string.IsNullOrWhiteSpace(fallbackQuery) &&
+                    !string.Equals(fallbackQuery, searchQuery, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogInformation("No results for '{Title}' with primary query; retrying title-only: {Query}",
+                        LogRedaction.SanitizeText(audiobook.Title), LogRedaction.SanitizeText(fallbackQuery));
+                    searchResults = await searchService.SearchAsync(fallbackQuery, isAutomaticSearch: true);
+                }
+            }
+
             if (searchResults == null || !searchResults.Any())
             {
                 return new SearchAndDownloadResult
@@ -1016,19 +1030,10 @@ namespace Listenarr.Application.Downloads
             }
         }
 
+        // Cleaned "<title> <author>" query (volume suffix + edition tags stripped). See
+        // SearchQueryBuilder for why the old raw "title + author" over-specified.
         private string BuildSearchQuery(Audiobook audiobook)
-        {
-            // Build a search query from audiobook metadata
-            var parts = new List<string>();
-
-            if (!string.IsNullOrEmpty(audiobook.Title))
-                parts.Add(audiobook.Title);
-
-            if (audiobook.Authors != null && audiobook.Authors.Any())
-                parts.Add(audiobook.Authors.First());
-
-            return string.Join(" ", parts);
-        }
+            => Listenarr.Application.Search.SearchQueryBuilder.Build(audiobook);
 
         private async Task<EffectiveDownloadType> ResolveEffectiveDownloadTypeAsync(SearchResult result)
         {

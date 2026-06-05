@@ -306,6 +306,21 @@ namespace Listenarr.Application.Search
             // (3030) so music-only indexers configured in Prowlarr without a category
             // restriction don't return concert/album torrents for audiobook queries.
             var searchResults = await searchService.SearchAsync(searchQuery, category: "3030", isAutomaticSearch: true);
+
+            // Recall fallback: if the "<title> <author>" query found nothing (e.g. the author name
+            // on the release differs from ours), retry once with a relaxed title-only query.
+            if (searchResults.Count == 0)
+            {
+                var fallbackQuery = SearchQueryBuilder.BuildTitleOnly(audiobook);
+                if (!string.IsNullOrWhiteSpace(fallbackQuery) &&
+                    !string.Equals(fallbackQuery, searchQuery, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("No results for '{Title}' with primary query; retrying title-only: {Query}",
+                        audiobook.Title, fallbackQuery);
+                    searchResults = await searchService.SearchAsync(fallbackQuery, category: "3030", isAutomaticSearch: true);
+                }
+            }
+
             _logger.LogInformation("Found {Count} raw search results for audiobook '{Title}'", searchResults.Count, audiobook.Title);
 
             // Broadcast detailed debug info about the raw search results to help diagnose automatic search failures
@@ -611,24 +626,9 @@ namespace Listenarr.Application.Search
             return null; // Unable to determine quality
         }
 
-        private string BuildSearchQuery(Audiobook audiobook)
-        {
-            var parts = new List<string>();
-
-            // Add title
-            if (!string.IsNullOrEmpty(audiobook.Title))
-                parts.Add(audiobook.Title);
-
-            // Add primary author
-            if (audiobook.Authors != null && audiobook.Authors.Any())
-                parts.Add(audiobook.Authors.First());
-
-            // Add series if available
-            if (!string.IsNullOrEmpty(audiobook.Series))
-                parts.Add(audiobook.Series);
-
-            return string.Join(" ", parts);
-        }
+        // Cleaned "<title> <author>" query (volume suffix + edition tags stripped, redundant series
+        // dropped). See SearchQueryBuilder for why the old "title + author + series" over-specified.
+        private string BuildSearchQuery(Audiobook audiobook) => SearchQueryBuilder.Build(audiobook);
 
         private bool IsTorrentResult(SearchResult result)
         {
