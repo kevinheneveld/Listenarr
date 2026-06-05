@@ -385,4 +385,45 @@ namespace Listenarr.Tests.Features.Infrastructure.Adapters
             Assert.Contains("redirect", message, StringComparison.OrdinalIgnoreCase);
         }
     }
+
+    /// <summary>
+    /// Regression coverage for Listenarrs/Listenarr#619: NZBGet's listgroups serializes
+    /// FileSizeMB/RemainingSizeMB/NZBID as JSON numbers, and reading them with JsonElement.GetString()
+    /// throws — which silently broke every progress update and stranded usenet downloads in Queued.
+    /// </summary>
+    public class NzbgetReadJsonNumberTests
+    {
+        private static System.Text.Json.JsonElement Prop(string json, string name)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.GetProperty(name).Clone();
+        }
+
+        [Fact]
+        public void ReadJsonNumber_When_Field_Is_JsonNumber_Returns_Value()
+        {
+            // The live NZBGet shape: FileSizeMB is an integer, not a string.
+            Assert.Equal(1516d, NzbgetAdapter.ReadJsonNumber(Prop("{\"FileSizeMB\":1516}", "FileSizeMB")));
+        }
+
+        [Fact]
+        public void ReadJsonNumber_When_Field_Is_String_Returns_Value()
+        {
+            // Older/alternate builds may serialize the same field as a string — still handled.
+            Assert.Equal(1234d, NzbgetAdapter.ReadJsonNumber(Prop("{\"RemainingSizeMB\":\"1234\"}", "RemainingSizeMB")));
+        }
+
+        [Fact]
+        public void ReadJsonNumber_When_Field_Is_Decimal_Number_Returns_Value()
+        {
+            Assert.Equal(0.5d, NzbgetAdapter.ReadJsonNumber(Prop("{\"x\":0.5}", "x")));
+        }
+
+        [Fact]
+        public void ReadJsonNumber_When_Field_Is_NonNumeric_Returns_Zero()
+        {
+            Assert.Equal(0d, NzbgetAdapter.ReadJsonNumber(Prop("{\"x\":\"notanumber\"}", "x")));
+            Assert.Equal(0d, NzbgetAdapter.ReadJsonNumber(Prop("{\"x\":null}", "x")));
+        }
+    }
 }

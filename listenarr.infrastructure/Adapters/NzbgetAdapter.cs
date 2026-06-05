@@ -948,56 +948,82 @@ namespace Listenarr.Infrastructure.Adapters
 
         private async Task<byte[]> DownloadNzbAsync(string nzbUrl, string? indexerApiKey, CancellationToken ct)
         {
-            // SSRF guard: reject non-HTTP(S) schemes and embedded credentials; allow private/LAN hosts
-            // because indexers are commonly self-hosted (Prowlarr, Jackett, etc.) on local networks.
-            if (!OutboundRequestSecurity.TryValidateExternalHttpUrl(nzbUrl, out var ssrfReason, allowPrivateTargets: true))
-            {
-                _logger.LogWarning("Blocked SSRF attempt in NZB download: {Reason}", ssrfReason);
-                throw new InvalidOperationException($"NZB URL blocked: {ssrfReason}");
-            }
-
+            // The NZB lives on the INDEXER (e.g. Prowlarr), not on NZBGet. Indexer download URLs
+            // commonly 301-redirect cross-host to the real provider (Prowlarr → nzbgeek.info), so we
+            // must follow cross-host redirects here. We deliberately do NOT use the named "nzbget"
+            // HttpClient: its NzbgetSafeRedirectHandler refuses cross-host redirects to keep NZBGet
+            // Basic-auth same-origin, which is correct for NZBGet *API* calls but breaks this indexer
+            // fetch (regression that stranded every usenet grab in Queued with no client id).
+            // Auth here is the indexer api key carried in the URL query string — no header credential
+            // to leak — and we re-validate SSRF on every hop, mirroring TorrentFileDownloader.
             try
             {
-                _logger.LogDebug("Downloading NZB from {Url}", LogRedaction.SanitizeUrl(nzbUrl));
-
-                var httpClient = _httpClientFactory.CreateClient(ClientType);
-                using var request = new HttpRequestMessage(HttpMethod.Get, nzbUrl);
-
-                // Note: Newznab/Torznab APIs include the API key in the URL query string (e.g., &apikey=xxx)
-                // We should NOT add an X-Api-Key header as it may conflict with URL-based authentication
-                // and cause the API to return error responses instead of the actual NZB file
-
-                // Set User-Agent header - many indexers require this and will reject requests without it
-                request.Headers.Add("User-Agent", "Listenarr/1.0.0.0");
-
-                using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-
-                _logger.LogDebug("NZB download response: StatusCode={StatusCode}, ContentType={ContentType}, ContentLength={ContentLength}",
-                    response.StatusCode,
-                    response.Content.Headers.ContentType?.ToString() ?? "null",
-                    response.Content.Headers.ContentLength?.ToString() ?? "unknown");
-
-                response.EnsureSuccessStatusCode();
-
-                var contentBytes = await response.Content.ReadAsByteArrayAsync(ct);
-
-                _logger.LogInformation("Downloaded NZB content: {Size} bytes", contentBytes.Length);
-
-                // If the content is suspiciously small, log it to see if it's an error message
-                if (contentBytes.Length > 0 && contentBytes.Length < 500)
+                using var handler = new HttpClientHandler
                 {
-                    var contentText = Encoding.UTF8.GetString(contentBytes);
-                    _logger.LogWarning("NZB content is suspiciously small ({Size} bytes). Content: {Content}",
-                        contentBytes.Length, contentText);
+                    AutomaticDecompression = DecompressionMethods.All,
+                    AllowAutoRedirect = false
+                };
+                using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+
+                var currentUrl = nzbUrl;
+                for (var hop = 0; hop < 10; hop++)
+                {
+                    // SSRF guard on every hop: reject non-HTTP(S) schemes and embedded credentials;
+                    // allow private/LAN hosts because indexers are commonly self-hosted.
+                    if (!OutboundRequestSecurity.TryValidateExternalHttpUrl(currentUrl, out var ssrfReason, allowPrivateTargets: true))
+                    {
+                        _logger.LogWarning("Blocked SSRF attempt in NZB download (hop {Hop}): {Reason}", hop, ssrfReason);
+                        throw new InvalidOperationException($"NZB URL blocked: {ssrfReason}");
+                    }
+
+                    using var request = new HttpRequestMessage(HttpMethod.Get, currentUrl);
+                    // Newznab/Torznab APIs carry the api key in the URL query string; do NOT add an
+                    // X-Api-Key header — it can conflict with URL-based auth and yield an error page.
+                    request.Headers.Add("User-Agent", "Listenarr/1.0.0.0");
+
+                    using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+
+                    if (response.StatusCode is HttpStatusCode.MovedPermanently or HttpStatusCode.Found
+                        or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect
+                        or HttpStatusCode.SeeOther)
+                    {
+                        var location = response.Headers.Location;
+                        if (location == null)
+                        {
+                            throw new InvalidOperationException(
+                                $"NZB download got {(int)response.StatusCode} with no Location header from {nzbUrl}");
+                        }
+
+                        var nextUri = location.IsAbsoluteUri ? location : new Uri(new Uri(currentUrl), location);
+                        _logger.LogDebug("NZB download following {StatusCode} redirect: {From} → {To}",
+                            response.StatusCode, LogRedaction.SanitizeUrl(currentUrl), LogRedaction.SanitizeUrl(nextUri.ToString()));
+                        currentUrl = nextUri.ToString();
+                        continue;
+                    }
+
+                    response.EnsureSuccessStatusCode();
+
+                    var contentBytes = await response.Content.ReadAsByteArrayAsync(ct);
+
+                    if (contentBytes.Length == 0)
+                    {
+                        _logger.LogError("Downloaded NZB file is empty (0 bytes) from {Url}", LogRedaction.SanitizeUrl(nzbUrl));
+                        throw new InvalidOperationException($"Downloaded NZB file is empty from {nzbUrl}");
+                    }
+
+                    // If the content is suspiciously small, log it to see if it's an error message
+                    if (contentBytes.Length < 500)
+                    {
+                        var contentText = Encoding.UTF8.GetString(contentBytes);
+                        _logger.LogWarning("NZB content is suspiciously small ({Size} bytes). Content: {Content}",
+                            contentBytes.Length, contentText);
+                    }
+
+                    _logger.LogInformation("Downloaded NZB content: {Size} bytes (after {Hops} hop(s))", contentBytes.Length, hop);
+                    return contentBytes;
                 }
 
-                if (contentBytes.Length == 0)
-                {
-                    _logger.LogError("Downloaded NZB file is empty (0 bytes) from {Url}", LogRedaction.SanitizeUrl(nzbUrl));
-                    throw new InvalidOperationException($"Downloaded NZB file is empty from {nzbUrl}");
-                }
-
-                return contentBytes;
+                throw new InvalidOperationException($"NZB download exceeded the redirect cap (10 hops) starting from {nzbUrl}");
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
@@ -1026,6 +1052,19 @@ namespace Listenarr.Infrastructure.Adapters
 
             return null;
         }
+
+        /// <summary>
+        /// Reads a numeric value from a NZBGet JSON-RPC field that may be serialized as either a JSON
+        /// number (current builds) or a JSON string (older/other builds). Never throws — calling
+        /// <see cref="JsonElement.GetString"/> on a number throws, which is the root cause of #619
+        /// (NZBGet progress/completion never updating, leaving usenet downloads stuck in Queued).
+        /// </summary>
+        internal static double ReadJsonNumber(JsonElement element) => element.ValueKind switch
+        {
+            JsonValueKind.Number => element.TryGetDouble(out var d) ? d : 0d,
+            JsonValueKind.String => double.TryParse(element.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : 0d,
+            _ => 0d
+        };
 
         /// <summary>
         /// Resolves the actual import item for a completed download.
@@ -1193,11 +1232,16 @@ namespace Listenarr.Infrastructure.Adapters
                                 {
                                     try
                                     {
-                                        var nzbId = group.TryGetProperty("NZBID", out var nzbIdProp) ? nzbIdProp.GetInt32() : 0;
+                                        // NZBGet's JSON-RPC returns NZBID/FileSizeMB/RemainingSizeMB as JSON
+                                        // numbers; calling JsonElement.GetString() on a number THROWS, which
+                                        // (caught below) silently broke every progress update and left usenet
+                                        // downloads stuck in Queued forever. Read both number and string shapes.
+                                        // See Listenarrs/Listenarr#619.
+                                        var nzbId = group.TryGetProperty("NZBID", out var nzbIdProp) ? (int)ReadJsonNumber(nzbIdProp) : 0;
                                         var nzbName = group.TryGetProperty("NZBName", out var nameProp) ? nameProp.GetString() ?? "" : "";
                                         var status = group.TryGetProperty("Status", out var statusProp) ? statusProp.GetString() ?? "" : "";
-                                        var fileSizeMB = group.TryGetProperty("FileSizeMB", out var sizeProp) ? sizeProp.GetString() ?? "" : "";
-                                        var remainingSizeMB = group.TryGetProperty("RemainingSizeMB", out var remainingSizeProp) ? remainingSizeProp.GetString() ?? "" : "";
+                                        var totalMB = group.TryGetProperty("FileSizeMB", out var sizeProp) ? ReadJsonNumber(sizeProp) : 0d;
+                                        var remainingMB = group.TryGetProperty("RemainingSizeMB", out var remainingSizeProp) ? ReadJsonNumber(remainingSizeProp) : 0d;
                                         // Find matching download by NZB ID
                                         var matchingDownload = downloads.FirstOrDefault(dl =>
                                         {
@@ -1211,11 +1255,9 @@ namespace Listenarr.Infrastructure.Adapters
                                             matchingDownload = downloads.FirstOrDefault(dl => TitleUtils.AreTitlesSimilar(dl.Title, nzbName));
                                         }
 
-                                        if (matchingDownload != null &&
-                                            double.TryParse(fileSizeMB, out var totalMB) &&
-                                            double.TryParse(remainingSizeMB, out var remainingMB))
+                                        if (matchingDownload != null && totalMB > 0)
                                         {
-                                            var progress = totalMB > 0 ? (totalMB - remainingMB) / totalMB : 0.0;
+                                            var progress = (totalMB - remainingMB) / totalMB;
                                             var amountLeft = (long)(remainingMB * 1024 * 1024); // Convert MB to bytes
 
                                             AdapterUtils.MapDownloadProgress(matchingDownload, progress, amountLeft, status);
