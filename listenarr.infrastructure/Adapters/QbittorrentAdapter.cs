@@ -1637,11 +1637,14 @@ namespace Listenarr.Infrastructure.Adapters
                             continue;
                         }
 
-                        // Lenient completion detection for qBittorrent
-                        // A torrent is complete when progress >= 100% OR amount left is 0
+                        // Lenient completion detection for qBittorrent.
+                        // A torrent is complete when progress >= 100% OR amount left is 0 with a
+                        // known size. The size guard excludes metaDL torrents (metadata not yet
+                        // fetched) that report amount_left == 0 with an unknown size — those are
+                        // not complete and would otherwise import 0 files and end up ImportBlocked.
                         // The stability window below ensures we don't immediately import a torrent
                         // that just hit 100% - we wait for the configured delay period
-                        var isComplete = matched.Progress >= 1.0 || matched.AmountLeft == 0;
+                        var isComplete = QBittorrentHelpers.IsTorrentComplete(matched.Progress, matched.AmountLeft, matched.Size);
 
                         _logger.LogDebug("Completion check for {DownloadId}: IsComplete={IsComplete}, Progress={Progress:P2}, AmountLeft={AmountLeft}, State={State}",
                             dl.Id, isComplete, matched.Progress, matched.AmountLeft, matched.State);

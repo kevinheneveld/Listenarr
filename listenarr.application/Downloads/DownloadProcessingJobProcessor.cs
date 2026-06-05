@@ -126,7 +126,7 @@ namespace Listenarr.Application.Downloads
                 }
 
                 await downloadService.UpdateAsync(
-                    download.Blocked($"Unable to import the download", "See the log of job {job.Id} for more informations"));
+                    download.Blocked("Unable to import the download", $"See the log of job {job.Id} for more information"));
             }
         }
 

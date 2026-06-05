@@ -154,5 +154,42 @@ namespace Listenarr.Tests.Features.Infrastructure.Adapters
             Assert.Empty(result);
         }
     }
+
+    /// <summary>
+    /// Tests for qBittorrent completion detection.
+    /// Guards against the metaDL false-completion bug where a torrent still fetching its
+    /// metadata reports amount_left == 0 (size unknown) and was treated as complete, which
+    /// enqueued an import that found 0 files and landed the download in ImportBlocked.
+    /// </summary>
+    public class QbittorrentCompletionTests
+    {
+        [Fact]
+        public void IsTorrentComplete_When_MetaDL_AmountLeftZero_UnknownSize_Returns_False()
+        {
+            // metaDL torrent: progress 0, amount_left 0 (size not yet known) — NOT complete.
+            Assert.False(QBittorrentHelpers.IsTorrentComplete(progress: 0.0, amountLeft: 0L, size: 0L));
+        }
+
+        [Fact]
+        public void IsTorrentComplete_When_FullProgress_Returns_True()
+        {
+            // A genuinely finished torrent: progress at 100%.
+            Assert.True(QBittorrentHelpers.IsTorrentComplete(progress: 1.0, amountLeft: 0L, size: 1_048_576L));
+        }
+
+        [Fact]
+        public void IsTorrentComplete_When_AmountLeftZero_KnownSize_Returns_True()
+        {
+            // Complete torrent reported via the amount_left heuristic with a known size.
+            Assert.True(QBittorrentHelpers.IsTorrentComplete(progress: 0.999, amountLeft: 0L, size: 1_048_576L));
+        }
+
+        [Fact]
+        public void IsTorrentComplete_When_Downloading_AmountRemaining_Returns_False()
+        {
+            // In-progress download: bytes still remaining.
+            Assert.False(QBittorrentHelpers.IsTorrentComplete(progress: 0.5, amountLeft: 500_000L, size: 1_000_000L));
+        }
+    }
 }
 

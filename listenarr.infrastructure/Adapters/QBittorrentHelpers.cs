@@ -50,6 +50,27 @@ namespace Listenarr.Infrastructure.Adapters
         }
 
         /// <summary>
+        /// Determines whether a qBittorrent torrent has finished downloading its content.
+        /// </summary>
+        /// <remarks>
+        /// A torrent still fetching its metadata (state "metaDL"/"forcedMetaDL", typically a
+        /// dead/0-seeder magnet) reports amount_left == 0 because its total size is not yet
+        /// known — NOT because it is complete. Gating the amount_left heuristic on a known
+        /// size (size &gt; 0) excludes those false completions, which would otherwise enqueue
+        /// an import that finds 0 files and lands the download in ImportBlocked after exhausting
+        /// retries. progress &gt;= 1.0 independently catches every genuine completion, so this
+        /// can only make completion detection stricter, never miss a real one.
+        /// </remarks>
+        /// <param name="progress">Torrent progress as a fraction in the range [0, 1].</param>
+        /// <param name="amountLeft">Bytes remaining to download (amount_left).</param>
+        /// <param name="size">Total size of the selected files in bytes; 0 while metadata is unknown.</param>
+        /// <returns>True when the torrent's content is fully downloaded.</returns>
+        public static bool IsTorrentComplete(double progress, long amountLeft, long size)
+        {
+            return progress >= 1.0 || (amountLeft == 0 && size > 0);
+        }
+
+        /// <summary>
         /// Logs information about category filtering if a category is configured.
         /// Provides visibility into filtering behavior for debugging and monitoring.
         /// </summary>
