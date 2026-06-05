@@ -49,7 +49,11 @@ namespace Listenarr.Tests.Features.Api.Extensions
             Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(ImageCacheCleanupService));
             Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(DownloadMonitorService));
             Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(QueueMonitorService));
-            Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(AutomaticSearchService));
+            // AutomaticSearchService is registered as a shared singleton and hosted via factory
+            // (so the per-series "Search now" endpoint can invoke it through IAutomaticSearchInvoker).
+            Assert.Contains(services, d => d.ServiceType == typeof(AutomaticSearchService) && d.Lifetime == ServiceLifetime.Singleton);
+            Assert.Contains(services, d => d.ServiceType == typeof(IAutomaticSearchInvoker) && d.Lifetime == ServiceLifetime.Singleton);
+            Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationFactory != null);
             Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(AuthorMonitoringBackgroundService));
             Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(SeriesMonitoringBackgroundService));
             Assert.Contains(services, d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(FfmpegInstallBackgroundService));

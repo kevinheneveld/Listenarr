@@ -61,8 +61,12 @@ namespace Listenarr.Infrastructure.Extensions
             // Register background service for queue monitoring (external clients) and real-time updates
             services.AddHostedService<QueueMonitorService>();
 
-            // Register background service for automatic audiobook searching
-            services.AddHostedService<AutomaticSearchService>();
+            // Register background service for automatic audiobook searching. Registered as a shared
+            // singleton so the per-series "Search now" endpoint can invoke the same per-book logic
+            // (via IAutomaticSearchInvoker) instead of duplicating or naively re-grabbing.
+            services.AddSingleton<AutomaticSearchService>();
+            services.AddSingleton<IAutomaticSearchInvoker>(sp => sp.GetRequiredService<AutomaticSearchService>());
+            services.AddHostedService(sp => sp.GetRequiredService<AutomaticSearchService>());
 
             // Register background service for syncing monitored author catalogs
             services.AddHostedService<AuthorMonitoringBackgroundService>();

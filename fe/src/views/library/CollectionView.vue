@@ -321,6 +321,17 @@
               Wrong series?
             </button>
             <button
+              v-if="searchableCollectionBookIds.length > 0"
+              class="toolbar-btn series-search-btn"
+              :disabled="seriesSearchBusy"
+              @click="searchSeriesNow"
+              :title="`Search now for missing or upgradable books in this series (${searchableCollectionBookIds.length} monitored)`"
+            >
+              <PhArrowClockwise v-if="seriesSearchBusy" class="spin-icon" />
+              <PhMagnifyingGlass v-else />
+              Search now
+            </button>
+            <button
               v-if="missingWorks.length > 0"
               class="toolbar-btn series-addmissing-btn"
               @click="showAddMissingModal = true"
@@ -965,6 +976,7 @@ const seriesLookupLoading = ref(false)
 const seriesLookupRequestId = ref(0)
 const seriesMetadataRefreshBusy = ref(false)
 const seriesMonitoringBusy = ref(false)
+const seriesSearchBusy = ref(false)
 const seriesMonitoringStatus = ref<MonitoredSeries | null>(null)
 const seriesMonitoringStatusRequestId = ref(0)
 const authorMonitoringBusy = ref(false)
@@ -1250,6 +1262,14 @@ function getSortValue(book: CollectionDisplayItem): string {
 
 const libraryCollectionAudiobooks = computed(() =>
   libraryStore.audiobooks.filter((book) => matchesCurrentCollection(book)),
+)
+
+// Owned, monitored books in this collection — the candidates for "Search now". The backend
+// per-book gates (active-download / quality-cutoff) decide which actually get a search/grab.
+const searchableCollectionBookIds = computed(() =>
+  libraryCollectionAudiobooks.value
+    .filter((book) => book.monitored && typeof book.id === 'number' && book.id > 0)
+    .map((book) => book.id as number),
 )
 
 // The series name in the URL is a slug that can differ from the canonical name
@@ -2233,6 +2253,37 @@ async function toggleAuthorMonitoring() {
     })
   } finally {
     authorMonitoringBusy.value = false
+  }
+}
+
+async function searchSeriesNow() {
+  if (seriesSearchBusy.value) return
+  const ids = searchableCollectionBookIds.value
+  if (ids.length === 0) {
+    toast.info('Nothing to search', 'No monitored books in this series to search for right now.')
+    return
+  }
+  seriesSearchBusy.value = true
+  try {
+    const summary = await apiService.searchNow(ids)
+    const parts: string[] = []
+    if (summary.queued > 0) parts.push(`${summary.queued} queued`)
+    if (summary.skipped > 0) parts.push(`${summary.skipped} already satisfied`)
+    if (summary.failed > 0) parts.push(`${summary.failed} failed`)
+    toast.success(
+      'Search complete',
+      `Searched ${summary.requested} book${summary.requested === 1 ? '' : 's'}${
+        parts.length ? ': ' + parts.join(', ') : ''
+      }.`,
+    )
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'CollectionView',
+      operation: 'searchSeriesNow',
+    })
+    toast.error('Search failed', err instanceof Error ? err.message : 'Unknown error')
+  } finally {
+    seriesSearchBusy.value = false
   }
 }
 

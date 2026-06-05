@@ -40,6 +40,7 @@ namespace Listenarr.Api.Controllers
         private readonly IAudiobookMetadataService _metadataService;
         private readonly IImageCacheService? _imageCacheService;
         private readonly MetadataConverters _metadataConverters;
+        private readonly IAutomaticSearchInvoker? _automaticSearchInvoker;
 
         public SearchController(
             ISearchService searchService,
@@ -47,7 +48,8 @@ namespace Listenarr.Api.Controllers
             AudibleService audibleService,
             IAudiobookMetadataService metadataService,
             IImageCacheService? imageCacheService = null,
-            MetadataConverters? metadataConverters = null)
+            MetadataConverters? metadataConverters = null,
+            IAutomaticSearchInvoker? automaticSearchInvoker = null)
         {
             _searchService = searchService;
             _logger = logger;
@@ -55,6 +57,63 @@ namespace Listenarr.Api.Controllers
             _metadataService = metadataService;
             _imageCacheService = imageCacheService;
             _metadataConverters = metadataConverters ?? new MetadataConverters(imageCacheService, Microsoft.Extensions.Logging.Abstractions.NullLogger<MetadataConverters>.Instance);
+            _automaticSearchInvoker = automaticSearchInvoker;
+        }
+
+        /// <summary>
+        /// On-demand "Search now" for a set of audiobooks (e.g. every owned, monitored book in a
+        /// series). Runs the same per-book automatic-search logic as the background cycle — so it
+        /// skips books already meeting the quality cutoff or with an active download, and only grabs
+        /// genuine upgrades — while bypassing the 6-hour throttle. Returns a per-book summary.
+        /// </summary>
+        [HttpPost("now")]
+        [ProducesResponseType(typeof(SearchNowResponse), StatusCodes.Status200OK)]
+        public async Task<ActionResult<SearchNowResponse>> SearchNow([FromBody] SearchNowRequest request)
+        {
+            if (request?.AudiobookIds == null || request.AudiobookIds.Count == 0)
+            {
+                return BadRequest("At least one audiobookId is required.");
+            }
+
+            if (_automaticSearchInvoker == null)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, "Automatic search is not available.");
+            }
+
+            // De-dupe and cap to protect indexers from an accidental library-wide sweep.
+            const int MaxBooksPerRequest = 100;
+            var ids = request.AudiobookIds.Where(id => id > 0).Distinct().Take(MaxBooksPerRequest).ToList();
+            var ct = HttpContext.RequestAborted;
+
+            var results = new List<AutomaticSearchBookResult>(ids.Count);
+            foreach (var id in ids)
+            {
+                ct.ThrowIfCancellationRequested();
+                results.Add(await _automaticSearchInvoker.SearchAudiobookNowAsync(id, ct));
+            }
+
+            return Ok(new SearchNowResponse
+            {
+                Requested = ids.Count,
+                Queued = results.Count(r => r.DownloadsQueued > 0),
+                Skipped = results.Count(r => r.Success && r.DownloadsQueued == 0),
+                Failed = results.Count(r => !r.Success),
+                Results = results
+            });
+        }
+
+        public sealed class SearchNowRequest
+        {
+            public List<int> AudiobookIds { get; set; } = new();
+        }
+
+        public sealed class SearchNowResponse
+        {
+            public int Requested { get; set; }
+            public int Queued { get; set; }
+            public int Skipped { get; set; }
+            public int Failed { get; set; }
+            public List<AutomaticSearchBookResult> Results { get; set; } = new();
         }
 
         private string BuildApiImagePath(string identifier, string? sourceUrl = null)

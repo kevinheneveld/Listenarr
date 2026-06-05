@@ -820,6 +820,28 @@ class ApiService {
     })
   }
 
+  // On-demand "Search now" for a set of owned, monitored audiobooks (e.g. a whole series). Runs the
+  // same per-book logic as the background automatic-search cycle, so it skips already-satisfied
+  // books and only grabs genuine upgrades. Returns a summary.
+  async searchNow(audiobookIds: number[]): Promise<{
+    requested: number
+    queued: number
+    skipped: number
+    failed: number
+    results: Array<{
+      audiobookId: number
+      title: string
+      success: boolean
+      downloadsQueued: number
+      message?: string
+    }>
+  }> {
+    return this.request('/search/now', {
+      method: 'POST',
+      body: JSON.stringify({ audiobookIds }),
+    })
+  }
+
   async sendToDownloadClient(
     searchResult: SearchResult,
     downloadClientId?: string,

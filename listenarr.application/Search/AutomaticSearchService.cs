@@ -28,7 +28,27 @@ using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Search
 {
-    public class AutomaticSearchService : BackgroundService
+    /// <summary>
+    /// Lets callers (e.g. the per-series "Search now" endpoint) run the exact same per-book
+    /// automatic-search logic the background cycle uses — on demand and without the 6-hour
+    /// throttle — while keeping the active-download and quality-cutoff skip gates.
+    /// </summary>
+    public interface IAutomaticSearchInvoker
+    {
+        Task<AutomaticSearchBookResult> SearchAudiobookNowAsync(int audiobookId, CancellationToken ct = default);
+    }
+
+    public sealed class AutomaticSearchBookResult
+    {
+        public int AudiobookId { get; set; }
+        public string Title { get; set; } = string.Empty;
+        /// <summary>True when the book was processed without error (not whether a download was queued).</summary>
+        public bool Success { get; set; }
+        public int DownloadsQueued { get; set; }
+        public string? Message { get; set; }
+    }
+
+    public class AutomaticSearchService : BackgroundService, IAutomaticSearchInvoker
     {
         private readonly ILogger<AutomaticSearchService> _logger;
         private readonly IServiceScopeFactory _serviceScopeFactory;
@@ -155,6 +175,68 @@ namespace Listenarr.Application.Search
 
             _logger.LogInformation("Automatic search cycle completed. Processed {ProcessedCount} audiobooks, queued {DownloadsQueued} total downloads",
                 processedCount, downloadsQueued);
+        }
+
+        /// <summary>
+        /// On-demand single-book automatic search. Reuses <see cref="ProcessAudiobookAsync"/> — the
+        /// same logic the background cycle runs — so it inherits the active-download skip and the
+        /// quality-cutoff/upgrade gates (i.e. it will not re-download a book that's already
+        /// satisfied, and only grabs a genuine upgrade). Bypasses the 6-hour throttle because the
+        /// caller selects the books explicitly.
+        /// </summary>
+        public async Task<AutomaticSearchBookResult> SearchAudiobookNowAsync(int audiobookId, CancellationToken ct = default)
+        {
+            using var scope = _serviceScopeFactory.CreateScope();
+            var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
+            var downloadRepository = scope.ServiceProvider.GetRequiredService<IDownloadRepository>();
+            var fileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
+            var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
+            var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
+            var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
+            var filterPipeline = scope.ServiceProvider.GetRequiredService<SearchResultFilterPipeline>();
+
+            var audiobook = await audiobookRepository.GetByIdAsync(audiobookId);
+            if (audiobook == null)
+            {
+                return new AutomaticSearchBookResult
+                {
+                    AudiobookId = audiobookId,
+                    Success = false,
+                    Message = "Audiobook not found"
+                };
+            }
+
+            try
+            {
+                var queued = await ProcessAudiobookAsync(
+                    audiobook, searchService, qualityProfileService, downloadService,
+                    audiobookRepository, downloadRepository, fileRepository, filterPipeline, ct);
+
+                audiobook.LastSearchTime = DateTime.UtcNow;
+                await audiobookRepository.UpdateAsync(audiobook);
+
+                return new AutomaticSearchBookResult
+                {
+                    AudiobookId = audiobookId,
+                    Title = audiobook.Title ?? string.Empty,
+                    Success = true,
+                    DownloadsQueued = queued,
+                    Message = queued > 0
+                        ? "Download queued"
+                        : "No new download (already satisfied or no acceptable result)"
+                };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Manual 'search now' failed for audiobook '{Title}' (ID: {Id})", audiobook.Title, audiobookId);
+                return new AutomaticSearchBookResult
+                {
+                    AudiobookId = audiobookId,
+                    Title = audiobook.Title ?? string.Empty,
+                    Success = false,
+                    Message = "Search failed"
+                };
+            }
         }
 
         private async Task<int> ProcessAudiobookAsync(
