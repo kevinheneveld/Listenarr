@@ -205,6 +205,45 @@ namespace Listenarr.Tests.Features.Application.Downloads
         }
 
         [Fact]
+        public async Task Import_DerivesBasePath_WhenAudiobookHasNone()
+        {
+            var root = FileService.GetTempDirectory("library-root");
+            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
+                .WithIsDefault()
+                .WithPath(root)
+                .Build());
+
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithMoveFileOnCompleted()
+                .WithoutMetadataProcessing()
+                .WithFolderNamingPattern("{Author}/{Title}")
+                .WithFileNamingPattern("{Title}")
+                .WithMultiFileNamingPattern("{Title}")
+                .WithOutputPath(root)
+                .Build());
+
+            // Audiobook reaches import with NO BasePath — must be derived, not thrown away.
+            var audiobook = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("No BasePath Book")
+                .WithAuthor("Some Author")
+                .Build());
+
+            var sourcePath = FileService.GetTempDirectory("downloads");
+            var filePath = await FileService.GetFileAsync(sourcePath, "chapter.mp3");
+
+            // Act
+            var downloadService = _provider.GetRequiredService<IDownloadImportService>();
+            await downloadService.ImportDownloadFilesAsync(audiobook, [filePath]);
+
+            // File landed under the derived per-book folder and registered.
+            var expectedDir = Path.Join(root, "Some Author", "No BasePath Book");
+            var stored = await _audiobookFileRepository.GetByAudiobookIdAsync(audiobook.Id);
+            Assert.Single(stored);
+            Assert.StartsWith(expectedDir, stored.First().Path);
+            Assert.True(File.Exists(stored.First().Path));
+        }
+
+        [Fact]
         public async Task DoesNotImportBlacklisted()
         {
             var basePath = FileService.GetTempDirectory("destination");

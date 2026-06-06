@@ -21,6 +21,7 @@ using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Application.Security;
 using Listenarr.Domain.Common;
 using Listenarr.Domain.Models;
+using Listenarr.Domain.Models.Configurations;
 using Listenarr.Domain.Models.Enumerations;
 using Microsoft.Extensions.Logging;
 
@@ -34,18 +35,28 @@ namespace Listenarr.Application.Downloads
         IArchiveExtractor archiveExtractor,
         IConfigurationService configurationService,
         IAudiobookFileRepository audiobookFileRepository,
+        IRootFolderService rootFolderService,
         ILogger<DownloadImportService> logger) : IDownloadImportService
     {
         private List<TempDirectory> archiveDirectories = [];
 
         public async Task<List<ImportResult>> ImportDownloadFilesAsync(Audiobook audiobook, List<string> files, CancellationToken ct = default)
         {
+            var settings = await configurationService.GetApplicationSettingsAsync();
+
             if (string.IsNullOrEmpty(audiobook.BasePath))
             {
-                throw new InvalidOperationException($"Audiobook {audiobook.Id} basePath cannot be empty or null");
+                // Some audiobooks reach import with no BasePath (e.g. scan-added or partially-populated
+                // rows). Rather than hard-failing the whole download, derive a per-book folder from the
+                // configured root + FolderNamingPattern (same shape LibraryAddService uses) so the files
+                // can land in a sensible location.
+                audiobook.BasePath = await DeriveBasePathAsync(audiobook, settings);
             }
 
-            var settings = await configurationService.GetApplicationSettingsAsync();
+            if (string.IsNullOrEmpty(audiobook.BasePath))
+            {
+                throw new InvalidOperationException($"Audiobook {audiobook.Id} basePath cannot be empty or null and could not be derived");
+            }
 
             try
             {
@@ -382,6 +393,56 @@ namespace Listenarr.Application.Downloads
             {
                 await DisposeOfExtractedFiles();
             }
+        }
+
+        /// <summary>
+        /// Derives a per-book BasePath from the configured root folder + FolderNamingPattern for an
+        /// audiobook that reached import with none. Guards against an empty pattern result leaving the
+        /// path at the bare root (which would make distinct books share a folder and collide at import)
+        /// by falling back to the sanitized title/ASIN; returns empty only when nothing usable exists.
+        /// </summary>
+        private async Task<string> DeriveBasePathAsync(Audiobook audiobook, ApplicationSettings settings)
+        {
+            string root;
+            try
+            {
+                var defaultRoot = await rootFolderService.GetDefaultAsync();
+                root = defaultRoot != null && !string.IsNullOrWhiteSpace(defaultRoot.Path)
+                    ? defaultRoot.Path
+                    : settings.OutputPath;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogDebug(ex, "DeriveBasePathAsync: failed to resolve default root folder for audiobook {AudiobookId}", audiobook.Id);
+                root = settings.OutputPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(root))
+            {
+                return string.Empty;
+            }
+
+            var namingMetadata = BuildNamingMetadata(audiobook, null, audiobook.Title ?? string.Empty);
+            var subfolder = fileNamingService.ApplyNamingPattern(settings.FolderNamingPattern, namingMetadata)?.Trim();
+
+            if (string.IsNullOrWhiteSpace(subfolder))
+            {
+                var fallback = !string.IsNullOrWhiteSpace(audiobook.Title) ? audiobook.Title : audiobook.Asin;
+                if (!string.IsNullOrWhiteSpace(fallback))
+                {
+                    subfolder = string.Concat(fallback.Split(Path.GetInvalidFileNameChars()));
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(subfolder))
+            {
+                logger.LogWarning("DeriveBasePathAsync: could not derive a per-book folder for audiobook {AudiobookId}; no usable title/ASIN", audiobook.Id);
+                return string.Empty;
+            }
+
+            var derived = Path.Join(root, subfolder);
+            logger.LogInformation("DeriveBasePathAsync: derived BasePath {BasePath} for audiobook {AudiobookId} (had none at import)", LogRedaction.SanitizeFilePath(derived), audiobook.Id);
+            return derived;
         }
 
         private static AudioMetadata BuildNamingMetadata(Audiobook? audiobook, AudioMetadata? extractedMetadata, string fallbackTitle)
