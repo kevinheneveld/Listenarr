@@ -354,5 +354,120 @@ namespace Listenarr.Tests.Features.Application.Downloads
 
             Assert.Equal(1, downloadClientGatewayMock.GetCallCount(nameof(downloadClientGatewayMock.MarkItemAsImportedAsync)));
         }
+
+        // --- Mode 1 duplicate-edition collision discriminator ----------------------------------
+        // Empirical context (kevin/live, 2026-06-06): 107/107 ImportBlocked-with-real-data
+        // "files reported by client and files on disk do not match" failures involve a same-hash
+        // sibling Download. 70% have a sibling already at Status=Moved — the first import moved
+        // the torrent's audio into the owning record's library folder; this sibling sees only
+        // companion files (covers/PDFs). The brief's "import the audio that's present" fix would
+        // import companion jpgs/PDFs as audiobook files — actively wrong. Instead, we discriminate
+        // the case at the mismatch branch and fail fast with a clear message naming the real
+        // cause (duplicate edition records to deduplicate).
+
+        [Fact]
+        [Trait("Method", "ProcessJobAsync")]
+        public async Task MismatchedFileCount_WithSameHashSiblingAlreadyMoved_FailsFastWithCollisionMessage()
+        {
+            // Arrange — a sibling download for a DIFFERENT audiobook record shares this torrent's
+            // hash and has already reached Moved: that's the duplicate-edition collision pattern.
+            const string sharedHash = "abc123deadbeef0000000000000000000000abcd";
+
+            var movedSibling = await _downloadRepository.AddAsync(new DownloadBuilder()
+                .WithAudiobook(await CreateAudiobook())
+                .WithDownloadClientConfiguration(await CreateDownloadClientConfiguration())
+                .WithTorrentHash(sharedHash)
+                .WithStatus(DownloadStatus.Moved)
+                .Build());
+
+            // The doomed sibling: same hash, different audiobook, no audio on disk (only companions
+            // remain — the audio moved with movedSibling's import). We reproduce that by reporting
+            // 5 SourceFiles but only creating 1 (a companion) on disk → triggers the mismatch branch.
+            var source = FileService.GetTempDirectory("collision-source");
+            var companionOnDisk = await FileService.GetFileAsync(source, "cover.jpg");
+            downloadClientGatewayMock.SourceFiles = new List<string>
+            {
+                companionOnDisk,
+                Path.Join(source, "chapter01.mp3"),
+                Path.Join(source, "chapter02.mp3"),
+                Path.Join(source, "chapter03.mp3"),
+                Path.Join(source, "chapter04.mp3"),
+            };
+
+            var doomed = await _downloadRepository.AddAsync(new DownloadBuilder()
+                .WithAudiobook(await CreateAudiobook())
+                .WithDownloadClientConfiguration(await CreateDownloadClientConfiguration())
+                .WithTorrentHash(sharedHash)
+                .WithPath(source)
+                .WithCompletedStatus(at: DateTime.UtcNow)
+                .Build());
+
+            var job = await _downloadProcessingJobRepository.AddAsync(new DownloadProcessingJobBuilder()
+                .WithDownload(doomed)
+                .Build());
+
+            // Act
+            var processor = _provider.GetRequiredService<DownloadProcessingJobProcessor>();
+            await processor.ProcessQueueAsync(CancellationToken.None);
+
+            // Assert — job failed immediately (no retry), import was not attempted, the message
+            // names the duplicate-edition cause so the eventual dedup migration can find these.
+            var refreshed = await _downloadProcessingJobRepository.GetByIdAsync(job.Id);
+            Assert.NotNull(refreshed);
+            Assert.Equal(ProcessingJobStatus.Failed, refreshed!.Status);
+            Assert.Equal(0, refreshed.RetryCount);
+            Assert.Contains("Duplicate-edition collision", refreshed.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("deduplicat", refreshed.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+            downloadImportServiceMock.Verify(m => m.ImportDownloadFilesAsync(
+                    It.IsAny<Audiobook>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+
+        [Fact]
+        [Trait("Method", "ProcessJobAsync")]
+        public async Task MismatchedFileCount_WithoutMovedSiblingHash_FallsThroughToRetry()
+        {
+            // Arrange — same mismatch shape as above (5 reported, 1 on disk), but NO sibling at
+            // Status=Moved for this hash. This is the 30% case — possibly siblings racing for the
+            // same files, or a legitimate transient race. Existing retry behavior must be preserved
+            // so we don't preemptively block a download that might still succeed.
+            const string uniqueHash = "feeddead0000000000000000000000000000beef";
+
+            var source = FileService.GetTempDirectory("transient-source");
+            var oneOnDisk = await FileService.GetFileAsync(source, "audiobook.mp3");
+            downloadClientGatewayMock.SourceFiles = new List<string>
+            {
+                oneOnDisk,
+                Path.Join(source, "still-downloading.mp3"),
+                Path.Join(source, "also-missing.mp3"),
+            };
+
+            var download = await _downloadRepository.AddAsync(new DownloadBuilder()
+                .WithAudiobook(await CreateAudiobook())
+                .WithDownloadClientConfiguration(await CreateDownloadClientConfiguration())
+                .WithTorrentHash(uniqueHash)
+                .WithPath(source)
+                .WithCompletedStatus(at: DateTime.UtcNow)
+                .Build());
+
+            var job = await _downloadProcessingJobRepository.AddAsync(new DownloadProcessingJobBuilder()
+                .WithDownload(download)
+                .Build());
+
+            // Act
+            var processor = _provider.GetRequiredService<DownloadProcessingJobProcessor>();
+            await processor.ProcessQueueAsync(CancellationToken.None);
+
+            // Assert — scheduled for retry (not failed immediately), preserves prior behavior.
+            var refreshed = await _downloadProcessingJobRepository.GetByIdAsync(job.Id);
+            Assert.NotNull(refreshed);
+            Assert.Equal(ProcessingJobStatus.Pending, refreshed!.Status);
+            Assert.Equal(1, refreshed.RetryCount);
+            Assert.Contains("Files reported by the download client and files on disk do not match",
+                refreshed.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

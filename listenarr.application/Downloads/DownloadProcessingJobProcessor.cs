@@ -230,6 +230,36 @@ namespace Listenarr.Application.Downloads
             }
             else if (files.Count != queueItem.SourceFiles.Count)
             {
+                // Duplicate-edition collision discriminator. The dominant cause of reported≠ondisk
+                // mismatches on the live instance is NOT the brief's "pack-torrent with missing
+                // files" case — it's the duplicate-edition dynamic: the same torrent was grabbed
+                // for multiple audiobook records (different editions of the same work), the first
+                // import moved its audio into the owning record's library folder (CompletedFileAction=
+                // Move), and the sibling records' processing jobs now see only the companion files
+                // (covers, PDFs) the torrent client still reports. Three retries to ImportBlocked
+                // on the misleading "files don't match" message wastes processor cycles on
+                // guaranteed-to-fail work and obscures the real cause (records to deduplicate).
+                //
+                // When a same-hash sibling has already reached Moved (DownloadStatus 7), fail this
+                // job immediately with a message that names the real cause. When siblings exist but
+                // none have imported yet, fall through to the existing retry — those duplicates may
+                // still race a legitimate import.
+                if (TryGetTorrentHash(download, out var torrentHash))
+                {
+                    var siblings = await downloadRepository.GetByTorrentHashAsync(torrentHash, excludeDownloadId: download.Id, cancellationToken);
+                    var movedSibling = siblings.FirstOrDefault(s => s.Status == DownloadStatus.Moved);
+                    if (movedSibling != null)
+                    {
+                        metrics.Increment("processing.duplicate_edition_collision");
+                        var siblingDescriptor = movedSibling.AudiobookId is int abId
+                            ? $"audiobook {abId}"
+                            : $"download {movedSibling.Id}";
+                        await downloadProcessingJobService.UpdateJobAsync(job.MarkAsFailed(
+                            $"Duplicate-edition collision: this torrent's audio was already imported for {siblingDescriptor}; only companion files (covers/PDFs) remain on disk for this record. Consider deduplicating these audiobook records."));
+                        return;
+                    }
+                }
+
                 await downloadProcessingJobService.UpdateJobAsync(job.ScheduleRetry($"Files reported by the download client and files on disk do not match"));
                 return;
             }
@@ -309,6 +339,21 @@ namespace Listenarr.Application.Downloads
             job.AddLogEntry($"Enqueued scan job {jobId} for audiobook {audiobook.Id}");
 
             await downloadProcessingJobService.UpdateJobAsync(job.MarkAsCompleted());
+        }
+
+        /// <summary>
+        /// Extracts the TorrentHash from a download's metadata, returning false (and an empty string)
+        /// when the download is usenet/other (no torrent hash) or the metadata value is missing/empty.
+        /// </summary>
+        private static bool TryGetTorrentHash(Download download, out string torrentHash)
+        {
+            torrentHash = string.Empty;
+            if (download.Metadata == null) return false;
+            if (!download.Metadata.TryGetValue("TorrentHash", out var raw) || raw == null) return false;
+            var candidate = raw.ToString();
+            if (string.IsNullOrWhiteSpace(candidate)) return false;
+            torrentHash = candidate;
+            return true;
         }
     }
 }

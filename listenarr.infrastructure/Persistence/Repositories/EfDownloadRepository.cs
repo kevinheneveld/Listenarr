@@ -171,6 +171,31 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .ToListAsync(ct);
         }
 
+        public async Task<List<Download>> GetByTorrentHashAsync(string torrentHash, string? excludeDownloadId = null, System.Threading.CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(torrentHash)) return new List<Download>();
+
+            // SQLite's json_extract is not cleanly EF-Core translatable here without raw SQL, but the
+            // Downloads table is small enough (a few thousand rows) that materializing and filtering
+            // in-app stays cheap — and mirrors the existing GetKnownClientItemIdsAsync pattern, which
+            // also walks metadata in memory. We only project Id, AudiobookId, Status, Metadata so the
+            // payload stays small and EF's change tracker stays off.
+            await using var ctx = await _dbFactory.CreateDbContextAsync();
+            var candidates = await ctx.Downloads.AsNoTracking().ToListAsync(ct);
+
+            var results = new List<Download>(capacity: 8);
+            foreach (var d in candidates)
+            {
+                if (excludeDownloadId != null && string.Equals(d.Id, excludeDownloadId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!TryGetMetadataString(d.Metadata, "TorrentHash", out var hash))
+                    continue;
+                if (string.Equals(hash, torrentHash, StringComparison.OrdinalIgnoreCase))
+                    results.Add(d);
+            }
+            return results;
+        }
+
         public async Task<List<Download>> GetCompletionCandidatesAsync(int limit)
         {
             await using var ctx = await _dbFactory.CreateDbContextAsync();

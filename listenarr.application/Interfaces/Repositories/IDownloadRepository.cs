@@ -34,6 +34,18 @@ namespace Listenarr.Application.Interfaces.Repositories
         Task<Download?> GetByIdAsync(string id);
         Task<List<Download>> GetByIdsAsync(IEnumerable<string> ids);
         Task<List<Download>> GetByAudiobookIdAsync(int audiobookId, CancellationToken ct = default);
+
+        /// <summary>
+        /// Returns every download (other than <paramref name="excludeDownloadId"/>) whose metadata
+        /// records the given <paramref name="torrentHash"/>. Used to detect duplicate-edition collisions:
+        /// when the same torrent is grabbed for multiple audiobook records, the first to import moves
+        /// the audio into the library; subsequent siblings find only companion files (covers/PDFs) and
+        /// would otherwise loop through 3 retries before failing with the misleading "files reported by
+        /// the download client and files on disk do not match" message.
+        /// Case-insensitive hash compare; an empty/null hash returns an empty list.
+        /// </summary>
+        Task<List<Download>> GetByTorrentHashAsync(string torrentHash, string? excludeDownloadId = null, CancellationToken ct = default);
+
         /// <summary>Returns downloads in Completed/ImportPending/Processing status ordered by CompletedAt, for processing job creation.</summary>
         Task<List<Download>> GetCompletionCandidatesAsync(int limit);
 
