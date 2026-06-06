@@ -50,7 +50,17 @@ namespace Listenarr.Infrastructure.Extensions
                 // DbContextOptions<T> (singleton). It also registers a scoped ListenArrDbContext
                 // derived from the factory, which satisfies direct-injection repos like
                 // QualityProfileRepository and AudiobookRepository.
-                services.AddDbContextFactory<ListenArrDbContext>(configureDb, ServiceLifetime.Singleton);
+                //
+                // Wrap the caller's provider configuration so the SQLite PRAGMA interceptor is
+                // applied to every connection the factory opens. This sets busy_timeout (and
+                // friends) on each pooled connection so concurrent background-service writes
+                // wait briefly for the writer lock instead of failing with SQLITE_BUSY
+                // ("database is locked"). The interceptor is a no-op for non-SQLite providers.
+                services.AddDbContextFactory<ListenArrDbContext>(options =>
+                {
+                    configureDb(options);
+                    options.AddInterceptors(new SqliteConnectionPragmaInterceptor());
+                }, ServiceLifetime.Singleton);
             }
 
             services.AddScoped<IAudiobookRepository, AudiobookRepository>();
