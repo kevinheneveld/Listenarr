@@ -337,17 +337,46 @@ namespace Listenarr.Application.Audiobooks
                             var basePath = CalculateBasePath(foundFiles);
                             if (!string.IsNullOrEmpty(basePath))
                             {
-                                var basePathChanged = !string.Equals(audiobook.BasePath, basePath, StringComparison.OrdinalIgnoreCase);
-                                audiobook.BasePath = basePath;
-                                _logger.LogInformation("Set base path for audiobook '{Title}' (ID: {AudiobookId}): {BasePath}", LogRedaction.SanitizeText(audiobook.Title), audiobook.Id, LogRedaction.SanitizeFilePath(basePath));
-
-                                // Persist the recalculated base path before delegating to AudioFileService.
-                                // That service resolves the audiobook in a separate scope/db context and
-                                // uses BasePath for containment checks, so delayed SaveChanges can cause
-                                // legitimate sibling parts to be rejected during multifile scans.
-                                if (basePathChanged)
+                                // Refuse to overwrite BasePath with an LCA that equals a configured
+                                // library root, or one that would broaden a currently-set per-book
+                                // BasePath. Both shapes re-introduce the broad-BasePath -> cross-edition
+                                // import collision loop the kevin/live import-pipeline fixes address
+                                // (see project_listenarr_import_pipeline memory + FINDINGS_import_pipeline).
+                                IEnumerable<string> rootPaths = Array.Empty<string>();
+                                try
                                 {
-                                    await audiobookRepository.UpdateAsync(audiobook);
+                                    var rootFolderService = scope.ServiceProvider.GetRequiredService<IRootFolderService>();
+                                    var roots = await rootFolderService.GetAllAsync();
+                                    rootPaths = roots.Where(r => !string.IsNullOrWhiteSpace(r.Path)).Select(r => r.Path!).ToList();
+                                }
+                                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                                {
+                                    _logger.LogDebug(ex, "ScanBackgroundService: failed to enumerate root folders for BasePath guard; falling back to no-root check.");
+                                }
+
+                                if (!IsAcceptableScannedBasePath(basePath, audiobook.BasePath, rootPaths))
+                                {
+                                    _logger.LogInformation(
+                                        "Scan-derived BasePath rejected for audiobook '{Title}' (ID: {AudiobookId}): candidate '{Candidate}' equals a configured root or would broaden existing BasePath '{Current}'. Leaving BasePath unchanged.",
+                                        LogRedaction.SanitizeText(audiobook.Title),
+                                        audiobook.Id,
+                                        LogRedaction.SanitizeFilePath(basePath),
+                                        LogRedaction.SanitizeFilePath(audiobook.BasePath ?? string.Empty));
+                                }
+                                else
+                                {
+                                    var basePathChanged = !string.Equals(audiobook.BasePath, basePath, StringComparison.OrdinalIgnoreCase);
+                                    audiobook.BasePath = basePath;
+                                    _logger.LogInformation("Set base path for audiobook '{Title}' (ID: {AudiobookId}): {BasePath}", LogRedaction.SanitizeText(audiobook.Title), audiobook.Id, LogRedaction.SanitizeFilePath(basePath));
+
+                                    // Persist the recalculated base path before delegating to AudioFileService.
+                                    // That service resolves the audiobook in a separate scope/db context and
+                                    // uses BasePath for containment checks, so delayed SaveChanges can cause
+                                    // legitimate sibling parts to be rejected during multifile scans.
+                                    if (basePathChanged)
+                                    {
+                                        await audiobookRepository.UpdateAsync(audiobook);
+                                    }
                                 }
                             }
 
@@ -697,6 +726,69 @@ namespace Listenarr.Application.Audiobooks
             }
 
             return commonPath;
+        }
+
+        /// <summary>
+        /// Returns true iff <paramref name="candidate"/> is safe to adopt as an audiobook's BasePath
+        /// from a scan-derived longest-common-ancestor. Rejects two shapes: (1) a candidate equal to
+        /// any configured library root (e.g. "/audiobooks"), and (2) a candidate that is a strict
+        /// ancestor of an existing non-empty, non-root <paramref name="currentBasePath"/> (e.g. scan
+        /// matched files across multiple books in the same author folder and would broaden a previously
+        /// per-book BasePath back to author-level). Both shapes re-introduce the broad-BasePath ->
+        /// cross-edition import collision loop that the kevin/live import-pipeline fixes resolve.
+        /// </summary>
+        public static bool IsAcceptableScannedBasePath(
+            string? candidate,
+            string? currentBasePath,
+            IEnumerable<string>? configuredRootPaths)
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                return false;
+            }
+
+            var normalizedCandidate = NormalizePathForCompare(candidate);
+            if (string.IsNullOrEmpty(normalizedCandidate))
+            {
+                return false;
+            }
+
+            var normalizedRoots = (configuredRootPaths ?? Enumerable.Empty<string>())
+                .Select(NormalizePathForCompare)
+                .Where(p => !string.IsNullOrEmpty(p))
+                .ToList();
+
+            if (normalizedRoots.Any(r => string.Equals(r, normalizedCandidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+
+            var normalizedCurrent = NormalizePathForCompare(currentBasePath);
+            var currentIsItselfARoot = !string.IsNullOrEmpty(normalizedCurrent)
+                && normalizedRoots.Any(r => string.Equals(r, normalizedCurrent, StringComparison.OrdinalIgnoreCase));
+
+            if (!string.IsNullOrEmpty(normalizedCurrent) && !currentIsItselfARoot)
+            {
+                var candidateIsStrictAncestorOfCurrent =
+                    normalizedCurrent.StartsWith(normalizedCandidate + "/", StringComparison.OrdinalIgnoreCase)
+                    || normalizedCurrent.StartsWith(normalizedCandidate + "\\", StringComparison.OrdinalIgnoreCase);
+                if (candidateIsStrictAncestorOfCurrent)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static string NormalizePathForCompare(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            return FileUtils.NormalizeStoredPath(path)?.TrimEnd('/', '\\') ?? string.Empty;
         }
     }
 }
