@@ -207,11 +207,10 @@ namespace Listenarr.Application.Downloads
 
                                 var destination = CombineWithOptionalBase(audiobook.BasePath, relativePath);
 
-                                // Data-safety: don't overwrite a companion file owned by another audiobook (see audio guard below).
-                                if (File.Exists(destination)
-                                    && await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
+                                // Data-safety: don't write a companion file to a path owned by another audiobook (see audio guard below).
+                                if (await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
                                 {
-                                    results.Add(ImportResult.Skipped($"Companion destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}", skippedDueToOwnershipConflict: true));
+                                    results.Add(ImportResult.Skipped($"Companion destination already registered to another audiobook; refusing to write here: {Path.GetFileName(destination)}", skippedDueToOwnershipConflict: true));
                                     continue;
                                 }
 
@@ -340,15 +339,17 @@ namespace Listenarr.Application.Downloads
 
                             var destination = CombineWithOptionalBase(destDirForFile, filename);
 
-                            // Data-safety: never move/copy on top of a file that is already registered
-                            // to a DIFFERENT audiobook. FileMover does File.Move/Copy with overwrite:true,
-                            // so without this guard a redundant or edition-colliding download would
-                            // clobber a working book's library file (and then fail to register, looping).
-                            // Skip instead — the download fails cleanly without corrupting the owner.
-                            if (File.Exists(destination)
-                                && await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
+                            // Data-safety: never write to a destination already registered to a DIFFERENT
+                            // audiobook. FileMover moves/copies with overwrite:true, so without this guard a
+                            // redundant or edition-colliding download clobbers the owner's file (and then
+                            // fails to register, looping). Gated on ownership alone (not File.Exists): two
+                            // distinct audiobook ids resolving to one path is the pathology whether or not
+                            // the file is currently on disk — and the row-present/file-missing case is the
+                            // common one here, where letting the move proceed would re-create the
+                            // cross-attribution. Skip instead — the download fails cleanly.
+                            if (await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
                             {
-                                results.Add(ImportResult.Skipped($"Destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}", skippedDueToOwnershipConflict: true));
+                                results.Add(ImportResult.Skipped($"Destination already registered to another audiobook; refusing to write here: {Path.GetFileName(destination)}", skippedDueToOwnershipConflict: true));
                                 logger.LogWarning(
                                     "ImportFilesFromDirectory: refusing to overwrite file owned by another audiobook. AudiobookId={AudiobookId}, Destination={Dest}",
                                     audiobook.Id, LogRedaction.SanitizeFilePath(destination));

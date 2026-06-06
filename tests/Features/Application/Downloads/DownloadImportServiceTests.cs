@@ -205,6 +205,45 @@ namespace Listenarr.Tests.Features.Application.Downloads
         }
 
         [Fact]
+        public async Task Import_RefusesToWrite_WhenPathOwnedByAnother_EvenIfFileMissing()
+        {
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithMoveFileOnCompleted()
+                .WithoutMetadataProcessing()
+                .Build());
+
+            var basePath = FileService.GetTempDirectory("library");
+            var destination = Path.Join(basePath, "audio.mp3");
+
+            // Owner record claims the path in the DB, but the physical file is GONE — the common
+            // live state (row present, file moved/removed). The guard must still refuse to write.
+            var owner = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithBasePath(basePath)
+                .Build());
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(owner)
+                .WithPath(destination)
+                .Build());
+            Assert.False(File.Exists(destination));
+
+            var other = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithBasePath(basePath)
+                .Build());
+            var sourcePath = FileService.GetTempDirectory("downloads");
+            var filePath = await FileService.GetFileAsync(sourcePath, "audio.mp3");
+
+            // Act
+            var downloadService = _provider.GetRequiredService<IDownloadImportService>();
+            var results = await downloadService.ImportDownloadFilesAsync(other, [filePath]);
+
+            // Nothing was written at the contested path; the source is untouched; collision surfaced.
+            Assert.False(File.Exists(destination));
+            Assert.True(File.Exists(filePath));
+            Assert.Empty(await _audiobookFileRepository.GetByAudiobookIdAsync(other.Id));
+            Assert.Contains(results, r => r.SkippedDueToOwnershipConflict);
+        }
+
+        [Fact]
         public async Task Import_DerivesBasePath_WhenAudiobookHasNone()
         {
             var root = FileService.GetTempDirectory("library-root");
