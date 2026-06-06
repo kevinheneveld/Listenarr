@@ -135,6 +135,59 @@ namespace Listenarr.Tests.Features.Application.Downloads
             Assert.False(result.ShouldReap);
         }
 
+        // ---- client-queued guard (don't reap items waiting in the client's own queue) ----
+
+        [Theory]
+        [InlineData("QUEUED")]      // NZBGet waiting in queue (processes serially)
+        [InlineData("queued")]      // case-insensitive
+        [InlineData("PP_QUEUED")]   // NZBGet post-processing queue
+        [InlineData("queuedDL")]    // qBittorrent queued behind active-torrent limit
+        [InlineData("queuedUP")]
+        [Trait("Method", "Evaluate")]
+        public void Evaluate_ClientQueued_NeverReaps_EvenPastTimeout(string clientState)
+        {
+            // Would normally reap (no progress for 1000 min), but the client says it's just waiting.
+            var windowStart = Now.AddMinutes(-1000);
+            var result = StalledDownloadReaper.Evaluate(
+                DownloadStatus.Queued, currentProgress: 0m,
+                previousSnapshot: (0m, windowStart), now: Now, timeoutMinutes: 60,
+                clientState: clientState);
+
+            Assert.False(result.ShouldReap);
+            Assert.Equal(Now, result.SnapshotAt); // snapshot kept fresh so the timer starts clean later
+        }
+
+        [Theory]
+        [InlineData("metaDL")]      // fetching metadata — genuinely dead/stuck, still reapable
+        [InlineData("stalledDL")]   // no peers — reapable once past timeout
+        [InlineData("downloading")]
+        [InlineData(null)]
+        [InlineData("")]
+        [Trait("Method", "Evaluate")]
+        public void Evaluate_NonQueuedClientState_PastTimeout_StillReaps(string? clientState)
+        {
+            var windowStart = Now.AddMinutes(-61);
+            var result = StalledDownloadReaper.Evaluate(
+                DownloadStatus.Downloading, currentProgress: 0m,
+                previousSnapshot: (0m, windowStart), now: Now, timeoutMinutes: 60,
+                clientState: clientState);
+
+            Assert.True(result.ShouldReap);
+        }
+
+        [Theory]
+        [InlineData("QUEUED", true)]
+        [InlineData("queueddl", true)]
+        [InlineData("metaDL", false)]
+        [InlineData("downloading", false)]
+        [InlineData(null, false)]
+        [InlineData("  ", false)]
+        [Trait("Method", "IsClientQueued")]
+        public void IsClientQueued_DetectsWaitingStates(string? state, bool expected)
+        {
+            Assert.Equal(expected, StalledDownloadReaper.IsClientQueued(state));
+        }
+
         // ---- StalledReaperOptions.From ----
 
         [Fact]

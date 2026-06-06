@@ -53,6 +53,25 @@ namespace Listenarr.Application.Downloads
             status is DownloadStatus.Queued or DownloadStatus.Downloading;
 
         /// <summary>
+        /// Client states that mean "waiting in the download client's own queue" — the item has been
+        /// accepted by the client but hasn't started transferring yet (e.g. NZBGet processes its queue
+        /// serially, or qBittorrent's max-active-downloads cap holds torrents back). Such a download
+        /// makes no progress <em>legitimately</em>, so the stall timer must NOT reap it — otherwise we
+        /// delete a perfectly good download out of the client before it ever gets its turn.
+        /// </summary>
+        private static readonly HashSet<string> ClientQueuedStates = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "QUEUED",     // NZBGet / SABnzbd — waiting in the client queue
+            "PP_QUEUED",  // NZBGet — queued for post-processing (download done, not stalled)
+            "queuedDL",   // qBittorrent — queued for download behind the active-torrent limit
+            "queuedUP",   // qBittorrent — queued for upload/seeding
+        };
+
+        /// <summary>True when the client reports the item as waiting in its queue (see <see cref="ClientQueuedStates"/>).</summary>
+        public static bool IsClientQueued(string? clientState) =>
+            !string.IsNullOrWhiteSpace(clientState) && ClientQueuedStates.Contains(clientState.Trim());
+
+        /// <summary>
         /// Evaluate one download against the stall timer.
         /// </summary>
         /// <param name="status">Current download status.</param>
@@ -62,6 +81,11 @@ namespace Listenarr.Application.Downloads
         /// </param>
         /// <param name="now">Current UTC time.</param>
         /// <param name="timeoutMinutes">Stall timeout in minutes; values &lt;= 0 disable reaping.</param>
+        /// <param name="clientState">
+        /// The download client's reported state for this item, if known. When it indicates the item is
+        /// waiting in the client's queue (see <see cref="IsClientQueued"/>) the item is never reaped —
+        /// it is making no progress legitimately, not stalling.
+        /// </param>
         /// <returns>
         /// Whether to reap, plus the snapshot to carry forward. When progress advances (or on the
         /// first observation) the snapshot is reset to (currentProgress, now) and ShouldReap is
@@ -73,11 +97,13 @@ namespace Listenarr.Application.Downloads
             decimal currentProgress,
             (decimal Progress, DateTime At)? previousSnapshot,
             DateTime now,
-            int timeoutMinutes)
+            int timeoutMinutes,
+            string? clientState = null)
         {
-            // Ineligible status, already-complete progress, or a disabled timeout: never reap and
-            // keep a fresh snapshot so the timer starts clean if the download later becomes eligible.
-            if (!IsReapEligibleStatus(status) || currentProgress >= 100m || timeoutMinutes <= 0)
+            // Ineligible status, already-complete progress, a disabled timeout, or an item the client
+            // reports as merely queued (waiting its turn): never reap, and keep a fresh snapshot so the
+            // stall timer only starts once the item is genuinely eligible and actively transferring.
+            if (!IsReapEligibleStatus(status) || currentProgress >= 100m || timeoutMinutes <= 0 || IsClientQueued(clientState))
             {
                 return new StallEvaluation(false, currentProgress, now);
             }

@@ -261,8 +261,11 @@ namespace Listenarr.Application.Downloads
             (decimal Progress, DateTime At)? previous =
                 _stallSnapshots.TryGetValue(download.Id, out var snap) ? snap : null;
 
+            // Pass the client-reported state so an item merely QUEUED in the client (NZBGet processes
+            // its queue serially; qBittorrent caps active torrents) is never reaped while it waits.
+            var clientState = download.GetMetadataString("ClientState");
             var evaluation = StalledDownloadReaper.Evaluate(
-                download.Status, download.Progress, previous, now, options.TimeoutMinutes);
+                download.Status, download.Progress, previous, now, options.TimeoutMinutes, clientState);
 
             _stallSnapshots[download.Id] = (evaluation.SnapshotProgress, evaluation.SnapshotAt);
 
