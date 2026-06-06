@@ -233,6 +233,39 @@ namespace Listenarr.Tests.Features.Api.Controllers
         }
 
         [Fact]
+        public async Task AddToLibrary_WithRootFolderAsDestination_AnchorsPerBookFolder()
+        {
+            var controller = _provider.GetRequiredService<LibraryController>();
+
+            // The UI sends the selected root folder as DestinationPath. Previously this was stored
+            // verbatim as BasePath (the library root), so every book dumped into one folder and
+            // collided at import. It must now anchor a per-book folder under the root.
+            var request = new LibraryController.AddToLibraryRequest
+            {
+                Metadata = new AudibleBookMetadata
+                {
+                    Title = "Root Dest Title",
+                    Author = "Root Dest Author"
+                },
+                Monitored = true,
+                DestinationPath = tempRoot   // the configured root folder itself
+            };
+
+            // Act
+            var actionResult = await controller.AddToLibrary(request);
+
+            // Assert
+            Assert.IsType<OkObjectResult>(actionResult);
+
+            var stored = (await _audiobookRepository.GetAllAsync()).First();
+            Assert.NotNull(stored);
+            // FolderNamingPattern is "{Author}" in this fixture → a per-book folder under the root,
+            // not the bare root.
+            Assert.Equal(Path.Join(tempRoot, "Root Dest Author"), stored.BasePath);
+            Assert.NotEqual(tempRoot, stored.BasePath);
+        }
+
+        [Fact]
         public async Task AddToLibrary_HandlesWrongCustomPath()
         {
             var controller = _provider.GetRequiredService<LibraryController>();

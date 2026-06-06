@@ -20,6 +20,7 @@ using System.Text;
 using Listenarr.Application.Interfaces;
 using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Application.Metadata;
+using Listenarr.Domain.Common;
 using Listenarr.Domain.Models;
 using Microsoft.Extensions.Logging;
 
@@ -183,10 +184,19 @@ namespace Listenarr.Application.Audiobooks
                 var rootFolder = await _rootFolderService.GetDefaultAsync();
                 baseDirectory = rootFolder != null ? rootFolder.Path : settings.OutputPath;
 
-                audiobook.BasePath = Path.Join(baseDirectory, _fileNamingService.ApplyNamingPattern(settings.FolderNamingPattern, metadata));
+                audiobook.BasePath = ComposePerBookBasePath(baseDirectory, settings.FolderNamingPattern, metadata);
+            }
+            else if (await IsConfiguredRootFolderAsync(baseDirectory))
+            {
+                // A bare root folder was supplied (the common "add to library" case — the UI
+                // sends the selected root). Anchor a per-book folder under it via the naming
+                // pattern so distinct books/editions don't all share one folder and then
+                // collide on identical flat filenames at import time.
+                audiobook.BasePath = ComposePerBookBasePath(baseDirectory, settings.FolderNamingPattern, metadata);
             }
             else
             {
+                // A specific per-book destination folder was supplied; use it as-is.
                 audiobook.BasePath = baseDirectory;
             }
 
@@ -211,6 +221,85 @@ namespace Listenarr.Application.Audiobooks
                 Message = "Audiobook added to library successfully",
                 Audiobook = audiobook
             };
+        }
+
+        /// <summary>
+        /// True when <paramref name="path"/> is one of the configured library root folders.
+        /// Used to decide whether a supplied destination is a root (under which we must anchor a
+        /// per-book folder) versus an already-specific per-book folder (used as-is).
+        /// </summary>
+        private async Task<bool> IsConfiguredRootFolderAsync(string path)
+        {
+            var normalized = NormalizeForCompare(path);
+            if (string.IsNullOrEmpty(normalized))
+            {
+                return false;
+            }
+
+            try
+            {
+                var roots = await _rootFolderService.GetAllAsync();
+                return roots.Any(r => !string.IsNullOrWhiteSpace(r.Path)
+                    && string.Equals(NormalizeForCompare(r.Path), normalized, StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "IsConfiguredRootFolderAsync: failed to enumerate root folders for {Path}", path);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Composes a per-book BasePath by appending the folder naming pattern under
+        /// <paramref name="root"/>. Guards against the pattern resolving to empty (poor metadata)
+        /// leaving BasePath at the bare root — which would make distinct books share one folder and
+        /// collide at import — by falling back to the sanitized title, then ASIN.
+        /// </summary>
+        private string ComposePerBookBasePath(string root, string folderPattern, AudibleBookMetadata metadata)
+        {
+            var subfolder = _fileNamingService.ApplyNamingPattern(folderPattern, metadata)?.Trim();
+
+            if (string.IsNullOrWhiteSpace(subfolder))
+            {
+                var fallback = FirstNonEmpty(metadata.Title, metadata.Asin);
+                if (!string.IsNullOrWhiteSpace(fallback))
+                {
+                    subfolder = string.Concat(fallback.Split(Path.GetInvalidFileNameChars()));
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(subfolder))
+            {
+                _logger.LogWarning(
+                    "ComposePerBookBasePath: naming pattern and fallbacks all empty for audiobook (ASIN={Asin}); BasePath will be the bare root {Root}",
+                    metadata.Asin, root);
+                return root;
+            }
+
+            return Path.Join(root, subfolder);
+        }
+
+        private static string NormalizeForCompare(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return string.Empty;
+            }
+
+            return FileUtils.NormalizeStoredPath(path)?.TrimEnd('/', '\\') ?? string.Empty;
+        }
+
+        private static string FirstNonEmpty(params string?[] values)
+        {
+            foreach (var v in values)
+            {
+                if (!string.IsNullOrWhiteSpace(v))
+                {
+                    return v!;
+                }
+            }
+
+            return string.Empty;
         }
 
         private async Task<string?> MoveImageToLibraryStorageAsync(
