@@ -211,7 +211,7 @@ namespace Listenarr.Application.Downloads
                                 if (File.Exists(destination)
                                     && await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
                                 {
-                                    results.Add(ImportResult.Skipped($"Companion destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}"));
+                                    results.Add(ImportResult.Skipped($"Companion destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}", skippedDueToOwnershipConflict: true));
                                     continue;
                                 }
 
@@ -348,7 +348,7 @@ namespace Listenarr.Application.Downloads
                             if (File.Exists(destination)
                                 && await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
                             {
-                                results.Add(ImportResult.Skipped($"Destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}"));
+                                results.Add(ImportResult.Skipped($"Destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}", skippedDueToOwnershipConflict: true));
                                 logger.LogWarning(
                                     "ImportFilesFromDirectory: refusing to overwrite file owned by another audiobook. AudiobookId={AudiobookId}, Destination={Dest}",
                                     audiobook.Id, LogRedaction.SanitizeFilePath(destination));

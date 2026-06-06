@@ -28,6 +28,13 @@ namespace Listenarr.Domain.Models
         public string? Message { get; set; }
         public FileAction Action { get; set; }
         public bool WasRegisteredToAudiobook { get; set; }
+
+        /// <summary>
+        /// True when the file was skipped because its destination is already registered to a
+        /// different audiobook (a duplicate/edition-record collision), so we refused to overwrite it.
+        /// Lets the processor report an accurate failure reason instead of a generic registration gap.
+        /// </summary>
+        public bool SkippedDueToOwnershipConflict { get; set; }
         public DateTime? Timestamp { get; set; } = DateTime.UtcNow;
 
         public override string ToString()
@@ -69,12 +76,13 @@ namespace Listenarr.Domain.Models
             };
         }
 
-        public static ImportResult Skipped(string message)
+        public static ImportResult Skipped(string message, bool skippedDueToOwnershipConflict = false)
         {
             return new ImportResult
             {
                 Success = true,
-                Message = message
+                Message = message,
+                SkippedDueToOwnershipConflict = skippedDueToOwnershipConflict
             };
         }
     }

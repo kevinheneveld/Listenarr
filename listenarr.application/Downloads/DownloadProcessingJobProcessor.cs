@@ -276,6 +276,17 @@ namespace Listenarr.Application.Downloads
                 var existingAudiobookFiles = await audiobookFileRepository.GetByAudiobookIdAsync(audiobook.Id, cancellationToken);
                 if (existingAudiobookFiles.Count <= 0)
                 {
+                    // Distinguish a real registration gap from a file-ownership collision: when every
+                    // file was refused because it already belongs to another audiobook, this download is
+                    // a duplicate/edition-record competing for files a sibling record already owns — not
+                    // an unexpected import failure. Report that accurately so it's diagnosable (and so the
+                    // eventual dedup migration can find these).
+                    if (results.Any(r => r.SkippedDueToOwnershipConflict))
+                    {
+                        await downloadProcessingJobService.UpdateJobAsync(job.MarkAsFailed("All files already belong to another audiobook (likely a duplicate or edition-record collision); nothing was imported. The owning record keeps its files; consider deduplicating these audiobook records."));
+                        return;
+                    }
+
                     await downloadProcessingJobService.UpdateJobAsync(job.MarkAsFailed($"Unexpected issue: No audio files were registered to the audiobook but files have been imported"));
                     return;
                 }

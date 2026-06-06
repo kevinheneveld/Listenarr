@@ -216,6 +216,56 @@ namespace Listenarr.Tests.Features.Application.Downloads
         }
 
         [Fact]
+        public async Task CompletedDownload_FilesOwnedByAnotherAudiobook_FailsWithCollisionMessage()
+        {
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithMoveFileOnCompleted()
+                .WithoutMetadataProcessing()
+                .Build());
+
+            var basePath = FileService.GetTempDirectory("collision-dest");
+            var ownedPath = Path.Join(basePath, "Shared Title.m4b");
+
+            // Owner audiobook already has this file registered and present on disk.
+            var owner = await _audiobookRepository.AddAsync(new AudiobookBuilder().WithBasePath(basePath).Build());
+            await File.WriteAllTextAsync(ownedPath, "OWNER");
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(owner)
+                .WithPath(ownedPath)
+                .Build());
+
+            // A different audiobook's completed download resolves to the same destination path.
+            var other = await _audiobookRepository.AddAsync(new AudiobookBuilder().WithBasePath(basePath).Build());
+            var sourcePath = FileService.GetTempDirectory("downloads");
+            var sourceFile = await FileService.GetFileAsync(sourcePath, "Shared Title.m4b");
+
+            downloadClientGatewayMock.SourceFiles = [sourceFile];
+
+            var download = await _downloadRepository.AddAsync(new DownloadBuilder()
+                .WithAudiobook(other)
+                .WithDownloadClientConfiguration(await CreateDownloadClientConfiguration())
+                .WithCompletedStatus(at: DateTime.UtcNow)
+                .WithPath(sourcePath)
+                .Build());
+
+            var job = await _downloadProcessingJobRepository.AddAsync(new DownloadProcessingJobBuilder()
+                .WithDownload(download)
+                .Build());
+
+            // Act
+            var processor = _provider.GetRequiredService<DownloadProcessingJobProcessor>();
+            await processor.ProcessQueueAsync(CancellationToken.None);
+
+            // Owner's file is untouched and the job fails with the collision-specific reason.
+            Assert.Equal("OWNER", await File.ReadAllTextAsync(ownedPath));
+            job = await _downloadProcessingJobRepository.GetByIdAsync(job.Id);
+            Assert.NotNull(job);
+            Assert.Equal(ProcessingJobStatus.Failed, job.Status);
+            Assert.NotNull(job.ErrorMessage);
+            Assert.Contains("already belong to another audiobook", job.ErrorMessage);
+        }
+
+        [Fact]
         public async Task RetryJob_IsNotProcessedBeforeTheRetryTimerExpires()
         {
             var sourceDirectory = FileService.GetTempDirectory("source-directory");
