@@ -161,6 +161,50 @@ namespace Listenarr.Tests.Features.Application.Downloads
         }
 
         [Fact]
+        public async Task Import_RefusesToOverwriteFileOwnedByAnotherAudiobook()
+        {
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithMoveFileOnCompleted()
+                .WithoutMetadataProcessing()
+                .Build());
+
+            var basePath = FileService.GetTempDirectory("library");
+            var destination = Path.Join(basePath, "audio.mp3");
+
+            // Owner audiobook already has a registered file physically present at the destination.
+            var owner = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithBasePath(basePath)
+                .Build());
+            await File.WriteAllTextAsync(destination, "ORIGINAL-OWNER-CONTENT");
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(owner)
+                .WithPath(destination)
+                .Build());
+
+            // A different audiobook downloads a file that resolves to the SAME destination path.
+            var other = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithBasePath(basePath)
+                .Build());
+            var sourcePath = FileService.GetTempDirectory("downloads");
+            var filePath = await FileService.GetFileAsync(sourcePath, "audio.mp3");
+            await File.WriteAllTextAsync(filePath, "NEW-DIFFERENT-CONTENT");
+
+            // Act
+            var downloadService = _provider.GetRequiredService<IDownloadImportService>();
+            var results = await downloadService.ImportDownloadFilesAsync(other, [filePath]);
+
+            // Owner's file is untouched — not overwritten with the colliding download's content.
+            Assert.Equal("ORIGINAL-OWNER-CONTENT", await File.ReadAllTextAsync(destination));
+            // The source file was not moved (the move was refused before it ran).
+            Assert.True(File.Exists(filePath));
+            // The colliding audiobook did not register the file.
+            var otherFiles = await _audiobookFileRepository.GetByAudiobookIdAsync(other.Id);
+            Assert.Empty(otherFiles);
+            // The result surfaces the refusal.
+            Assert.Contains(results, r => (r.Message ?? string.Empty).Contains("another audiobook", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
         public async Task DoesNotImportBlacklisted()
         {
             var basePath = FileService.GetTempDirectory("destination");

@@ -17,6 +17,8 @@
  */
 using Listenarr.Application.Common;
 using Listenarr.Application.Interfaces;
+using Listenarr.Application.Interfaces.Repositories;
+using Listenarr.Application.Security;
 using Listenarr.Domain.Common;
 using Listenarr.Domain.Models;
 using Listenarr.Domain.Models.Enumerations;
@@ -31,6 +33,7 @@ namespace Listenarr.Application.Downloads
         IAudiobookFileService audiobookFileService,
         IArchiveExtractor archiveExtractor,
         IConfigurationService configurationService,
+        IAudiobookFileRepository audiobookFileRepository,
         ILogger<DownloadImportService> logger) : IDownloadImportService
     {
         private List<TempDirectory> archiveDirectories = [];
@@ -193,6 +196,14 @@ namespace Listenarr.Application.Downloads
 
                                 var destination = CombineWithOptionalBase(audiobook.BasePath, relativePath);
 
+                                // Data-safety: don't overwrite a companion file owned by another audiobook (see audio guard below).
+                                if (File.Exists(destination)
+                                    && await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
+                                {
+                                    results.Add(ImportResult.Skipped($"Companion destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}"));
+                                    continue;
+                                }
+
                                 if (!await fileMover.PerformActionOn(completedFileAction, file, destination))
                                 {
                                     results.Add(ImportResult.ImportFailure(completedFileAction, file, destination));
@@ -317,6 +328,21 @@ namespace Listenarr.Application.Downloads
                             }
 
                             var destination = CombineWithOptionalBase(destDirForFile, filename);
+
+                            // Data-safety: never move/copy on top of a file that is already registered
+                            // to a DIFFERENT audiobook. FileMover does File.Move/Copy with overwrite:true,
+                            // so without this guard a redundant or edition-colliding download would
+                            // clobber a working book's library file (and then fail to register, looping).
+                            // Skip instead — the download fails cleanly without corrupting the owner.
+                            if (File.Exists(destination)
+                                && await audiobookFileRepository.IsPathUsedByOtherAsync(audiobook.Id, destination, ct))
+                            {
+                                results.Add(ImportResult.Skipped($"Destination already registered to another audiobook; refusing to overwrite: {Path.GetFileName(destination)}"));
+                                logger.LogWarning(
+                                    "ImportFilesFromDirectory: refusing to overwrite file owned by another audiobook. AudiobookId={AudiobookId}, Destination={Dest}",
+                                    audiobook.Id, LogRedaction.SanitizeFilePath(destination));
+                                continue;
+                            }
 
                             if (!await fileMover.PerformActionOn(completedFileAction, file, destination))
                             {
