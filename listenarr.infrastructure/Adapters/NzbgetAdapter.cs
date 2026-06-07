@@ -1190,6 +1190,11 @@ namespace Listenarr.Infrastructure.Adapters
                     http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authHeader);
                 }
 
+                // Track which NZBIDs are present in the active queue this cycle so the history
+                // reconciliation below only acts on downloads that have actually left the queue.
+                var queueNzbIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var queueFetched = false;
+
                 // Get active downloads from status for progress updates
                 var statusRequest = new
                 {
@@ -1228,6 +1233,7 @@ namespace Listenarr.Infrastructure.Adapters
 
                             if (queueDoc.RootElement.TryGetProperty("result", out var queueResult) && queueResult.ValueKind == JsonValueKind.Array)
                             {
+                                queueFetched = true;
                                 foreach (var group in queueResult.EnumerateArray())
                                 {
                                     try
@@ -1238,6 +1244,7 @@ namespace Listenarr.Infrastructure.Adapters
                                         // downloads stuck in Queued forever. Read both number and string shapes.
                                         // See Listenarrs/Listenarr#619.
                                         var nzbId = group.TryGetProperty("NZBID", out var nzbIdProp) ? (int)ReadJsonNumber(nzbIdProp) : 0;
+                                        if (nzbId != 0) { queueNzbIds.Add(nzbId.ToString()); }
                                         var nzbName = group.TryGetProperty("NZBName", out var nameProp) ? nameProp.GetString() ?? "" : "";
                                         var status = group.TryGetProperty("Status", out var statusProp) ? statusProp.GetString() ?? "" : "";
                                         var totalMB = group.TryGetProperty("FileSizeMB", out var sizeProp) ? ReadJsonNumber(sizeProp) : 0d;
@@ -1273,12 +1280,143 @@ namespace Listenarr.Infrastructure.Adapters
                     }
                 }
 
+                // Reconcile downloads NZBGet has finished with but that left the active queue
+                // (dupe-deleted or failed) — see ReconcileTerminalFromHistoryAsync. Only runs when the
+                // queue fetch succeeded, so "absent from queue" is meaningful and we never fail an item
+                // we merely failed to observe.
+                if (queueFetched)
+                {
+                    await ReconcileTerminalFromHistoryAsync(client, downloads, queueNzbIds, http, baseUrl, cancellationToken);
+                }
+
                 return downloads;
             }
             catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException or StackOverflowException))
             {
                 throw new DownloadClientAdapterPollingException($"Error polling NZBGet client {client.Id}", exception);
             }
+        }
+
+        /// <summary>
+        /// Reconcile tracked downloads against NZBGet history — parity with the SABnzbd/qBittorrent
+        /// adapters, which the NZBGet adapter was missing. Items NZBGet has finished with leave the
+        /// active queue (listgroups) and move to history; the queue-only progress poll never sees a
+        /// terminal state for them, so without this pass a download NZBGet deleted as a duplicate
+        /// (DELETED/COPY, DELETED/GOOD) or failed (FAILURE/*) is orphaned in Queued/Downloading
+        /// forever. Acts only on tracked downloads still in a non-terminal state and absent from the
+        /// queue this cycle; SUCCESS/* is left to the completion-detection path. Duplicate removals are
+        /// blocked (terminal, no re-search) so they don't trigger an auto-search that re-grabs the same
+        /// duplicate NZBGet will reject again; genuine failures are failed so the normal retry/
+        /// auto-search applies.
+        /// </summary>
+        private async Task ReconcileTerminalFromHistoryAsync(
+            DownloadClientConfiguration client, List<Download> downloads, HashSet<string> queueNzbIds,
+            HttpClient http, Uri baseUrl, CancellationToken ct)
+        {
+            var pending = downloads
+                .Where(d => d.Status == DownloadStatus.Queued || d.Status == DownloadStatus.Downloading)
+                .Where(d =>
+                {
+                    var id = d.GetExternalId();
+                    return string.IsNullOrEmpty(id) || !queueNzbIds.Contains(id);
+                })
+                .ToList();
+            if (pending.Count == 0) return;
+
+            try
+            {
+                var historyRequest = JsonSerializer.Serialize(new { method = "history", id = 4, @params = new object[] { false } });
+                using var content = new StringContent(historyRequest, Encoding.UTF8, "application/json");
+                using var response = await http.PostAsync(baseUrl, content, ct);
+                if (!response.IsSuccessStatusCode) return;
+
+                var json = await response.Content.ReadAsStringAsync(ct);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array) return;
+
+                foreach (var entry in result.EnumerateArray())
+                {
+                    var nzbId = entry.TryGetProperty("NZBID", out var idProp) ? (int)ReadJsonNumber(idProp) : 0;
+                    var status = entry.TryGetProperty("Status", out var sProp) ? sProp.GetString() ?? string.Empty : string.Empty;
+                    var name = entry.TryGetProperty("Name", out var nProp) ? nProp.GetString() ?? string.Empty
+                        : entry.TryGetProperty("NZBName", out var nnProp) ? nnProp.GetString() ?? string.Empty : string.Empty;
+                    if (string.IsNullOrEmpty(status)) continue;
+
+                    var (act, block, reason) = ClassifyNzbgetHistoryStatus(status);
+                    if (!act) continue;
+
+                    var match = pending.FirstOrDefault(d =>
+                    {
+                        var id = d.GetExternalId();
+                        return !string.IsNullOrEmpty(id) && id.Equals(nzbId.ToString(), StringComparison.OrdinalIgnoreCase);
+                    });
+                    if (match == null && !string.IsNullOrEmpty(name))
+                    {
+                        match = pending.FirstOrDefault(d => TitleUtils.AreTitlesSimilar(d.Title, name));
+                    }
+                    if (match == null) continue;
+
+                    if (block)
+                    {
+                        // ImportBlocked is only reachable from Downloading/Processing/ImportPending/
+                        // Completed; nudge a queued-but-removed dupe through Downloading so the terminal
+                        // transition is valid. Only the final ImportBlocked state is persisted.
+                        if (match.Status == DownloadStatus.Queued)
+                        {
+                            match.SetStatus(DownloadStatus.Downloading);
+                        }
+                        match.Blocked(reason, $"NZBGet history status: {status}");
+                        _logger.LogInformation("Blocked duplicate NZBGet download {Id} ({Status})", LogRedaction.SanitizeText(match.Id), status);
+                    }
+                    else
+                    {
+                        match.Failed(reason);
+                        _logger.LogInformation("Failed NZBGet download {Id} removed from queue ({Status})", LogRedaction.SanitizeText(match.Id), status);
+                    }
+
+                    pending.Remove(match);
+                    if (pending.Count == 0) break;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "NZBGet history reconciliation failed for client {ClientName}", LogRedaction.SanitizeText(client.Name ?? client.Id));
+            }
+        }
+
+        /// <summary>
+        /// Classify an NZBGet history <c>Status</c> string for reconciliation. Returns whether to act,
+        /// whether to block (vs fail), and a human reason. SUCCESS/* and non-terminal states (WARNING/*)
+        /// are left alone. Duplicate removals (DELETED/COPY|DUPE|GOOD) and ambiguous removals
+        /// (DELETED/MANUAL|SCAN) block — terminal, no auto-search re-grab; genuine failures
+        /// (FAILURE/*, DELETED/HEALTH, DELETED/BAD) fail so the normal retry/auto-search applies.
+        /// </summary>
+        internal static (bool act, bool block, string reason) ClassifyNzbgetHistoryStatus(string status)
+        {
+            var s = (status ?? string.Empty).ToUpperInvariant();
+            if (s.StartsWith("SUCCESS", StringComparison.Ordinal))
+            {
+                return (false, false, string.Empty); // completion-detection path owns successes
+            }
+            if (s.StartsWith("FAILURE", StringComparison.Ordinal) || s.StartsWith("FAILED", StringComparison.Ordinal))
+            {
+                return (true, false, $"NZBGet reported {status}");
+            }
+            if (s.StartsWith("DELETED/COPY", StringComparison.Ordinal)
+                || s.StartsWith("DELETED/DUPE", StringComparison.Ordinal)
+                || s.StartsWith("DELETED/GOOD", StringComparison.Ordinal))
+            {
+                return (true, true, $"NZBGet removed this download as a duplicate ({status})");
+            }
+            if (s.StartsWith("DELETED/HEALTH", StringComparison.Ordinal) || s.StartsWith("DELETED/BAD", StringComparison.Ordinal))
+            {
+                return (true, false, $"NZBGet deleted this download as bad/unhealthy ({status})");
+            }
+            if (s.StartsWith("DELETED", StringComparison.Ordinal))
+            {
+                return (true, true, $"NZBGet removed this download ({status})"); // MANUAL/SCAN/other: terminal, don't re-search
+            }
+            return (false, false, string.Empty); // WARNING/* and anything else: not terminal
         }
     }
 }

@@ -425,5 +425,52 @@ namespace Listenarr.Tests.Features.Infrastructure.Adapters
             Assert.Equal(0d, NzbgetAdapter.ReadJsonNumber(Prop("{\"x\":\"notanumber\"}", "x")));
             Assert.Equal(0d, NzbgetAdapter.ReadJsonNumber(Prop("{\"x\":null}", "x")));
         }
+
+        // History-reconciliation classification: NZBGet's dupe-deleted grabs (DELETED/COPY|GOOD) must
+        // be blocked (terminal, no auto-search re-grab — which with FailedDownloadAutoSearch on would
+        // just re-fetch a duplicate NZBGet rejects again), while genuine failures (FAILURE/*, bad/
+        // unhealthy DELETEs) fail so the normal retry path applies. SUCCESS/* and non-terminal states
+        // are left untouched so the completion-detection path keeps owning them.
+        [Theory]
+        [InlineData("DELETED/COPY")]
+        [InlineData("DELETED/DUPE")]
+        [InlineData("DELETED/GOOD")]
+        [InlineData("DELETED/MANUAL")]
+        [InlineData("DELETED/SCAN")]
+        public void ClassifyHistoryStatus_DuplicateOrAmbiguousRemoval_Blocks(string status)
+        {
+            var (act, block, reason) = NzbgetAdapter.ClassifyNzbgetHistoryStatus(status);
+            Assert.True(act);
+            Assert.True(block);
+            Assert.NotEmpty(reason);
+        }
+
+        [Theory]
+        [InlineData("FAILURE/HEALTH")]
+        [InlineData("FAILURE/PAR")]
+        [InlineData("FAILURE/UNPACK")]
+        [InlineData("DELETED/HEALTH")]
+        [InlineData("DELETED/BAD")]
+        public void ClassifyHistoryStatus_RealFailure_Fails(string status)
+        {
+            var (act, block, reason) = NzbgetAdapter.ClassifyNzbgetHistoryStatus(status);
+            Assert.True(act);
+            Assert.False(block);
+            Assert.NotEmpty(reason);
+        }
+
+        [Theory]
+        [InlineData("SUCCESS/ALL")]
+        [InlineData("SUCCESS/UNPACK")]
+        [InlineData("SUCCESS/HEALTH")]
+        [InlineData("WARNING/HEALTH")]
+        [InlineData("")]
+        [InlineData("DOWNLOADING")]
+        public void ClassifyHistoryStatus_SuccessOrNonTerminal_NoAction(string status)
+        {
+            var (act, block, _) = NzbgetAdapter.ClassifyNzbgetHistoryStatus(status);
+            Assert.False(act);
+            Assert.False(block);
+        }
     }
 }
