@@ -127,6 +127,24 @@ namespace Listenarr.Application.Downloads
 
                 await downloadService.UpdateAsync(
                     download.Blocked("Unable to import the download", $"See the log of job {job.Id} for more information"));
+
+                // Record the terminal import failure in download history. The import pipeline was
+                // rationalized (#535/#492) onto this job processor, but the ImportFailed history
+                // event recording did not move with it, so the dashboard Activity graph and import
+                // success-rate stat have read zero failures since. This is the single funnel where a
+                // job that exhausted its retries blocks its download — the right place to record it.
+                // Best-effort for the same reason as the success path: the download is already
+                // Blocked (terminal) by the time we get here, so a failed write only drops the row.
+                try
+                {
+                    var historyService = scope.ServiceProvider.GetRequiredService<IDownloadHistoryService>();
+                    await historyService.RecordImportFailedAsync(
+                        download.Id, download.DownloadClientId, download.Title, "Unable to import the download");
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    logger.LogWarning(ex, "Failed to record ImportFailed history event for download {DownloadId}", download.Id);
+                }
             }
         }
 
@@ -323,6 +341,29 @@ namespace Listenarr.Application.Downloads
             }
 
             await downloadService.UpdateAsync(download.Imported());
+
+            // Record the successful import in download history. This is the event the dashboard
+            // Activity graph ("Imported") and the import success-rate stat count; recording it was
+            // lost when the import pipeline was rationalized onto this job processor (#535/#492).
+            // AudiobookId is intentionally null: Download.AudiobookId is an int key, the history
+            // column is a Guid, and the metric only counts events.
+            //
+            // Best-effort: the history write must never disrupt the import control flow. Its
+            // SaveChangesAsync can transiently throw SQLITE_BUSY on a busy instance; if that escaped
+            // here — download already Moved, job not yet MarkAsCompleted — the job would be reset and
+            // reprocessed, and the Moved download (no longer AwaitsImportation) would be wrongly
+            // Blocked with a phantom ImportFailed event. A failed write instead just leaves the row
+            // absent (the pre-fix state for that one download).
+            try
+            {
+                var downloadHistoryService = scope.ServiceProvider.GetRequiredService<IDownloadHistoryService>();
+                await downloadHistoryService.RecordImportedAsync(
+                    download.Id, download.DownloadClientId, download.Title);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogWarning(ex, "Failed to record Imported history event for download {DownloadId}", download.Id);
+            }
 
             var downloadClientGateway = scope.ServiceProvider.GetRequiredService<IDownloadClientGateway>();
             if (!await downloadClientGateway.MarkItemAsImportedAsync(client, download))

@@ -16,10 +16,12 @@ namespace Listenarr.Tests.Features.Application.Downloads
     {
         private readonly Mock<IDownloadImportService> downloadImportServiceMock = new();
         private readonly DownloadClientGatewayMock downloadClientGatewayMock = new();
+        private readonly Mock<IDownloadHistoryService> downloadHistoryServiceMock = new();
 
         public override async Task InitializeAsync()
         {
             _services.AddSingleton<IDownloadClientGateway>(downloadClientGatewayMock);
+            _services.AddSingleton<IDownloadHistoryService>(downloadHistoryServiceMock.Object);
             Init();
         }
 
@@ -49,6 +51,11 @@ namespace Listenarr.Tests.Features.Application.Downloads
             job = await _downloadProcessingJobRepository.GetByIdAsync(job.Id);
             Assert.NotNull(job);
             Assert.Equal(ProcessingJobStatus.Failed, job.Status);
+
+            // A terminal import failure must be recorded in download history so the dashboard
+            // Activity graph and import success-rate stat reflect it (regression from #535/#492).
+            downloadHistoryServiceMock.Verify(m => m.RecordImportFailedAsync(
+                download.Id, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
         }
 
         [Theory]
@@ -139,6 +146,11 @@ namespace Listenarr.Tests.Features.Application.Downloads
             download = await _downloadRepository.GetByIdAsync(download.Id);
             Assert.NotNull(download);
             Assert.True(download.Status == DownloadStatus.Moved, $"Expected Moved, got {download.Status}");
+
+            // A successful import must be recorded in download history — this is the event the
+            // dashboard Activity graph ("Imported") counts (regression from #535/#492).
+            downloadHistoryServiceMock.Verify(m => m.RecordImportedAsync(
+                download.Id, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>()), Times.Once);
         }
 
         [Fact]
