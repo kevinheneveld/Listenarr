@@ -147,7 +147,8 @@ namespace Listenarr.Application.Search
                 try
                 {
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
-                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, filterPipeline, stoppingToken);
+                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, filterPipeline, stoppingToken,
+                        suppressIfImportBlocked: true);
 
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
@@ -210,7 +211,10 @@ namespace Listenarr.Application.Search
             {
                 var queued = await ProcessAudiobookAsync(
                     audiobook, searchService, qualityProfileService, downloadService,
-                    audiobookRepository, downloadRepository, fileRepository, filterPipeline, ct);
+                    audiobookRepository, downloadRepository, fileRepository, filterPipeline, ct,
+                    // Manual "Search now" is an explicit user override — re-search even a book whose
+                    // only download is ImportBlocked (e.g. a dupe NZBGet rejected).
+                    suppressIfImportBlocked: false);
 
                 audiobook.LastSearchTime = DateTime.UtcNow;
                 await audiobookRepository.UpdateAsync(audiobook);
@@ -248,7 +252,8 @@ namespace Listenarr.Application.Search
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
             SearchResultFilterPipeline filterPipeline,
-            CancellationToken stoppingToken)
+            CancellationToken stoppingToken,
+            bool suppressIfImportBlocked)
         {
             var qualityProfile = audiobook.QualityProfile;
             if (qualityProfile == null)
@@ -269,7 +274,11 @@ namespace Listenarr.Application.Search
                 return 0;
             }
 
-            // Check if there's already an active download for this audiobook
+            // Check if there's already an active (or blocked) download for this audiobook.
+            // ImportBlocked is treated as blocking for the *background* cycle only: a blocked import
+            // needs attention, not another grab — re-searching it just re-grabs (e.g. a duplicate
+            // NZBGet rejects again) and churns. The manual "Search now" path passes
+            // suppressIfImportBlocked=false so an explicit user request still overrides the block.
             var allDownloads = await downloadRepository.GetByAudiobookIdAsync(audiobook.Id, stoppingToken);
             var activeDownload = allDownloads.FirstOrDefault(d =>
                 d.Status == DownloadStatus.Queued ||
@@ -277,11 +286,12 @@ namespace Listenarr.Application.Search
                 d.Status == DownloadStatus.Paused ||
                 d.Status == DownloadStatus.Processing ||
                 d.Status == DownloadStatus.Ready ||
-                d.Status == DownloadStatus.ImportPending);
+                d.Status == DownloadStatus.ImportPending ||
+                (suppressIfImportBlocked && d.Status == DownloadStatus.ImportBlocked));
 
             if (activeDownload != null)
             {
-                _logger.LogInformation("Audiobook '{Title}' already has an active download (ID: {DownloadId}, Status: {Status}), skipping automatic search",
+                _logger.LogInformation("Audiobook '{Title}' already has an active or blocked download (ID: {DownloadId}, Status: {Status}), skipping automatic search",
                     audiobook.Title, activeDownload.Id, activeDownload.Status);
                 return 0;
             }

@@ -35,7 +35,7 @@ namespace Listenarr.Tests.Features.Api.Services
     /// </summary>
     public class AutomaticSearchServiceTests
     {
-        private static (AutomaticSearchService svc, Mock<IDownloadService> download) BuildService(
+        private static (AutomaticSearchService svc, Mock<IDownloadService> download, Mock<ISearchService> search) BuildService(
             Audiobook audiobook,
             List<Download> downloads,
             List<AudiobookFile> files)
@@ -73,7 +73,7 @@ namespace Listenarr.Tests.Features.Api.Services
             var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
 
             var svc = new AutomaticSearchService(NullLogger<AutomaticSearchService>.Instance, scopeFactory);
-            return (svc, download);
+            return (svc, download, search);
         }
 
         private static QualityProfile M4bProfile() => new()
@@ -92,7 +92,7 @@ namespace Listenarr.Tests.Features.Api.Services
             var audiobook = new Audiobook { Id = 42, Title = "Test Book", QualityProfile = M4bProfile() };
             var downloads = new List<Download> { new() { Status = DownloadStatus.Downloading } };
 
-            var (svc, download) = BuildService(audiobook, downloads, new List<AudiobookFile>());
+            var (svc, download, _) = BuildService(audiobook, downloads, new List<AudiobookFile>());
 
             var result = await svc.SearchAudiobookNowAsync(42);
 
@@ -103,13 +103,38 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
+        public async Task SearchAudiobookNowAsync_OverridesImportBlockedDownload()
+        {
+            // A download NZBGet rejected as a duplicate ends up ImportBlocked. The background cycle now
+            // treats ImportBlocked as blocking (so it doesn't churn-grab the duplicate again), but an
+            // explicit manual "Search now" must still override the block and actually search.
+            var audiobook = new Audiobook { Id = 44, Title = "Blocked Dup", QualityProfile = M4bProfile() };
+            var downloads = new List<Download> { new() { Status = DownloadStatus.ImportBlocked } };
+
+            var (svc, _, search) = BuildService(audiobook, downloads, new List<AudiobookFile>());
+            search.Setup(s => s.SearchAsync(
+                    It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<List<string>?>(),
+                    It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), It.IsAny<bool>()))
+                .ReturnsAsync(new List<SearchResult>());
+
+            var result = await svc.SearchAudiobookNowAsync(44);
+
+            Assert.True(result.Success);
+            // Got past the ImportBlocked gate: the search was actually attempted (unlike an active
+            // Queued/Downloading download, which still short-circuits — see the test above).
+            search.Verify(s => s.SearchAsync(
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<List<string>?>(),
+                It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), It.IsAny<bool>()), Times.AtLeastOnce);
+        }
+
+        [Fact]
         public async Task SearchAudiobookNowAsync_SkipsWhenQualityCutoffMet()
         {
             var audiobook = new Audiobook { Id = 43, Title = "Test Book", QualityProfile = M4bProfile() };
             // An existing M4B file meets the M4B cutoff, so no search/grab should happen.
             var files = new List<AudiobookFile> { new() { Path = "/library/test.m4b", Container = "m4b" } };
 
-            var (svc, download) = BuildService(audiobook, new List<Download>(), files);
+            var (svc, download, _) = BuildService(audiobook, new List<Download>(), files);
 
             var result = await svc.SearchAudiobookNowAsync(43);
 
@@ -122,7 +147,7 @@ namespace Listenarr.Tests.Features.Api.Services
         [Fact]
         public async Task SearchAudiobookNowAsync_ReturnsNotFoundForUnknownId()
         {
-            var (svc, _) = BuildService(
+            var (svc, _, _) = BuildService(
                 new Audiobook { Id = 1, Title = "Seed" }, new List<Download>(), new List<AudiobookFile>());
 
             // Id 999 is never set up on the repo mock, so GetByIdAsync returns null.
