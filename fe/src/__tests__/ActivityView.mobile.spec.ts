@@ -38,17 +38,35 @@ describe('ActivityView mobile virtualization', () => {
   })
 
   it('renders the full activity list without virtualization on mobile', async () => {
-    const queueItems = Array.from({ length: 25 }, (_, index) => ({
-      id: `queue-${index + 1}`,
-      title: `Queued Item ${index + 1}`,
-      status: 'downloading',
+    const activityItems = Array.from({ length: 25 }, (_, index) => ({
+      id: `act-${index + 1}`,
+      title: `Activity Item ${index + 1}`,
+      artist: '',
+      category: 'InProgress',
+      status: 'Downloading',
       progress: 42,
-      size: 4096,
-      downloaded: 2048,
+      totalSize: 4096,
+      downloadedSize: 2048,
+      startedAt: new Date().toISOString(),
+      activityAt: new Date().toISOString(),
+      attemptCount: 1,
       downloadClientId: 'qbittorrent',
-      downloadClient: 'qBittorrent',
-      canRemove: true,
+      downloadClientName: 'qBittorrent',
     }))
+
+    const activityResponse = {
+      summary: {
+        inProgress: 25,
+        blocked: 0,
+        imported: 0,
+        failed: 0,
+        stalled: 0,
+        windowHours: 24,
+        failureReasons: [],
+      },
+      items: activityItems,
+      totalItems: 25,
+    }
 
     vi.spyOn(globalThis, 'setInterval').mockReturnValue(
       1 as unknown as ReturnType<typeof setInterval>,
@@ -63,29 +81,14 @@ describe('ActivityView mobile virtualization', () => {
 
     vi.doMock('@/services/api', () => ({
       apiService: {
-        getQueue: vi.fn(async () => queueItems),
+        getQueue: vi.fn(async () => []),
+        getActivity: vi.fn(async () => activityResponse),
       },
-    }))
-
-    vi.doMock('@/stores/configuration', () => ({
-      useConfigurationStore: () => ({
-        applicationSettings: { showCompletedExternalDownloads: false },
-        loadApplicationSettings: vi.fn(async () => undefined),
-      }),
     }))
 
     vi.doMock('@/stores/library', () => ({
       useLibraryStore: () => ({
         audiobooks: [],
-      }),
-    }))
-
-    vi.doMock('@/stores/downloads', () => ({
-      useDownloadsStore: () => ({
-        activeDownloads: [],
-        completedDownloads: [],
-        failedDownloads: [],
-        loadDownloads: vi.fn(async () => undefined),
       }),
     }))
 
@@ -103,6 +106,7 @@ describe('ActivityView mobile virtualization', () => {
           EmptyState: true,
           LoadingState: true,
           ProgressBar: true,
+          RouterLink: { template: '<a><slot /></a>' },
         },
       },
     })

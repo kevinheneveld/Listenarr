@@ -18,6 +18,8 @@
 import type {
   SearchResult,
   Download,
+  ActivityResponse,
+  ActivityCategory,
   ApiConfiguration,
   DownloadClientConfiguration,
   ApplicationSettings,
@@ -762,6 +764,21 @@ class ApiService {
   // Downloads API
   async getDownloads(): Promise<Download[]> {
     return this.request<Download[]>('/downloads')
+  }
+
+  async getActivity(options?: {
+    category?: ActivityCategory
+    windowHours?: number
+    page?: number
+    pageSize?: number
+  }): Promise<ActivityResponse> {
+    const params = new URLSearchParams()
+    if (options?.category) params.set('category', options.category)
+    if (options?.windowHours != null) params.set('windowHours', String(options.windowHours))
+    if (options?.page != null) params.set('page', String(options.page))
+    if (options?.pageSize != null) params.set('pageSize', String(options.pageSize))
+    const qs = params.toString()
+    return this.request<ActivityResponse>(`/downloads/activity${qs ? `?${qs}` : ''}`)
   }
 
   async getDownload(id: string): Promise<Download> {
