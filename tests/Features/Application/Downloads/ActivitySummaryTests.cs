@@ -115,20 +115,21 @@ namespace Listenarr.Tests.Features.Application.Downloads
         }
 
         [Fact]
-        public void Build_DefaultView_WindowsBlocked_ButChipCountStaysAllTime()
+        public void Build_DefaultView_ExcludesBlocked_ButChipCountStaysAllTime()
         {
             var downloads = new[]
             {
-                Make(DownloadStatus.ImportBlocked, audiobookId: 1, startedAt: Now.AddHours(-2)), // recent
-                Make(DownloadStatus.ImportBlocked, audiobookId: 2, startedAt: Now.AddDays(-30)), // old backlog
+                Make(DownloadStatus.Downloading, audiobookId: 1, startedAt: Now.AddMinutes(-5)),
+                Make(DownloadStatus.ImportBlocked, audiobookId: 2, startedAt: Now.AddHours(-2)), // recent block
+                Make(DownloadStatus.ImportBlocked, audiobookId: 3, startedAt: Now.AddDays(-30)), // old backlog
             };
 
             var result = ActivitySummary.Build(downloads, Now);
 
-            // Default list shows only the recent blocked item...
+            // Default list shows only the in-progress item; blocked (recent or not) drops off.
             var item = Assert.Single(result.Items);
             Assert.Equal(1, item.AudiobookId);
-            // ...but the chip count reflects the full standing backlog.
+            // ...but the chip count reflects the full standing blocked backlog.
             Assert.Equal(2, result.Summary.Blocked);
         }
 
@@ -147,7 +148,7 @@ namespace Listenarr.Tests.Features.Application.Downloads
         }
 
         [Fact]
-        public void Build_DefaultView_ShowsInProgressAndBlocked_HidesTerminal()
+        public void Build_DefaultView_ShowsOnlyInProgress_DropsBlockedAndTerminal()
         {
             var downloads = new[]
             {
@@ -161,7 +162,7 @@ namespace Listenarr.Tests.Features.Application.Downloads
 
             var titles = result.Items.Select(i => i.Title).ToHashSet();
             Assert.Contains("Active", titles);
-            Assert.Contains("Blocked", titles);
+            Assert.DoesNotContain("Blocked", titles);
             Assert.DoesNotContain("Imported", titles);
             Assert.DoesNotContain("Failed", titles);
         }
@@ -262,7 +263,8 @@ namespace Listenarr.Tests.Features.Application.Downloads
             };
 
             var item = Assert.Single(ActivitySummary.Build(
-                downloads, Now, clientNameResolver: id => id == "qbit" ? "My qBittorrent" : null).Items);
+                downloads, Now, filter: ActivityCategory.Blocked,
+                clientNameResolver: id => id == "qbit" ? "My qBittorrent" : null).Items);
 
             Assert.Equal("Sample file too short", item.Reason);
             Assert.Equal("My qBittorrent", item.DownloadClientName);

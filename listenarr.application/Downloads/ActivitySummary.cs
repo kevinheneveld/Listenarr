@@ -209,14 +209,11 @@ public static class ActivitySummary
         }
         else
         {
-            // Default view: what needs attention now — everything in progress, plus recently
-            // blocked items. Blocked is windowed here (a large standing backlog would otherwise
-            // rebuild the very wall of rows this view is meant to replace); the full blocked
-            // backlog is still one click away via the Blocked chip, and the chip count stays
-            // all-time so the backlog size remains visible.
-            view = collapsed.Where(i =>
-                i.Category == ActivityCategory.InProgress ||
-                (i.Category == ActivityCategory.Blocked && i.ActivityAt >= cutoff));
+            // Default view: only what is actively in progress. Every other category — including
+            // Blocked, which on a churning pipeline can run to hundreds of recent rows and would
+            // otherwise rebuild the very wall this view replaces — drops off until its chip is
+            // clicked. The chip counts (Blocked stays all-time) keep those backlogs visible.
+            view = collapsed.Where(i => i.Category == ActivityCategory.InProgress);
         }
 
         var ordered = view
