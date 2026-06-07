@@ -76,14 +76,31 @@ public class AudiobookOnlyFilter : ISearchResultFilter
         var phraseIndicators = new[] { "Box Set", "3 Books", "3 Book", "3-Book", "Three Volume", "Three Volume Set", "Volume Set", "Trilogy", "Collector's Edition", "Slipcase", "Box Set:", "Box set:" };
         var suffixIndicators = new[] { "Paperback –", "Hardcover –", "Mass Market Paperback –" };
 
+        // Non-audio media file-formats. A release whose title/format carries a comic, ebook, or video
+        // file extension — with no positive audio signal (we already returned above if there was one) —
+        // is not an audiobook, even when its title is otherwise relevant. This is the case that lets a
+        // comic like "Tom Corbett Space Cadet V2 001(2013)(Digital)(TLK EMPIRE HD).cbr ( Nem )" get
+        // mis-matched to an audiobook by title alone, grabbed, and then fail/import-block in a loop.
+        // Matched as dotted extensions to stay tight: audiobook releases use .m4b/.mp3/.m4a/.flac, so
+        // these never collide, and a legit "M4B + PDF" bundle is not caught (bare "PDF" is deliberately
+        // omitted because audiobook bundles routinely include a PDF alongside the audio).
+        var nonAudioFormatIndicators = new[]
+        {
+            ".cbr", ".cbz", ".cb7",            // comics
+            ".epub", ".mobi", ".azw3", ".azw", // ebooks
+            ".mkv", ".mp4", ".m4v", ".avi",    // video
+        };
+
         bool HasAny(IEnumerable<string> patterns, string input) => patterns.Any(p => input.IndexOf(p, StringComparison.OrdinalIgnoreCase) >= 0);
 
         var hasSimple = HasAny(simpleIndicators, title) || HasAny(simpleIndicators, format);
         var hasPhrase = HasAny(phraseIndicators, title) || HasAny(phraseIndicators, format);
         var hasSuffix = HasAny(suffixIndicators, title) || HasAny(suffixIndicators, format);
+        var hasNonAudioFormat = HasAny(nonAudioFormatIndicators, title) || HasAny(nonAudioFormatIndicators, format);
 
-        // If we see strong signals of a print/box-set/collection (phrase or suffix) and we have no audio evidence, filter out.
-        if (hasPhrase || hasSuffix || hasSimple)
+        // If we see strong signals of a print/box-set/collection or a non-audio media format, and we
+        // have no audio evidence, filter out.
+        if (hasPhrase || hasSuffix || hasSimple || hasNonAudioFormat)
         {
             return true;
         }
