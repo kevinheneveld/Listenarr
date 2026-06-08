@@ -17,6 +17,10 @@ namespace Listenarr.Tests.Mocks
         public DownloadProtocol Protocol => DownloadProtocol.Torrent;
         public QueueItem QueueItemMock { get; set; } = null;
 
+        // When set, GetQueueAsync returns this instead of the hardcoded sample list. Lets tests
+        // exercise the gateway's bulk path with specific items (e.g. empty SourceFiles + ContentPath).
+        public List<QueueItem> QueueItemsMock { get; set; } = null;
+
         public async Task<string?> AddAsync(DownloadClientConfiguration client, SearchResult result, CancellationToken ct = default)
         {
             var download = await downloadRepository.AddAsync(new DownloadBuilder()
@@ -57,6 +61,11 @@ namespace Listenarr.Tests.Mocks
 
         public async Task<List<QueueItem>> GetQueueAsync(DownloadClientConfiguration client, CancellationToken ct = default)
         {
+            if (QueueItemsMock != null)
+            {
+                return QueueItemsMock;
+            }
+
             var path1 = FileUtils.GetAbsolutePath(RemotePath, "random title");
             var path2 = FileUtils.GetAbsolutePath(RemotePath, "random title two");
 

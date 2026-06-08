@@ -605,8 +605,10 @@ namespace Listenarr.Infrastructure.Adapters
                     return items;
                 }
 
-                // Limit fields returned to reduce memory usage
-                var fields = "name,progress,size,downloaded,dlspeed,eta,state,hash,added_on,num_seeds,num_leechs,ratio,save_path";
+                // Limit fields returned to reduce memory usage. content_path lets us resolve the
+                // item's path from this single bulk call instead of a per-torrent /torrents/files
+                // request (an N+1 that hammered the WebUI; see the loop below).
+                var fields = "name,progress,size,downloaded,dlspeed,eta,state,hash,added_on,num_seeds,num_leechs,ratio,save_path,content_path";
 
                 // Build category filter parameter if configured
                 var categoryFilter = QBittorrentHelpers.BuildCategoryParameter(client.Settings, "&");
@@ -641,17 +643,21 @@ namespace Listenarr.Infrastructure.Adapters
                     var numLeechs = torrent.TryGetValue("num_leechs", out var numLeechsEl) ? (int?)numLeechsEl.GetInt32() : null;
                     var ratio = torrent.TryGetValue("ratio", out var ratioEl) ? (double?)ratioEl.GetDouble() : null;
                     var savePath = torrent.TryGetValue("save_path", out var savePathEl) ? savePathEl.GetString() ?? string.Empty : string.Empty;
+                    var contentPath = torrent.TryGetValue("content_path", out var contentPathEl) ? contentPathEl.GetString() ?? string.Empty : string.Empty;
 
-                    List<Dictionary<string, JsonElement>> files = [];
-                    using var filesResp = await httpClient.GetAsync($"{baseUrl}/api/v2/torrents/files?hash={hash}", ct);
-                    if (filesResp.IsSuccessStatusCode)
-                    {
-                        var filesJson = await filesResp.Content.ReadAsStringAsync(ct);
-                        files = JsonSerializer.Deserialize<List<Dictionary<string, JsonElement>>>(filesJson) ?? [];
-                    }
-
+                    // NOTE: We deliberately do NOT call /api/v2/torrents/files per torrent here.
+                    // This bulk queue snapshot runs every poll cycle (from several background
+                    // services) across every torrent in the category — including the hundreds of
+                    // completed/blocked torrents still seeding. A per-torrent files request turned
+                    // that into an N+1 storm that timed out qBittorrent's WebUI (surfacing as the
+                    // "using cached queue snapshot (reason: timeout)" fallback) and pegged the host.
+                    // The monitoring snapshot only needs status/progress/path; ContentPath comes
+                    // straight from the content_path field returned by the single bulk request, and
+                    // the per-file list is enumerated lazily, only for the one item being imported
+                    // (DownloadItemService.GetImportItemAsync -> adapter.GetImportItemAsync), which
+                    // already expects ContentPath to be set from content_path.
                     var localPath = savePath;
-                    var outputPath = ResolveTorrentContentPath(savePath, files);
+                    var outputPath = contentPath;
 
                     var status = state switch
                     {
@@ -703,7 +709,9 @@ namespace Listenarr.Infrastructure.Adapters
                         CanRemove = true,
                         RemotePath = savePath,
                         LocalPath = localPath,
-                        SourceFiles = BuildTorrentSourceFiles(savePath, files),
+                        // Empty by design: the per-file list is enumerated lazily at import time,
+                        // not for every torrent on every poll. See the note above.
+                        SourceFiles = [],
                         ContentPath = outputPath
                     });
                 }

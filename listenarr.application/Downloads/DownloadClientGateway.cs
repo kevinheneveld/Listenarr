@@ -98,7 +98,9 @@ namespace Listenarr.Application.Downloads
             List<QueueItem> translatedResults = [];
             foreach (QueueItem result in results)
             {
-                translatedResults.Add(await TranslateQueueItemPathsAsync(client, result));
+                // Monitoring snapshot: don't enumerate per-item source files (no filesystem scan).
+                // Import resolves them on demand via GetQueueItemAsync.
+                translatedResults.Add(await TranslateQueueItemPathsAsync(client, result, enumerateSourceFiles: false));
             }
             return translatedResults;
         }
@@ -160,7 +162,15 @@ namespace Listenarr.Application.Downloads
         /// <param name="client">Download client configuration to use for path mapping</param>
         /// <param name="item">Queue item to translate/sanitize</param>
         /// <returns></returns>
-        private async Task<QueueItem> TranslateQueueItemPathsAsync(DownloadClientConfiguration client, QueueItem item)
+        /// <param name="enumerateSourceFiles">
+        /// When false (the bulk queue-monitoring snapshot), the per-item source-file list is NOT
+        /// resolved — path translation still runs, but we skip the file-list translation and, in
+        /// particular, the recursive content-path filesystem scan. That scan walked the (often
+        /// network-mounted) download directory for every item on every poll cycle; the snapshot
+        /// only needs status/progress/path. Source files are enumerated lazily at import time
+        /// (enumerateSourceFiles: true), for the single item being imported.
+        /// </param>
+        private async Task<QueueItem> TranslateQueueItemPathsAsync(DownloadClientConfiguration client, QueueItem item, bool enumerateSourceFiles = true)
         {
             if (item.RemotePath != null)
             {
@@ -170,6 +180,27 @@ namespace Listenarr.Application.Downloads
             if (item.ContentPath != null)
             {
                 item.ContentPath = await remotePathMappingService.TranslatePathAsync(client, item.ContentPath);
+            }
+
+            if (!enumerateSourceFiles)
+            {
+                // Monitoring snapshot: leave the source-file list as the adapter provided it
+                // (translating any entries it did supply) without scanning the filesystem.
+                if (item.SourceFiles != null && item.SourceFiles.Count > 0)
+                {
+                    List<string> translated = [];
+                    foreach (string file in item.SourceFiles)
+                    {
+                        translated.Add(await remotePathMappingService.TranslatePathAsync(client, file));
+                    }
+                    item.SourceFiles = new HashSet<string>(translated, StringComparer.OrdinalIgnoreCase).ToList();
+                }
+                else
+                {
+                    item.SourceFiles = [];
+                }
+
+                return item;
             }
 
             // FIXME: https://github.com/Listenarrs/Listenarr/issues/592

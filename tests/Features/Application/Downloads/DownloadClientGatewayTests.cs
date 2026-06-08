@@ -176,5 +176,32 @@ namespace Listenarr.Tests.Features.Application.Downloads
             Assert.NotNull(item.SourceFiles);
             Assert.Empty(item.SourceFiles);
         }
+
+        [Fact]
+        [Trait("Method", "GetQueueAsync")]
+        [Trait("Scenario", "Bulk monitoring snapshot does NOT scan the content directory for source files")]
+        public async Task GetQueueAsync_DoesNotEnumerateSourceFiles_FromContentDirectory()
+        {
+            // Identical setup to GetQueueItemAsync_UseContentPath_Directory (which scans and finds
+            // both files). The bulk monitoring snapshot must skip that per-item filesystem walk —
+            // it runs every poll cycle across the whole backlog and only needs status/progress/path.
+            var sourceDirectory = FileService.GetTempDirectory("source");
+            await FileService.GetFileAsync(sourceDirectory, "file1.mp3");
+            await FileService.GetFileAsync(sourceDirectory, "file2.mp3");
+
+            var downloadCLientAdapterMock = (DownloadCLientAdapterMock)((DownloadClientGateway)downloadClientGateway).ResolveAdapter(client);
+            downloadCLientAdapterMock.QueueItemsMock =
+            [
+                new QueueItemBuilder()
+                    .WithContentPath(sourceDirectory)
+                    .Build()
+            ];
+
+            var items = await downloadClientGateway.GetQueueAsync(client);
+
+            var item = Assert.Single(items);
+            Assert.NotNull(item.SourceFiles);
+            Assert.Empty(item.SourceFiles); // no scan, despite the directory containing two files
+        }
     }
 }
