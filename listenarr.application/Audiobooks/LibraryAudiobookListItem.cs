@@ -46,5 +46,10 @@ namespace Listenarr.Application.Audiobooks
         public string[]? AuthorAsins { get; set; }
         public bool Wanted { get; set; }
         public string Status { get; set; } = string.Empty;
+        /// <summary>
+        /// When the book most recently had a file imported (max <see cref="AudiobookFile.CreatedAt"/>).
+        /// Null when no tracked file rows exist (e.g. missing books, or legacy filePath-only records).
+        /// </summary>
+        public DateTime? ImportedAt { get; set; }
     }
 }

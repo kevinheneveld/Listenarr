@@ -740,6 +740,9 @@ export interface Audiobook {
   identifiers?: AudiobookExternalIdentifier[]
   // Server-computed flag indicating if this audiobook is wanted (monitored and missing files)
   wanted?: boolean
+  // When the book most recently had a file imported (max AudiobookFile.CreatedAt, ISO 8601).
+  // Null when no tracked file rows exist. Drives the "Recently Imported" filter/sort.
+  importedAt?: string
   // Server-computed list status used by slim /library responses.
   status?: AudiobookStatus
   // Client-side flag set by the library store when the server returned an

@@ -1388,6 +1388,14 @@ const filteredAndSortedAudiobooks = computed(() => {
         const y = Number(b.publishYear || 0)
         return !isNaN(y) && (y === thisYear || y === thisYear - 1)
       })
+    } else if (sid === 'recently-imported') {
+      // Books we actually have a file for (downloaded, at or below cutoff). The
+      // recency ordering itself is applied by the 'imported' sort key, which the
+      // filter selection switches to (see the selectedFilterId watcher).
+      filtered = filtered.filter((b) => {
+        const s = getAudiobookStatus(b)
+        return s === 'quality-match' || s === 'quality-mismatch'
+      })
     } else {
       // custom filter (supports grouping/parentheses)
       const cf = customFilters.value.find((x) => x.id === sid)
@@ -1531,6 +1539,18 @@ const filteredAndSortedAudiobooks = computed(() => {
         av = (a.publishYear || '').toString().toLowerCase()
         bv = (b.publishYear || '').toString().toLowerCase()
         break
+      case 'imported': {
+        // Order by most-recent import. Books with no import timestamp (missing, or
+        // legacy filePath-only records) always sort to the end, regardless of direction.
+        const at = a.importedAt ? Date.parse(a.importedAt) : NaN
+        const bt = b.importedAt ? Date.parse(b.importedAt) : NaN
+        const aMissing = Number.isNaN(at)
+        const bMissing = Number.isNaN(bt)
+        if (aMissing && bMissing) return 0
+        if (aMissing) return 1
+        if (bMissing) return -1
+        return (at - bt) * (sortOrder.value === 'asc' ? 1 : -1)
+      }
       case 'monitored':
         av = !!a.monitored
         bv = !!b.monitored
@@ -1973,6 +1993,7 @@ const sortOptions = computed(() => {
       { value: 'series', label: 'Series' },
       { value: 'publisher', label: 'Publisher' },
       { value: 'year', label: 'Release Year' },
+      { value: 'imported', label: 'Recently Imported' },
       { value: 'monitored', label: 'Monitored' },
       { value: 'status', label: 'Status' },
     ]
@@ -2363,6 +2384,16 @@ watch(
     selectedFilterId.value = typeof v === 'string' && v ? v : null
   },
 )
+
+// Selecting the "Recently Imported" built-in filter switches the sort to newest-import-first,
+// so the single filter delivers the outcome the user expects (owned books, most recently
+// imported first) in one click. Only the books grouping exposes the 'imported' sort key.
+watch(selectedFilterId, (sid) => {
+  if (sid === 'recently-imported' && groupBy.value === 'books') {
+    sortState.books.key = 'imported'
+    sortState.books.order = 'desc'
+  }
+})
 watch(
   () => route.query.monitored,
   (v) => {

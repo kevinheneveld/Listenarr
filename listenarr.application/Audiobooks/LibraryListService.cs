@@ -65,10 +65,12 @@ namespace Listenarr.Application.Audiobooks
 
             var fileSummaryTask = _audiobookFileRepository.GetFormatSummariesAsync();
             var fileCountTask = _audiobookFileRepository.GetCountsByAudiobookIdAsync();
+            var importedAtTask = _audiobookFileRepository.GetMaxCreatedAtByAudiobookIdAsync();
             var activeDownloadTask = _downloadRepository.GetActiveAudiobookIdsAsync(ActiveLibraryDownloadStatuses);
 
             var fileSummaryRows = await fileSummaryTask;
             var fileCountById = await fileCountTask;
+            var importedAtById = await importedAtTask;
             var filesByAudiobookId = fileSummaryRows
                 .GroupBy(f => f.AudiobookId)
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<AudiobookFormatSummary>)g.ToList());
@@ -134,7 +136,10 @@ namespace Listenarr.Application.Audiobooks
                          hasAnyFile,
                          a.Quality,
                          qualityProfile,
-                         files)
+                         files),
+                    ImportedAt = importedAtById.TryGetValue(a.Id, out var importedAt)
+                        ? importedAt
+                        : (DateTime?)null
                 };
             }).ToList();
         }

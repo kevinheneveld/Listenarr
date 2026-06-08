@@ -56,6 +56,12 @@ namespace Listenarr.Tests.Builders
             return this;
         }
 
+        public AudiobookFileBuilder WithCreatedAt(DateTime value)
+        {
+            _audiobookFile.CreatedAt = value;
+            return this;
+        }
+
         public AudiobookFile Build()
         {
             _audiobookFile.Audiobook = _audiobook;

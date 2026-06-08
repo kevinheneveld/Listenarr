@@ -97,5 +97,48 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.False(item.TryGetProperty("description", out _));
             Assert.False(item.TryGetProperty("subtitle", out _));
         }
+
+        [Fact]
+        [Trait("Method", "GetAll")]
+        [Trait("Scenario", "ImportedAt_IsMostRecentFileCreatedAt")]
+        public async Task GetAll_ImportedAt_ReflectsMostRecentFileCreatedAt()
+        {
+            // Given a book with two files imported at different times...
+            var older = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var newer = new DateTime(2026, 6, 1, 12, 0, 0, DateTimeKind.Utc);
+
+            var withFiles = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Imported Twice")
+                .WithBasePath(FileUtils.GetAbsolutePath("library", "Imported Twice"))
+                .Build());
+
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(withFiles).WithPath("a.m4b").WithCreatedAt(older).Build());
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(withFiles).WithPath("b.m4b").WithCreatedAt(newer).Build());
+
+            // ...and a book with no files at all.
+            var noFiles = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("No Files Yet")
+                .Build());
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+
+            // When
+            var ok = Assert.IsType<OkObjectResult>(await controller.GetAll());
+            var json = JsonSerializer.Serialize(ok.Value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            using var doc = JsonDocument.Parse(json);
+            JsonElement Item(int id) => doc.RootElement.EnumerateArray()
+                .Single(e => e.GetProperty("id").GetInt32() == id);
+
+            // Then: importedAt is the *latest* file's CreatedAt for the book with files,
+            var imported = Item(withFiles.Id).GetProperty("importedAt").GetDateTime();
+            Assert.Equal(newer, imported.ToUniversalTime());
+
+            // and null for the book with no tracked files.
+            var noFilesItem = Item(noFiles.Id);
+            Assert.True(
+                !noFilesItem.TryGetProperty("importedAt", out var ia) || ia.ValueKind == JsonValueKind.Null);
+        }
     }
 }

@@ -1145,3 +1145,86 @@ describe('AudiobooksView Grouping', () => {
     expect(localStorage.getItem('listenarr.viewMode.series')).toBe('list')
   })
 })
+
+describe('AudiobooksView Recently Imported', () => {
+  const ensureGlobals = () => {
+    const g = globalThis as unknown as Record<string, unknown>
+    if (typeof (g as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+      g.ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+      }
+    }
+    if (typeof (g as { WebSocket?: unknown }).WebSocket === 'undefined') {
+      g.WebSocket = function () {}
+    }
+  }
+
+  const mountWithBooks = async () => {
+    ensureGlobals()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/audiobooks', name: 'audiobooks', component: AudiobooksView },
+      ],
+    })
+    await router.push('/audiobooks')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    // 1 newest import, 2 older import, 3 missing (no file), 4 owned but no import timestamp.
+    store.audiobooks = [
+      { id: 1, title: 'Newest', files: [{ format: 'm4b' }], importedAt: '2026-06-01T12:00:00Z' },
+      { id: 2, title: 'Older', files: [{ format: 'm4b' }], importedAt: '2026-01-01T00:00:00Z' },
+      { id: 3, title: 'Missing', files: [] },
+      { id: 4, title: 'Legacy', files: [{ format: 'm4b' }] },
+    ] as unknown as import('@/types').Audiobook[]
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(AudiobooksView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['BulkEditModal', 'EditAudiobookModal', 'CustomFilterModal', 'FiltersDropdown', 'CustomSelect'],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    return wrapper
+  }
+
+  beforeEach(() => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+  })
+
+  it("'imported' sort orders by most-recent import, with no-timestamp books last", async () => {
+    const wrapper = await mountWithBooks()
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+
+    vm.sortKey = 'imported'
+    vm.sortOrder = 'desc'
+    await wrapper.vm.$nextTick()
+
+    const ids = (vm.audiobooks as Array<{ id: number }>).map((b) => b.id)
+    // Newest import first, then older; the two books with no import timestamp (3, 4) trail.
+    expect(ids.slice(0, 2)).toEqual([1, 2])
+    expect(ids.indexOf(4)).toBeGreaterThan(ids.indexOf(2))
+  })
+
+  it("'recently-imported' filter shows only owned books and switches sort to newest-import-first", async () => {
+    const wrapper = await mountWithBooks()
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+
+    vm.selectedFilterId = 'recently-imported'
+    await wrapper.vm.$nextTick()
+
+    const ids = (vm.audiobooks as Array<{ id: number }>).map((b) => b.id)
+    // The missing book (3) is excluded; owned books are ordered newest-import-first, with the
+    // timestamp-less owned book (4) last.
+    expect(ids).toEqual([1, 2, 4])
+    expect(vm.sortKey).toBe('imported')
+    expect(vm.sortOrder).toBe('desc')
+  })
+})
