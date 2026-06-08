@@ -636,10 +636,15 @@ const selectCategory = (category: ActivityCategory | null) => {
 }
 
 const refreshQueue = async () => {
+  // Intentionally does NOT call apiService.getQueue(): that endpoint runs the full, expensive
+  // DownloadQueueService pipeline (path translation + metadata enrichment + orphan reconciliation
+  // over thousands of records, ~10-30s) on every call. Live progress for in-progress rows already
+  // arrives via the SignalR `QueueUpdate` subscription (see onMounted), and getActivity() carries
+  // DB progress. Polling getQueue here every 30s was the source of the CPU spike while the
+  // Activity tab is open.
   loading.value = true
   try {
-    const [queueSnapshot] = await Promise.all([apiService.getQueue(), loadActivity()])
-    applyQueueSnapshot(queueSnapshot)
+    await loadActivity()
   } catch (err) {
     errorTracking.captureException(err as Error, {
       component: 'ActivityView',

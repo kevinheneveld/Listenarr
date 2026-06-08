@@ -243,6 +243,34 @@ namespace Listenarr.Tests.Features.Infrastructure.Adapters
             return files;
         }
 
+        private static Dictionary<string, JsonElement> ParseTorrent(string json)
+        {
+            var map = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in JsonDocument.Parse(json).RootElement.EnumerateObject())
+            {
+                map[property.Name] = property.Value;
+            }
+            return map;
+        }
+
+        [Fact]
+        [Trait("Area", "QbittorrentJsonParsing")]
+        public void ReadJsonNumbers_TolerateOutOfRange_StringEncoded_AndMissing_WithoutThrowing()
+        {
+            // A torrent whose eta is beyond Int32, whose numeric fields are string-encoded (seen across
+            // qB versions), and which is missing some keys. The strict GetInt32/GetDouble accessors throw
+            // FormatException on these, which previously aborted the whole queue parse.
+            var t = ParseTorrent("{\"eta\":99999999999,\"num_seeds\":\"123\",\"size\":123456789012,\"ratio\":\"1.5\",\"bad\":\"notanumber\"}");
+
+            Assert.Equal(int.MaxValue, QbittorrentAdapter.ReadJsonInt32(t, "eta"));        // overflow -> clamped, not thrown
+            Assert.Equal(123, QbittorrentAdapter.ReadJsonInt32(t, "num_seeds"));           // string-encoded number
+            Assert.Equal(123456789012L, QbittorrentAdapter.ReadJsonInt64(t, "size"));
+            Assert.Equal(1.5, QbittorrentAdapter.ReadJsonDouble(t, "ratio"));              // string-encoded double
+            Assert.Equal(0d, QbittorrentAdapter.ReadJsonDouble(t, "bad"));                 // unparseable -> fallback
+            Assert.Equal(8640000, QbittorrentAdapter.ReadJsonInt32(t, "missing", 8640000)); // missing -> fallback
+            Assert.Equal("", QbittorrentAdapter.ReadJsonString(t, "missing"));
+        }
+
         [Fact]
         public async Task AddAsync_ComputeHash_FromTorrentFile()
         {

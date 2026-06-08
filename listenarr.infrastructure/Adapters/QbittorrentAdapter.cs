@@ -630,20 +630,24 @@ namespace Listenarr.Infrastructure.Adapters
 
                 foreach (var torrent in torrents)
                 {
-                    var name = torrent.TryGetValue("name", out var nameEl) ? nameEl.GetString() ?? string.Empty : string.Empty;
-                    var progress = torrent.TryGetValue("progress", out var progressEl) ? progressEl.GetDouble() * 100 : 0;
-                    var size = torrent.TryGetValue("size", out var sizeEl) ? sizeEl.GetInt64() : 0;
-                    var downloaded = torrent.TryGetValue("downloaded", out var downloadedEl) ? downloadedEl.GetInt64() : 0;
-                    var dlspeed = torrent.TryGetValue("dlspeed", out var dlspeedEl) ? dlspeedEl.GetDouble() : 0;
-                    var eta = torrent.TryGetValue("eta", out var etaEl) ? (int?)etaEl.GetInt32() : null;
-                    var state = torrent.TryGetValue("state", out var stateEl) ? stateEl.GetString() ?? "unknown" : "unknown";
-                    var hash = torrent.TryGetValue("hash", out var hashEl) ? hashEl.GetString() ?? string.Empty : string.Empty;
-                    var addedOn = torrent.TryGetValue("added_on", out var addedOnEl) ? addedOnEl.GetInt64() : 0;
-                    var numSeeds = torrent.TryGetValue("num_seeds", out var numSeedsEl) ? (int?)numSeedsEl.GetInt32() : null;
-                    var numLeechs = torrent.TryGetValue("num_leechs", out var numLeechsEl) ? (int?)numLeechsEl.GetInt32() : null;
-                    var ratio = torrent.TryGetValue("ratio", out var ratioEl) ? (double?)ratioEl.GetDouble() : null;
-                    var savePath = torrent.TryGetValue("save_path", out var savePathEl) ? savePathEl.GetString() ?? string.Empty : string.Empty;
-                    var contentPath = torrent.TryGetValue("content_path", out var contentPathEl) ? contentPathEl.GetString() ?? string.Empty : string.Empty;
+                    // Tolerant reads: a single torrent reporting an out-of-range or oddly-typed
+                    // numeric field (e.g. an eta beyond Int32) must not throw and abort the whole
+                    // queue fetch (which surfaced as "client may be unreachable" + a JSON
+                    // FormatException). These helpers fall back instead of throwing.
+                    var name = ReadJsonString(torrent, "name");
+                    var progress = ReadJsonDouble(torrent, "progress") * 100;
+                    var size = ReadJsonInt64(torrent, "size");
+                    var downloaded = ReadJsonInt64(torrent, "downloaded");
+                    var dlspeed = ReadJsonDouble(torrent, "dlspeed");
+                    var eta = ReadJsonInt32(torrent, "eta", 8640000);
+                    var state = ReadJsonString(torrent, "state", "unknown");
+                    var hash = ReadJsonString(torrent, "hash");
+                    var addedOn = ReadJsonInt64(torrent, "added_on");
+                    int? numSeeds = torrent.ContainsKey("num_seeds") ? ReadJsonInt32(torrent, "num_seeds") : null;
+                    int? numLeechs = torrent.ContainsKey("num_leechs") ? ReadJsonInt32(torrent, "num_leechs") : null;
+                    double? ratio = torrent.ContainsKey("ratio") ? ReadJsonDouble(torrent, "ratio") : null;
+                    var savePath = ReadJsonString(torrent, "save_path");
+                    var contentPath = ReadJsonString(torrent, "content_path");
 
                     // NOTE: We deliberately do NOT call /api/v2/torrents/files per torrent here.
                     // This bulk queue snapshot runs every poll cycle (from several background
@@ -1248,6 +1252,63 @@ namespace Listenarr.Infrastructure.Adapters
             return string.IsNullOrEmpty(normalizedBasePath)
                 ? relativePath
                 : normalizedBasePath + Path.DirectorySeparatorChar + relativePath;
+        }
+
+        // Tolerant JSON field readers for the qBittorrent torrent dictionaries. qBittorrent's WebUI
+        // occasionally returns a numeric field that is out of the expected .NET range or, across
+        // versions, encoded as a string; the strict JsonElement.GetInt32/GetInt64/GetDouble accessors
+        // throw on those, which would abort the entire queue parse. These fall back instead.
+        internal static string ReadJsonString(Dictionary<string, JsonElement> torrent, string key, string fallback = "")
+        {
+            if (torrent.TryGetValue(key, out var el) && el.ValueKind == JsonValueKind.String)
+            {
+                return el.GetString() ?? fallback;
+            }
+            return fallback;
+        }
+
+        internal static long ReadJsonInt64(Dictionary<string, JsonElement> torrent, string key, long fallback = 0)
+        {
+            if (!torrent.TryGetValue(key, out var el))
+            {
+                return fallback;
+            }
+            if (el.ValueKind == JsonValueKind.Number)
+            {
+                if (el.TryGetInt64(out var v)) return v;
+                return el.TryGetDouble(out var d) ? (long)d : fallback;
+            }
+            if (el.ValueKind == JsonValueKind.String && long.TryParse(el.GetString(), out var s))
+            {
+                return s;
+            }
+            return fallback;
+        }
+
+        internal static int ReadJsonInt32(Dictionary<string, JsonElement> torrent, string key, int fallback = 0)
+        {
+            var v = ReadJsonInt64(torrent, key, fallback);
+            if (v > int.MaxValue) return int.MaxValue;
+            if (v < int.MinValue) return int.MinValue;
+            return (int)v;
+        }
+
+        internal static double ReadJsonDouble(Dictionary<string, JsonElement> torrent, string key, double fallback = 0)
+        {
+            if (!torrent.TryGetValue(key, out var el))
+            {
+                return fallback;
+            }
+            if (el.ValueKind == JsonValueKind.Number)
+            {
+                return el.TryGetDouble(out var v) ? v : fallback;
+            }
+            if (el.ValueKind == JsonValueKind.String &&
+                double.TryParse(el.GetString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var s))
+            {
+                return s;
+            }
+            return fallback;
         }
 
         private static List<string> BuildTorrentSourceFiles(

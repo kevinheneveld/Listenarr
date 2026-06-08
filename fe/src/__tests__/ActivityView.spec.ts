@@ -87,10 +87,18 @@ const makeResponse = (
   totalItems: items.length,
 })
 
+// Captures the Activity view's SignalR queue-update handler so tests can push a live snapshot
+// (the view relies on SignalR for live progress, not on polling getQueue).
+let queueUpdateHandler: ((payload: unknown) => void) | null = null
+
 const mockSignalR = () => {
+  queueUpdateHandler = null
   vi.doMock('@/services/signalr', () => ({
     signalRService: {
-      onQueueUpdate: vi.fn(() => () => undefined),
+      onQueueUpdate: vi.fn((cb: (payload: unknown) => void) => {
+        queueUpdateHandler = cb
+        return () => undefined
+      }),
     },
   }))
 }
@@ -178,15 +186,19 @@ describe('ActivityView', () => {
       getActivity: vi.fn(async () =>
         makeResponse([makeItem({ id: 'seed', category: 'Blocked', status: 'ImportBlocked', progress: 100 })]),
       ),
-      getQueue: vi.fn(async () => [
-        { id: 'seed', title: 'A Book', status: 'downloading', progress: 100, downloadClientId: 'qbit' },
-      ]),
     })
     mockLibraryStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
 
+    // Live queue (via SignalR) reports the still-seeding torrent as "downloading"...
+    queueUpdateHandler?.([
+      { id: 'seed', title: 'A Book', status: 'downloading', progress: 100, downloadClientId: 'qbit' },
+    ])
+    await flushPromises()
+
+    // ...but the row keeps the authoritative DB status.
     expect(vm.allActivityItems.find((i) => i.id === 'seed')?.status).toBe('importblocked')
   })
 
@@ -196,14 +208,17 @@ describe('ActivityView', () => {
       getActivity: vi.fn(async () =>
         makeResponse([makeItem({ id: 'dl', category: 'InProgress', status: 'Downloading', progress: 10 })]),
       ),
-      getQueue: vi.fn(async () => [
-        { id: 'dl', title: 'A Book', status: 'downloading', progress: 82, downloadClientId: 'qbit' },
-      ]),
     })
     mockLibraryStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // Live progress arrives over SignalR (not a getQueue poll).
+    queueUpdateHandler?.([
+      { id: 'dl', title: 'A Book', status: 'downloading', progress: 82, downloadClientId: 'qbit' },
+    ])
+    await flushPromises()
 
     expect(vm.allActivityItems.find((i) => i.id === 'dl')?.progress).toBe(82)
   })
@@ -281,14 +296,18 @@ describe('ActivityView', () => {
       getActivity: vi.fn(async () =>
         makeResponse([makeItem({ id: 'q1', category: 'InProgress', downloadClientId: 'qbittorrent' })]),
       ),
-      getQueue: vi.fn(async () => [
-        { id: 'q1', title: 'A Book', status: 'downloading', progress: 50, downloadClientId: 'qbittorrent' },
-      ]),
     })
     mockLibraryStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // The item is present in the live client queue (delivered via SignalR).
+    queueUpdateHandler?.([
+      { id: 'q1', title: 'A Book', status: 'downloading', progress: 50, downloadClientId: 'qbittorrent' },
+    ])
+    await flushPromises()
+
     const item = vm.allActivityItems.find((i) => i.id === 'q1')
     expect(item).toBeDefined()
 
@@ -325,30 +344,32 @@ describe('ActivityView', () => {
 
   it('shows unavailable client health even when no queue items are returned', async () => {
     mockSignalR()
-    mockApi({
-      getQueue: vi.fn(async () => ({
-        items: [],
-        clients: [
-          {
-            clientId: 'qb-1',
-            clientName: 'qBittorrent',
-            clientType: 'qbittorrent',
-            snapshotState: 'unavailable',
-            isStaleSnapshot: false,
-            isUnavailable: true,
-            snapshotFailureReason: 'timeout',
-            itemCount: 0,
-          },
-        ],
-        generatedAt: new Date().toISOString(),
-        hasStaleData: false,
-        hasUnavailableClients: true,
-      })),
-    })
+    mockApi()
     mockLibraryStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // Client-health state arrives with the live snapshot over SignalR.
+    queueUpdateHandler?.({
+      items: [],
+      clients: [
+        {
+          clientId: 'qb-1',
+          clientName: 'qBittorrent',
+          clientType: 'qbittorrent',
+          snapshotState: 'unavailable',
+          isStaleSnapshot: false,
+          isUnavailable: true,
+          snapshotFailureReason: 'timeout',
+          itemCount: 0,
+        },
+      ],
+      generatedAt: new Date().toISOString(),
+      hasStaleData: false,
+      hasUnavailableClients: true,
+    })
+    await flushPromises()
 
     expect(vm.queueHealthClients).toHaveLength(1)
     expect(vm.queueHealthClients[0]?.name).toBe('qBittorrent')
