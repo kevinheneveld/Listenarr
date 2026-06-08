@@ -255,9 +255,52 @@ namespace Listenarr.Application.Audiobooks
 
             if (File.Exists(dest) && !PathsEqual(source, dest))
             {
-                item.Success = false;
-                item.Error = "Target file already exists.";
-                return item;
+                // Identify whether another audiobook record tracks the
+                // destination file. If so, a blind file overwrite would orphan
+                // that record, so we never do it here — the UI resolves that at
+                // the record level (delete the duplicate book, or let the
+                // incoming book win, both via DELETE /library/{id}).
+                var owner = await _audiobookRepository.GetByFilePathAsync(dest);
+                var existingTrackedFile = owner?.Files?.FirstOrDefault(f => PathsEqual(f.Path, dest));
+                var ownedByOtherBook = owner != null && owner.Id != audiobook.Id;
+
+                if (fileOperation.OnConflict == ConflictResolution.Overwrite && !ownedByOtherBook)
+                {
+                    // Safe overwrite: the destination is an untracked orphan (or
+                    // another file of this same book). Remove it, then fall
+                    // through to the normal move below.
+                    try
+                    {
+                        File.Delete(dest);
+                        _logger.LogInformation(
+                            "Organize overwrite: removed existing untracked destination file '{Dest}' for audiobook {AudiobookId} file {FileId}",
+                            dest, audiobook.Id, fileOperation.FileId);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        _logger.LogWarning(ex, "Failed to remove existing destination file '{Dest}' during organize overwrite", dest);
+                        item.Success = false;
+                        item.Error = $"Failed to remove the existing destination file: {ex.Message}";
+                        return item;
+                    }
+                }
+                else
+                {
+                    // Surface the collision with side-by-side metadata instead of
+                    // dead-ending, so the UI can offer Overwrite / Delete
+                    // duplicate / Skip.
+                    item.Success = false;
+                    item.IsConflict = true;
+                    item.Error = "Target file already exists.";
+                    item.Conflict = BuildConflictInfo(source, dbFile, dest, owner, existingTrackedFile);
+                    _logger.LogInformation(
+                        "Organize conflict for audiobook {AudiobookId} file {FileId}: destination '{Dest}' already exists ({Ownership})",
+                        audiobook.Id,
+                        fileOperation.FileId,
+                        dest,
+                        ownedByOtherBook ? $"tracked by audiobook {owner!.Id}" : "untracked on disk");
+                    return item;
+                }
             }
 
             try
@@ -289,6 +332,51 @@ namespace Listenarr.Application.Audiobooks
             }
 
             return item;
+        }
+
+        private static RenameConflictInfo BuildConflictInfo(string sourcePath, AudiobookFile? incomingTracked, string destPath, Audiobook? owner, AudiobookFile? existingTracked)
+        {
+            return new RenameConflictInfo
+            {
+                Incoming = BuildConflictFileInfo(sourcePath, incomingTracked),
+                Existing = BuildConflictFileInfo(destPath, existingTracked),
+                ExistingTracked = owner != null,
+                ExistingAudiobookId = owner?.Id,
+                ExistingAudiobookTitle = owner?.Title,
+                ExistingFileId = existingTracked?.Id
+            };
+        }
+
+        private static ConflictFileInfo BuildConflictFileInfo(string path, AudiobookFile? tracked)
+        {
+            var info = new ConflictFileInfo
+            {
+                Path = path,
+                Size = tracked?.Size,
+                DurationSeconds = tracked?.DurationSeconds,
+                Format = tracked?.Format,
+                Container = tracked?.Container,
+                Codec = tracked?.Codec,
+                Bitrate = tracked?.Bitrate
+            };
+
+            // Fill size/modified from disk; the on-disk file is the authority for
+            // what's actually colliding, and the dest side is often untracked.
+            try
+            {
+                var fileInfo = new FileInfo(path);
+                if (fileInfo.Exists)
+                {
+                    info.ModifiedAt = fileInfo.LastWriteTimeUtc;
+                    info.Size ??= fileInfo.Length;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Suppressed non-fatal FileInfo read for conflict metadata: {ex.Message}");
+            }
+
+            return info;
         }
 
         private async Task<(bool Success, string? Error)> ExecuteDirectoryMoveAsync(Audiobook audiobook, string newFolderPath, IReadOnlyCollection<string> allowedRoots)

@@ -96,6 +96,25 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .ToListAsync(ct);
         }
 
+        public async Task<Audiobook?> GetByFilePathAsync(string normalizedPath, System.Threading.CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(normalizedPath)) return null;
+
+            // Case-insensitive match on the stored normalized path. Paths are
+            // normalized the same way on both sides (see RenameService /
+            // FileUtils.NormalizeStoredPath), so a lower()-comparison matches in
+            // practice; on the rare non-ASCII edge case it may under-match,
+            // which only means we present the conflict as "untracked" rather
+            // than risking a wrong attribution. Read-only — never tracked.
+            var lowered = normalizedPath.ToLowerInvariant();
+            return await _db.Audiobooks
+                .AsNoTracking()
+                .Include(a => a.Files)
+                .FirstOrDefaultAsync(
+                    a => a.Files != null && a.Files.Any(f => f.Path != null && f.Path.ToLower() == lowered),
+                    ct);
+        }
+
         public async Task<Audiobook> AddAsync(Audiobook audiobook)
         {
             _db.Audiobooks.Add(audiobook);
