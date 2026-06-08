@@ -61,6 +61,26 @@ public sealed class ActivityItem
     public int AttemptCount { get; set; }
     public string DownloadClientId { get; set; } = string.Empty;
     public string? DownloadClientName { get; set; }
+    /// <summary>The download client implementation (e.g. "qbittorrent", "nzbget", "DDL"), for the client-type indicator.</summary>
+    public string? DownloadClientType { get; set; }
+    /// <summary>
+    /// Per-attempt breakdown of the download records that collapsed into this row, newest-first.
+    /// Lets the UI explain what the <see cref="AttemptCount"/> grab attempts were and why each failed.
+    /// </summary>
+    public List<ActivityAttempt> Attempts { get; set; } = new();
+}
+
+/// <summary>One historical grab attempt for a book, projected from a single underlying download record.</summary>
+public sealed class ActivityAttempt
+{
+    public ActivityCategory Category { get; set; }
+    /// <summary>The raw <see cref="DownloadStatus"/> name for this attempt (Downloading/Failed/ImportBlocked/Moved/...).</summary>
+    public string Status { get; set; } = string.Empty;
+    /// <summary>When this attempt last advanced — CompletedAt when present, else StartedAt.</summary>
+    public DateTime At { get; set; }
+    /// <summary>The failure / block reason for this attempt, when it has one (null for in-flight or successful attempts).</summary>
+    public string? Reason { get; set; }
+    public string? DownloadClientName { get; set; }
 }
 
 /// <summary>A grouped failure reason and how many books hit it within the window.</summary>
@@ -151,6 +171,7 @@ public static class ActivitySummary
     /// <param name="page">1-based page index for the list.</param>
     /// <param name="pageSize">Page size for the list.</param>
     /// <param name="clientNameResolver">Maps a download-client id to its display name.</param>
+    /// <param name="clientTypeResolver">Maps a download-client id to its implementation type (e.g. "qbittorrent", "nzbget").</param>
     public static ActivityResponse Build(
         IEnumerable<Download> downloads,
         DateTime nowUtc,
@@ -158,7 +179,8 @@ public static class ActivitySummary
         ActivityCategory? filter = null,
         int page = 1,
         int pageSize = 100,
-        Func<string, string?>? clientNameResolver = null)
+        Func<string, string?>? clientNameResolver = null,
+        Func<string, string?>? clientTypeResolver = null)
     {
         var effectiveWindowHours = windowHours <= 0 ? 24 : windowHours;
         var cutoff = nowUtc - TimeSpan.FromHours(effectiveWindowHours);
@@ -173,7 +195,12 @@ public static class ActivitySummary
                     .OrderByDescending(d => IsActive(Classify(d)))
                     .ThenByDescending(ActivityTimestamp)
                     .First();
-                return ToItem(rep, g.Count(), clientNameResolver);
+                var item = ToItem(rep, g.Count(), clientNameResolver, clientTypeResolver);
+                item.Attempts = g
+                    .OrderByDescending(ActivityTimestamp)
+                    .Select(d => ToAttempt(d, clientNameResolver))
+                    .ToList();
+                return item;
             })
             .ToList();
 
@@ -236,7 +263,7 @@ public static class ActivitySummary
         };
     }
 
-    private static ActivityItem ToItem(Download d, int attemptCount, Func<string, string?>? resolver)
+    private static ActivityItem ToItem(Download d, int attemptCount, Func<string, string?>? resolver, Func<string, string?>? typeResolver)
     {
         var category = Classify(d);
         return new ActivityItem
@@ -257,6 +284,24 @@ public static class ActivitySummary
             Reason = ReasonFor(d, category),
             AttemptCount = attemptCount,
             DownloadClientId = d.DownloadClientId,
+            DownloadClientName = d.DownloadClientId == "DDL"
+                ? "Direct Download"
+                : resolver?.Invoke(d.DownloadClientId),
+            DownloadClientType = d.DownloadClientId == "DDL"
+                ? "DDL"
+                : typeResolver?.Invoke(d.DownloadClientId),
+        };
+    }
+
+    private static ActivityAttempt ToAttempt(Download d, Func<string, string?>? resolver)
+    {
+        var category = Classify(d);
+        return new ActivityAttempt
+        {
+            Category = category,
+            Status = d.Status.ToString(),
+            At = ActivityTimestamp(d),
+            Reason = ReasonFor(d, category),
             DownloadClientName = d.DownloadClientId == "DDL"
                 ? "Direct Download"
                 : resolver?.Invoke(d.DownloadClientId),

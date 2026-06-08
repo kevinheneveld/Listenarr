@@ -28,6 +28,7 @@ type Row = {
   progress?: number
   reason?: string
   attemptCount?: number
+  attempts?: Array<Record<string, unknown>>
   downloadClientId?: string
   downloadClient?: string
   downloadClientType?: string
@@ -46,6 +47,11 @@ type ActivityViewVm = {
   queueHealthClients: Array<{ name: string; isUnavailable?: boolean }>
   removeFromQueue: (item: Row) => Promise<void> | void
   confirmRemove: () => Promise<void>
+  showAttemptsModal: boolean
+  attemptsItem: Row | null
+  openAttempts: (item: Row) => void
+  statusTooltip: (item: Row) => string
+  clientTooltip: (item: Row) => string
 }
 
 // --- builders for the activity endpoint payload ---------------------------------
@@ -288,6 +294,69 @@ describe('ActivityView', () => {
     const vm = wrapper.vm as unknown as ActivityViewVm
 
     expect(vm.allActivityItems.find((i) => i.id === 'collapsed')?.attemptCount).toBe(4)
+  })
+
+  it('opens the attempt-history modal with the per-attempt breakdown', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({
+            id: 'multi',
+            attemptCount: 2,
+            attempts: [
+              { category: 'Imported', status: 'Moved', at: new Date().toISOString(), reason: undefined },
+              {
+                category: 'Failed',
+                status: 'Failed',
+                at: new Date().toISOString(),
+                reason: 'qBittorrent state: missingFiles',
+                downloadClientName: 'qBittorrent',
+              },
+            ],
+          }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+    const item = vm.allActivityItems.find((i) => i.id === 'multi')!
+
+    vm.openAttempts(item)
+    await flushPromises()
+
+    expect(vm.showAttemptsModal).toBe(true)
+    expect(vm.attemptsItem?.attempts).toHaveLength(2)
+    expect(wrapper.text()).toContain('qBittorrent state: missingFiles')
+    expect(wrapper.text()).toContain('No error recorded for this attempt.')
+  })
+
+  it('explains a 100%-but-downloading row and surfaces the download client', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({
+            id: 'seed',
+            category: 'InProgress',
+            status: 'Downloading',
+            progress: 100,
+            downloadClientName: 'qBittorrent',
+            downloadClientType: 'qbittorrent',
+          }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+    const item = vm.allActivityItems.find((i) => i.id === 'seed')!
+
+    expect(vm.statusTooltip(item)).toContain('still active')
+    expect(vm.clientTooltip(item)).toBe('Downloading via qBittorrent (torrent client)')
   })
 
   it('removes a queue-backed item through the client', async () => {

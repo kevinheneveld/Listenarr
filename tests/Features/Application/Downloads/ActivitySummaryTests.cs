@@ -269,5 +269,44 @@ namespace Listenarr.Tests.Features.Application.Downloads
             Assert.Equal("Sample file too short", item.Reason);
             Assert.Equal("My qBittorrent", item.DownloadClientName);
         }
+
+        [Fact]
+        public void Build_PopulatesClientType_FromResolver()
+        {
+            var downloads = new[] { Make(DownloadStatus.Downloading, audiobookId: 1, clientId: "qbit") };
+
+            var item = Assert.Single(ActivitySummary.Build(
+                downloads, Now,
+                clientTypeResolver: id => id == "qbit" ? "qbittorrent" : null).Items);
+
+            Assert.Equal("qbittorrent", item.DownloadClientType);
+        }
+
+        [Fact]
+        public void Build_ProjectsAttempts_NewestFirst_WithPerAttemptReasons()
+        {
+            // A book that was blocked, then failed, then finally moved into the library.
+            var downloads = new[]
+            {
+                Make(DownloadStatus.ImportBlocked, audiobookId: 1, startedAt: Now.AddDays(-3), blockReason: "Sample too short"),
+                Make(DownloadStatus.Failed, audiobookId: 1, startedAt: Now.AddDays(-2), error: "qBittorrent state: missingFiles"),
+                Make(DownloadStatus.Moved, audiobookId: 1, completedAt: Now.AddHours(-1)),
+            };
+
+            // The still-Blocked attempt represents the book (Blocked wins over a terminal Moved),
+            // so drill into Blocked to get the row; the attempt list spans all three regardless.
+            var item = Assert.Single(ActivitySummary.Build(
+                downloads, Now, filter: ActivityCategory.Blocked).Items);
+
+            Assert.Equal(3, item.Attempts.Count);
+            // Newest-first: the successful Moved attempt leads, with no error.
+            Assert.Equal(ActivityCategory.Imported, item.Attempts[0].Category);
+            Assert.Null(item.Attempts[0].Reason);
+            // Earlier attempts keep their own faithful reasons.
+            Assert.Equal(ActivityCategory.Failed, item.Attempts[1].Category);
+            Assert.Equal("qBittorrent state: missingFiles", item.Attempts[1].Reason);
+            Assert.Equal(ActivityCategory.Blocked, item.Attempts[2].Category);
+            Assert.Equal("Sample too short", item.Attempts[2].Reason);
+        }
     }
 }

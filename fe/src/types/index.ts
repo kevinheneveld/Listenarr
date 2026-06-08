@@ -186,6 +186,19 @@ export interface ActivityItem {
   attemptCount: number
   downloadClientId: string
   downloadClientName?: string
+  // Download client implementation ("qbittorrent", "nzbget", "DDL", ...) for the client-type indicator.
+  downloadClientType?: string
+  // Per-attempt breakdown of the grab attempts that collapsed into this row, newest-first.
+  attempts?: ActivityAttempt[]
+}
+
+// One historical grab attempt for a book (GET /downloads/activity).
+export interface ActivityAttempt {
+  category: ActivityCategory
+  status: string
+  at: string
+  reason?: string
+  downloadClientName?: string
 }
 
 export interface ActivityReasonCount {

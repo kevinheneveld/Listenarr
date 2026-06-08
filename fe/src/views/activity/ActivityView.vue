@@ -117,19 +117,26 @@
             <div class="col-title">
               <div class="title-cell">
                 <div class="title-main">
-                  <RouterLink
-                    v-if="item.audiobookId"
-                    :to="`/audiobooks/${item.audiobookId}`"
-                    class="title-link"
-                    >{{ getDisplayTitle(item) }}</RouterLink
-                  >
-                  <span v-else class="title-text">{{ getDisplayTitle(item) }}</span>
-                  <span
-                    v-if="item.reason"
-                    class="title-reason"
-                    :title="item.reason"
-                    >{{ item.reason }}</span
-                  >
+                  <div class="title-row">
+                    <RouterLink
+                      v-if="item.audiobookId"
+                      :to="`/audiobooks/${item.audiobookId}`"
+                      class="title-link"
+                      >{{ getDisplayTitle(item) }}</RouterLink
+                    >
+                    <span v-else class="title-text">{{ getDisplayTitle(item) }}</span>
+                    <span
+                      v-if="item.downloadClient"
+                      class="client-chip"
+                      :title="clientTooltip(item)"
+                    >
+                      <component :is="clientIcon(item)" class="client-icon" />
+                      {{ item.downloadClient }}
+                    </span>
+                  </div>
+                  <span v-if="item.reason" class="title-reason" :title="item.reason">{{
+                    item.reason
+                  }}</span>
                 </div>
               </div>
             </div>
@@ -143,9 +150,15 @@
               <span class="when-text" :title="formatWhenTitle(item)">{{
                 formatWhen(item.whenIso)
               }}</span>
-              <span v-if="item.attemptCount > 1" class="attempts-badge" :title="`${item.attemptCount} attempts`"
-                >×{{ item.attemptCount }}</span
+              <button
+                v-if="item.attemptCount > 1"
+                type="button"
+                class="attempts-badge"
+                :title="`${item.attemptCount} attempts — click to see what happened`"
+                @click="openAttempts(item)"
               >
+                ×{{ item.attemptCount }}
+              </button>
             </div>
             <div class="col-progress">
               <div class="progress-cell">
@@ -166,7 +179,7 @@
               <span v-else class="muted">-</span>
             </div>
             <div class="col-status">
-              <span :class="['status-badge', item.status]">
+              <span :class="['status-badge', item.status]" :title="statusTooltip(item)">
                 {{ formatStatus(item.status) }}
               </span>
             </div>
@@ -263,6 +276,47 @@
         </div>
       </div>
     </div>
+
+    <!-- Attempt-history modal: what each of the ×N grab attempts was and why it failed -->
+    <div v-if="showAttemptsModal" class="modal-overlay" @click="closeAttempts">
+      <div class="modal-content attempts-modal" @click.stop>
+        <div class="modal-header">
+          <h3>
+            <PhClockCounterClockwise />
+            Attempt History
+          </h3>
+          <button class="modal-close" @click="closeAttempts">
+            <PhX />
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="attempts-subtitle">
+            {{ attemptsItem ? getDisplayTitle(attemptsItem) : '' }} —
+            <strong>{{ attemptsItem?.attempts.length ?? 0 }}</strong> attempts, newest first
+          </p>
+          <ol class="attempts-list">
+            <li v-for="(attempt, idx) in attemptsItem?.attempts ?? []" :key="idx" class="attempt-row">
+              <div class="attempt-head">
+                <span :class="['status-badge', attemptBadgeClass(attempt)]">{{
+                  formatStatus(attempt.status.toLowerCase())
+                }}</span>
+                <span class="attempt-when" :title="new Date(attempt.at).toLocaleString()">{{
+                  formatWhen(attempt.at)
+                }}</span>
+                <span v-if="attempt.downloadClientName" class="attempt-client">{{
+                  attempt.downloadClientName
+                }}</span>
+              </div>
+              <p v-if="attempt.reason" class="attempt-reason">{{ attempt.reason }}</p>
+              <p v-else class="attempt-reason muted">No error recorded for this attempt.</p>
+            </li>
+          </ol>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeAttempts">Close</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -280,7 +334,13 @@ import {
   PhChartBar,
   PhTrash,
   PhMagnifyingGlass,
+  PhClockCounterClockwise,
+  PhMagnet,
+  PhCloudArrowDown,
+  PhGlobe,
+  PhHardDrives,
 } from '@phosphor-icons/vue'
+import type { Component } from 'vue'
 import { useToast } from '@/services/toastService'
 import { errorTracking } from '@/services/errorTracking'
 import { apiService } from '@/services/api'
@@ -293,6 +353,7 @@ import type {
   QueueUpdatePayload,
   ActivityResponse,
   ActivityItem,
+  ActivityAttempt,
   ActivityCategory,
 } from '@/types'
 import { normalizeQueueSnapshot } from '@/utils/queueSnapshot'
@@ -310,6 +371,8 @@ const showRemoveModal = ref(false)
 const clientHasQueueEntry = ref<boolean | null>(null)
 const itemToRemove = ref<ActivityRow | null>(null)
 const removing = ref(false)
+const showAttemptsModal = ref(false)
+const attemptsItem = ref<ActivityRow | null>(null)
 let unsubscribeQueue: (() => void) | null = null
 let queueRefreshInterval: ReturnType<typeof setInterval> | null = null
 
@@ -498,6 +561,7 @@ interface ActivityRow {
   downloadClient: string
   downloadClientId: string
   downloadClientType: string
+  attempts: ActivityAttempt[]
   canRemove: boolean
   isStaleSnapshot?: boolean
 }
@@ -549,7 +613,8 @@ const toActivityRow = (item: ActivityItem): ActivityRow => {
     completedIso: item.completedAt,
     downloadClient: item.downloadClientName ?? item.downloadClientId ?? 'Unknown Client',
     downloadClientId: item.downloadClientId,
-    downloadClientType: isDdl ? 'DDL' : 'external',
+    downloadClientType: item.downloadClientType ?? (isDdl ? 'DDL' : 'external'),
+    attempts: item.attempts ?? [],
     canRemove: item.category === 'InProgress' || item.category === 'Blocked',
   }
 }
@@ -720,8 +785,98 @@ const formatStatus = (status: string): string => {
     importblocked: 'Import Blocked',
     imported: 'Imported',
     stalled: 'Stalled',
+    // Raw DownloadStatus names that map to the Imported category (used in the attempt-history modal).
+    moved: 'Imported',
+    ready: 'Imported',
   }
   return labels[status] ?? status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+// Maps a download-client implementation type to an icon. Torrent clients get a magnet, usenet
+// clients a cloud-download, direct downloads a globe; anything unknown falls back to a drive.
+const clientIcon = (item: ActivityRow): Component => {
+  const type = (item.downloadClientType || '').toLowerCase()
+  if (type === 'ddl') return PhGlobe
+  if (['qbittorrent', 'transmission', 'deluge', 'rtorrent', 'utorrent'].includes(type))
+    return PhMagnet
+  if (['sabnzbd', 'nzbget'].includes(type)) return PhCloudArrowDown
+  return PhHardDrives
+}
+
+// Human label for the client implementation, used in the client chip's tooltip.
+const clientKindLabel = (type: string): string => {
+  const t = (type || '').toLowerCase()
+  if (t === 'ddl') return 'direct download'
+  if (['qbittorrent', 'transmission', 'deluge', 'rtorrent', 'utorrent'].includes(t))
+    return 'torrent client'
+  if (['sabnzbd', 'nzbget'].includes(t)) return 'usenet client'
+  return 'download client'
+}
+
+const clientTooltip = (item: ActivityRow): string => {
+  const where = item.downloadClient || 'an unknown client'
+  return `Downloading via ${where} (${clientKindLabel(item.downloadClientType)})`
+}
+
+// Explains what a status means — and, crucially, why a row can read ~100% yet still show
+// Downloading/Processing: the progress bar tracks downloaded bytes, the badge tracks pipeline stage.
+const statusTooltip = (item: ActivityRow): string => {
+  const nearDone = item.progress >= 99.5
+  switch (item.status) {
+    case 'downloading':
+      return nearDone
+        ? 'Bytes are fully downloaded, but the client is still active (e.g. seeding) or Listenarr has not yet detected completion.'
+        : 'Actively downloading from the client.'
+    case 'processing':
+      return nearDone
+        ? 'Download finished; Listenarr is now importing and moving the files into your library.'
+        : 'Listenarr is processing the completed download (importing / moving files).'
+    case 'queued':
+      return 'Waiting in the download client queue to start.'
+    case 'paused':
+      return 'Download is paused in the client.'
+    case 'importpending':
+      return 'Waiting on import completion or manual interaction before the files land in the library.'
+    case 'importblocked':
+      return 'Finished downloading, but the import needs attention. Retryable from the item.'
+    case 'imported':
+      return 'The files made it into your library.'
+    case 'completed':
+      return 'Download completed.'
+    case 'stalled':
+      return 'Made no download progress and was reaped by the stall timer.'
+    case 'failed':
+      return 'The download failed. See the reason for details.'
+    default:
+      return formatStatus(item.status)
+  }
+}
+
+// Reuses the row badge mapping for a single historical attempt (category drives the colour/class).
+const attemptBadgeClass = (attempt: ActivityAttempt): string => {
+  switch (attempt.category) {
+    case 'Blocked':
+      return 'importblocked'
+    case 'Imported':
+      return 'imported'
+    case 'Failed':
+      return 'failed'
+    case 'Stalled':
+      return 'stalled'
+    case 'InProgress':
+    default:
+      return (attempt.status || 'downloading').toLowerCase()
+  }
+}
+
+const openAttempts = (item: ActivityRow) => {
+  attemptsItem.value = item
+  showAttemptsModal.value = true
+}
+
+const closeAttempts = () => {
+  showAttemptsModal.value = false
+  attemptsItem.value = null
 }
 
 // Relative "when" label for the activity timestamp (e.g. "5m ago", "3h ago", "Jun 5").
@@ -1133,12 +1288,38 @@ onUnmounted(() => {
   gap: 0.1rem;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .title-reason {
   color: #868e96;
   font-size: 0.72rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.client-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: #adb5bd;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  white-space: nowrap;
+}
+
+.client-icon {
+  width: 12px;
+  height: 12px;
+  color: #868e96;
 }
 
 .title-text,
@@ -1148,6 +1329,9 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Shrink within the flex title row so the client chip stays visible and the title ellipsizes. */
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .title-link {
@@ -1178,11 +1362,21 @@ onUnmounted(() => {
 .attempts-badge {
   margin-left: 0.4rem;
   padding: 0.05rem 0.3rem;
+  border: none;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.06);
   color: #868e96;
   font-size: 0.65rem;
   font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.attempts-badge:hover {
+  background: rgba(77, 171, 247, 0.18);
+  color: #4dabf7;
 }
 
 /* Progress cell */
@@ -1519,6 +1713,70 @@ onUnmounted(() => {
 .btn-danger svg {
   width: 16px;
   height: 16px;
+}
+
+/* Attempt-history modal */
+.attempts-modal {
+  max-width: 560px;
+}
+
+.attempts-subtitle {
+  color: #adb5bd;
+  font-size: 0.9rem;
+  margin: 0 0 1rem 0;
+}
+
+.attempts-subtitle strong {
+  color: #fff;
+}
+
+.attempts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.attempt-row {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+
+.attempt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.attempt-when {
+  color: #adb5bd;
+  font-size: 0.78rem;
+}
+
+.attempt-client {
+  color: #868e96;
+  font-size: 0.72rem;
+  margin-left: auto;
+}
+
+.attempt-reason {
+  margin: 0.4rem 0 0 0;
+  color: #ced4da;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.attempt-reason.muted {
+  color: #6c757d;
+  font-style: italic;
 }
 
 /* Mobile responsive */

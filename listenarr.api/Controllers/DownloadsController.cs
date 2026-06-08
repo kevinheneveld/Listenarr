@@ -147,6 +147,7 @@ public class DownloadsController : ControllerBase
                 .Select(c => c.Id)
                 .ToHashSet();
             var clientLookup = downloadClients.ToDictionary(c => c.Id, c => c.Name);
+            var clientTypeLookup = downloadClients.ToDictionary(c => c.Id, c => c.Type);
 
             var all = await _downloadRepository.GetAllAsync();
             var inScope = all.Where(d =>
@@ -167,7 +168,8 @@ public class DownloadsController : ControllerBase
                 filterCategory,
                 page,
                 pageSize,
-                clientId => clientLookup.TryGetValue(clientId, out var name) ? name : "Unknown Client");
+                clientId => clientLookup.TryGetValue(clientId, out var name) ? name : "Unknown Client",
+                clientId => clientTypeLookup.TryGetValue(clientId, out var type) ? type : null);
 
             return Ok(response);
         }
