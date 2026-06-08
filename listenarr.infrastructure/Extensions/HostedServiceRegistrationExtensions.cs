@@ -91,6 +91,10 @@ namespace Listenarr.Infrastructure.Extensions
             // doesn't grow unbounded (CleanupOldJobsAsync previously had no caller)
             services.AddHostedService<DownloadProcessingJobCleanupService>();
 
+            // Periodically purge old terminal download-history rows (the Downloads table had
+            // no retention, so it grew unbounded).
+            services.AddHostedService<DownloadHistoryRetentionService>();
+
             // Background worker that processes unmatched-file scan jobs
             services.AddHostedService<UnmatchedScanBackgroundService>();
 

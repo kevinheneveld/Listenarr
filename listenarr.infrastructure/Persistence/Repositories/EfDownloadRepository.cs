@@ -74,6 +74,36 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             await ctx.SaveChangesAsync();
         }
 
+        // Terminal statuses whose history rows are eligible for age-based retention cleanup.
+        // Deliberately excludes every active/in-flight state (Queued, Downloading, Paused,
+        // Processing, Ready, ImportPending) so a still-working or awaiting-action download is
+        // never deleted, no matter how old its StartedAt is.
+        private static readonly DownloadStatus[] TerminalStatuses =
+        {
+            DownloadStatus.Moved,
+            DownloadStatus.Completed,
+            DownloadStatus.Failed,
+            DownloadStatus.ImportBlocked,
+        };
+
+        public async Task<int> DeleteTerminalOlderThanAsync(DateTime cutoffUtc, CancellationToken ct = default)
+        {
+            await using var ctx = await _dbFactory.CreateDbContextAsync(ct);
+            var stale = await ctx.Downloads
+                .Where(d => TerminalStatuses.Contains(d.Status)
+                            && (d.CompletedAt ?? d.StartedAt) < cutoffUtc)
+                .ToListAsync(ct);
+
+            if (stale.Count == 0)
+            {
+                return 0;
+            }
+
+            ctx.Downloads.RemoveRange(stale);
+            await ctx.SaveChangesAsync(ct);
+            return stale.Count;
+        }
+
         public async Task<List<Download>> GetAllAsync()
         {
             await using var ctx = await _dbFactory.CreateDbContextAsync();

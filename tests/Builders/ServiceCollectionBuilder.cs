@@ -229,6 +229,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<DownloadMonitorService>(); // FIXME: This should be a processor
             services.AddSingleton<DownloadProcessingJobProcessor>();
             services.AddSingleton<DownloadProcessingJobCleanupService>();
+            services.AddSingleton<DownloadHistoryRetentionService>();
 
             return services;
         }
