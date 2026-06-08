@@ -1062,10 +1062,14 @@ export interface RenamePreview {
   hasChanges: boolean
 }
 
+export type ConflictResolution = 'Skip' | 'Overwrite'
+
 export interface FileRenameOperation {
   fileId: number
   currentPath: string
   newPath: string
+  /** How to resolve a "target file already exists" collision. Defaults to Skip. */
+  onConflict?: ConflictResolution
 }
 
 export interface RenameOperation {
@@ -1078,12 +1082,36 @@ export interface ExecuteRenameRequest {
   operations: RenameOperation[]
 }
 
+export interface ConflictFileInfo {
+  path?: string
+  size?: number
+  durationSeconds?: number
+  format?: string
+  container?: string
+  codec?: string
+  bitrate?: number
+  modifiedAt?: string
+}
+
+export interface RenameConflictInfo {
+  incoming: ConflictFileInfo
+  existing: ConflictFileInfo
+  /** True when an audiobook record tracks the existing destination file. */
+  existingTracked: boolean
+  existingAudiobookId?: number
+  existingAudiobookTitle?: string
+  existingFileId?: number
+}
+
 export interface FileRenameResultItem {
   fileId: number
   previousPath?: string
   newPath?: string
   success: boolean
   error?: string
+  /** True when the move failed because the destination already exists. */
+  isConflict?: boolean
+  conflict?: RenameConflictInfo
 }
 
 export interface RenameResult {

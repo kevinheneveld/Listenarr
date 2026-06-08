@@ -24,6 +24,13 @@ namespace Listenarr.Application.Interfaces.Repositories
         Task<List<Audiobook>> GetAllAsync();
         Task<List<Audiobook>> GetLibraryAsync();
         Task<List<Audiobook>> GetByIdsWithFilesAsync(IEnumerable<int> ids, CancellationToken ct = default);
+        /// <summary>
+        /// Returns the audiobook (with its <see cref="Audiobook.Files"/> loaded)
+        /// that tracks a file at the given normalized path, or null if none
+        /// does. Read-only; used by organize to identify which record owns a
+        /// destination file when a rename would collide.
+        /// </summary>
+        Task<Audiobook?> GetByFilePathAsync(string normalizedPath, CancellationToken ct = default);
         Task<List<Audiobook>> GetMonitoredAudiobooksForSearchAsync(DateTime cutoff, CancellationToken ct = default);
         Task NormalizeJsonColumnsAsync(CancellationToken ct = default);
         Task<Audiobook?> GetByAsinAsync(string asin);
