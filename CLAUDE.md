@@ -7,7 +7,7 @@
 
 ## What Is This
 
-Kevin's fork of [Listenarrs/Listenarr](https://github.com/Listenarrs/Listenarr) — an automated audiobook management system (C# .NET 8 backend + Vue 3 frontend). Kevin runs a live instance on his home network, tracks bugs and features as GitHub Issues, and submits PRs back upstream.
+Kevin's fork of [Listenarrs/Listenarr](https://github.com/Listenarrs/Listenarr) — an automated audiobook management system (C# .NET 10 backend + Vue 3 frontend). Kevin runs a live instance on his home network, tracks bugs and features as GitHub Issues, and submits PRs back upstream.
 
 The canonical upstream repo moved from `therobbiedavis/Listenarr` to the `Listenarrs` org on 2026-05-27 (the old URL still resolves as a transparent redirect, but `origin` now points at the org).
 
@@ -75,6 +75,8 @@ Two types of commits live in `kevin/live`:
 - **Personal-only**: prefix with `[personal]` — e.g., `[personal] default sort by date added`. These are UI preferences, behavior tweaks, or setup-specific things that would never make sense as upstream PRs. Know that these will always need to be rebased over.
 
 ### Reconciling `kevin/live` with new canary
+
+> **⚠️ Topology note (2026-06-08):** `canary` and `kevin/live` currently have **unrelated git histories** (the upstream org-migration re-rooted canary), so the plain `git rebase canary` / `git merge canary` below fail with "refusing to merge unrelated histories." Two working methods today: (1) for a single canary-cut fix, **cherry-pick** it onto `kevin/live`; (2) for a **version catch-up**, forward-merge canary using the matching `v1.0.x-canary` tag as a synthetic 3-way base via `git replace --graft` (this brought kevin/live to v1.0.7 on 2026-06-08 with only 3 trivial conflicts). The size-based guidance below still applies once a shared base exists.
 
 Pick the right tool for the size of the advance:
 
