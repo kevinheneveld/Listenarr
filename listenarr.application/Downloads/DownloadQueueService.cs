@@ -141,6 +141,12 @@ namespace Listenarr.Application.Downloads
             var clientQueueResults = await FetchClientQueueResultsAsync(enabledClients);
             var clientStatuses = BuildClientStatuses(clientQueueResults);
 
+            // Index the matching candidates once per snapshot. Resolving each queue
+            // item to its tracked download then becomes an O(1) identity lookup
+            // instead of scoring every candidate (which fell through to title
+            // normalization for every non-matching pair).
+            var matchIndex = DownloadQueueMatcher.BuildIndex(allDownloadsForMatching);
+
             foreach (var clientQueueResult in clientQueueResults)
             {
                 var client = clientQueueResult.Client;
@@ -167,6 +173,7 @@ namespace Listenarr.Application.Downloads
                             client.Name ?? client.Id);
                     }
 
+                    var clientMatchIndex = matchIndex.ForClient(client.Id);
                     var mappedQueueItems = new List<QueueItem>();
                     foreach (var queueItem in clientQueue)
                     {
@@ -177,7 +184,7 @@ namespace Listenarr.Application.Downloads
                                 queueItem.CompletionTime = DateTime.UtcNow;
                             }
 
-                            var matchedDownload = FindBestMatchingDownload(queueItem, client, allDownloadsForMatching);
+                            var matchedDownload = DownloadQueueMatcher.FindBestMatch(queueItem, clientMatchIndex, logger);
                             if (matchedDownload != null)
                             {
                                 var originalClientId = queueItem.Id;
@@ -753,47 +760,6 @@ namespace Listenarr.Application.Downloads
                     await downloadRepository.UpdateMetadataAsync(matchedDownload.Id, "TorrentHash", originalClientId);
                 }
             }
-        }
-
-        private Download? FindBestMatchingDownload(
-            QueueItem queueItem,
-            DownloadClientConfiguration client,
-            IEnumerable<Download> candidateDownloads)
-        {
-            if (queueItem == null || client == null || candidateDownloads == null)
-            {
-                return null;
-            }
-
-            var matches = candidateDownloads
-                .Where(download => download.DownloadClientId == client.Id)
-                .Select(download => new
-                {
-                    Download = download,
-                    Score = queueItem.GetMatchScore(download)
-                })
-                .Where(x => x.Score > 0)
-                .OrderByDescending(x => x.Score)
-                .ThenByDescending(x => x.Download.StartedAt)
-                .ToList();
-
-            if (matches.Count == 0)
-            {
-                return null;
-            }
-
-            var bestMatch = matches[0];
-            if (bestMatch.Score == 1 && matches.Skip(1).Any(x => x.Score == bestMatch.Score))
-            {
-                logger.LogDebug(
-                    "Queue item {QueueId} '{QueueTitle}' had ambiguous title-only matches on client {ClientId}; leaving unmatched",
-                    queueItem.Id,
-                    queueItem.Title,
-                    client.Id);
-                return null;
-            }
-
-            return bestMatch.Download;
         }
 
         private static IEnumerable<string> GetKnownClientItemIds(Dictionary<string, object>? metadata)
