@@ -317,7 +317,7 @@
               @click="showSeriesPicker = true"
               title="This isn't the right series? Pick the correct one"
             >
-              <PhMagnifyingGlass />
+              <PhSwap />
               Wrong series?
             </button>
             <button
@@ -866,6 +866,7 @@ import {
   PhGlobe,
   PhFolderOpen,
   PhMagnifyingGlass,
+  PhSwap,
 } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import { useLibraryStore } from '@/stores/library'
@@ -953,7 +954,8 @@ const isMetadataCollection = computed(() => isAuthorCollection.value || isSeries
 const viewMode = ref<'grid' | 'list'>('grid')
 const showItemDetails = ref(false)
 const searchQuery = ref('')
-const sortKey = ref('title')
+// Series pages default to series order (the natural reading order); author pages to title.
+const sortKey = ref(type.value === 'series' ? 'series' : 'title')
 const currentPage = ref(1)
 const pageSize = ref(50)
 const editingAudiobook = ref<Audiobook | null>(null)
@@ -1407,11 +1409,20 @@ const baseSortOptions = [
 ]
 
 const sortOptions = computed(() => {
-  return baseSortOptions.filter((o) => {
-    if (type.value === 'author' && o.value === 'author') return false
-    if (type.value === 'series' && o.value === 'series') return false
-    return true
-  })
+  return baseSortOptions
+    .filter((o) => {
+      // Hide the axis every book in the collection already shares.
+      if (type.value === 'author' && o.value === 'author') return false
+      return true
+    })
+    .map((o) => {
+      // On a series page every book is in the same series, so the "series" sort
+      // means ordering by the book's position within it — label it accordingly.
+      if (type.value === 'series' && o.value === 'series') {
+        return { ...o, label: 'Series Order' }
+      }
+      return o
+    })
 })
 
 // Ensure current sortKey is valid for the current view; reset to title if not

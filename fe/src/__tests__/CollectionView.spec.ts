@@ -1493,3 +1493,82 @@ describe('CollectionView', () => {
     expect(wrapper.text()).toContain('3 ready to add')
   })
 })
+
+describe('CollectionView series-order sort', () => {
+  beforeEach(() => {
+    const g = globalThis as unknown as Record<string, unknown>
+    if (typeof (g as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+      g.ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+      }
+    }
+    if (typeof (g as { WebSocket?: unknown }).WebSocket === 'undefined') {
+      g.WebSocket = function () {}
+    }
+    // Isolate from other tests' catalog mocks so only the owned books appear.
+    mockGetSeriesCatalog.mockResolvedValue(null)
+    mockGetSeriesLookup.mockResolvedValue(null)
+    setActivePinia(createPinia())
+  })
+
+  const mountSeries = async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/collection/:type/:name', name: 'collection', component: CollectionView },
+      ],
+    })
+    await router.push('/collection/series/Demon%20Cycle')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    // Title order (Apple, Zebra) is the reverse of series order (#1 Zebra, #2 Apple).
+    store.audiobooks = [
+      { id: 1, title: 'Zebra', authors: ['A'], series: 'Demon Cycle', seriesNumber: '1', files: [] },
+      { id: 2, title: 'Apple', authors: ['A'], series: 'Demon Cycle', seriesNumber: '2', files: [] },
+    ] as unknown as import('@/types').Audiobook[]
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(CollectionView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['EditAudiobookModal', 'CustomSelect', 'AddLibraryModal'],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    return wrapper
+  }
+
+  it('exposes a "Series Order" sort option on a series page', async () => {
+    const wrapper = await mountSeries()
+    const vm = wrapper.vm as unknown as Record<string, unknown>
+
+    const opts = vm.sortOptions as Array<{ value: string; label: string }>
+    const series = opts.find((o) => o.value === 'series')
+    expect(series).toBeTruthy()
+    expect(series?.label).toBe('Series Order')
+  })
+
+  it('defaults a series page to series order', async () => {
+    const wrapper = await mountSeries()
+    const vm = wrapper.vm as unknown as Record<string, unknown>
+    expect(vm.sortKey).toBe('series')
+  })
+
+  it('orders books by series number when sorted by series order', async () => {
+    const wrapper = await mountSeries()
+    const vm = wrapper.vm as unknown as Record<string, unknown>
+    // Explicitly select series order (decoupled from the default), then verify
+    // #1 (Zebra) sorts before #2 (Apple) — series order, not alphabetical title.
+    ;(vm.sortKeyProxy as unknown as string) = 'series'
+    await wrapper.vm.$nextTick()
+
+    const titles = (vm.paginatedAudiobooks as Array<{ title?: string }>).map((b) => b.title)
+    expect(titles.indexOf('Zebra')).toBeGreaterThanOrEqual(0)
+    expect(titles.indexOf('Zebra')).toBeLessThan(titles.indexOf('Apple'))
+  })
+})
