@@ -1097,6 +1097,32 @@ const sortState = reactive({
   series: { key: 'title', order: 'asc' as 'asc' | 'desc' },
 })
 
+// Persist the user's last-used filter + sort so the view is restored when they
+// return to the page via the nav (a bare /audiobooks visit carries no query).
+// localStorage (not a cookie) mirrors the existing groupBy/viewMode/searchQuery
+// pattern in this view and matches "retained until changed". The URL still wins
+// over storage so shared links and back/forward reproduce the linked view.
+const SELECTED_FILTER_KEY = 'listenarr.selectedFilter'
+const SORT_STORAGE_KEYS = {
+  books: 'listenarr.sort.books',
+  authors: 'listenarr.sort.authors',
+  series: 'listenarr.sort.series',
+} as const
+const BUILTIN_FILTER_IDS = new Set([
+  'monitored',
+  'unmonitored',
+  'missing',
+  'recent',
+  'recently-imported',
+])
+// True when the current route is a dashboard drill-down (missing/author/narrator/
+// genre). Read straight off route.query so it's correct regardless of watcher
+// registration order — a drill-down navigation must not overwrite the stored filter.
+function routeHasDrilldown(): boolean {
+  const q = route.query
+  return !!(q.missing || q.author || q.narrator || q.genre)
+}
+
 const sortKey = computed({
   get: () => sortState[groupBy.value].key,
   set: (val: string) => {
@@ -1731,8 +1757,7 @@ function normalizeGroupBy(value: unknown): GroupByMode | null {
 // no router.replace at init: it would wipe drill-down params (?missing=,
 // ?author=, etc.) carried in by dashboard links.
 try {
-  const stored = localStorage.getItem(GROUP_BY_KEY)
-  const storedGroup = normalizeGroupBy(stored)
+  const storedGroup = normalizeGroupBy(localStorage.getItem(GROUP_BY_KEY))
   if (storedGroup) {
     groupBy.value = storedGroup
   }
@@ -1740,16 +1765,53 @@ try {
   if (initialGroup && initialGroup !== groupBy.value) {
     groupBy.value = initialGroup
   }
-  // Mirror the active group back to the URL so deep-links + browser back/forward stay consistent.
-  if (!initialGroup) {
-    router.replace({ path: '/audiobooks', query: { group: groupBy.value } })
-  } else if (route.query.group !== initialGroup) {
-    router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: initialGroup } })
+
+  // Seed the initial URL, then let the route watchers below hydrate the refs from
+  // it (the URL is the source of truth here). Start from the params already in the
+  // URL — this preserves drill-down params (?missing=, ?author=) and any shared-link
+  // filter/sort — then set the group and, on a plain visit (no existing filter, not
+  // a drill-down), restore the last-used filter + sort from localStorage so the
+  // user's view is recreated when they return to the page via the nav.
+  const seeded: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) {
+    if (typeof v === 'string') seeded[k] = v
+  }
+  seeded.group = groupBy.value
+
+  if (!seeded.filter && !routeHasDrilldown()) {
+    const f = localStorage.getItem(SELECTED_FILTER_KEY)
+    if (f && (BUILTIN_FILTER_IDS.has(f) || customFilters.value.some((x) => x.id === f))) {
+      seeded.filter = f
+    }
+  }
+  if (!seeded.sort) {
+    const s = localStorage.getItem(SORT_STORAGE_KEYS[groupBy.value])
+    if (s) {
+      const p = JSON.parse(s) as { key?: string; order?: string }
+      const def = DEFAULT_SORTS[groupBy.value]
+      // Only emit when it differs from the group default (matches buildManagedQuery).
+      if (typeof p.key === 'string' && p.key !== def.key) seeded.sort = p.key
+      if ((p.order === 'asc' || p.order === 'desc') && p.order !== def.order) seeded.dir = p.order
+    }
+  }
+
+  // Replace only when the query actually changes, to avoid a redundant navigation.
+  const curKeys = Object.keys(route.query).filter((k) => typeof route.query[k] === 'string')
+  const changed =
+    curKeys.length !== Object.keys(seeded).length ||
+    Object.keys(seeded).some((k) => seeded[k] !== route.query[k])
+  if (changed) {
+    router.replace({ path: '/audiobooks', query: seeded })
   }
 } catch {}
 
-// Hydrate sort for the active group from the URL. We only seed the current
-// group's slot — other groups keep their defaults until the user switches.
+// Hydrate sort for the active group from the URL, seeding only the current
+// group's slot. (Restoring the *last-used* sort/filter is handled by seeding the
+// URL from localStorage in the init-replace above — the URL is the source of
+// truth, so the sort/filter route watchers re-derive the refs from it.)
+// NOTE: this list must stay in sync with the books branch of `sortOptions`
+// (which can't be referenced here — it's declared later in setup). 'imported'
+// and 'series' were previously missing, silently dropping those keys on reload.
 try {
   const allowedKeys = (() => {
     if (groupBy.value === 'books') {
@@ -1759,8 +1821,10 @@ try {
         'author-first',
         'narrator-last',
         'narrator-first',
+        'series',
         'publisher',
         'year',
+        'imported',
         'monitored',
         'status',
       ]
@@ -1777,6 +1841,32 @@ try {
     sortState[groupBy.value].order = qDir
   }
 } catch {}
+
+// Persist the active group's sort whenever it changes, so a later bare visit restores it.
+watch(
+  () => [groupBy.value, sortState[groupBy.value].key, sortState[groupBy.value].order],
+  () => {
+    try {
+      const slot = sortState[groupBy.value]
+      localStorage.setItem(
+        SORT_STORAGE_KEYS[groupBy.value],
+        JSON.stringify({ key: slot.key, order: slot.order }),
+      )
+    } catch {}
+  },
+)
+
+// Persist the dropdown filter selection. Skip while on a drill-down route: the
+// route-sync watcher nulls selectedFilterId on such navigations, and we must not
+// let that erase the user's stored choice. An explicit clear (no drill-down) does
+// remove it, so deselecting is remembered too.
+watch(selectedFilterId, (v) => {
+  if (routeHasDrilldown()) return
+  try {
+    if (v) localStorage.setItem(SELECTED_FILTER_KEY, v)
+    else localStorage.removeItem(SELECTED_FILTER_KEY)
+  } catch {}
+})
 
 watch(groupBy, (v) => {
   try {

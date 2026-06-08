@@ -1228,3 +1228,126 @@ describe('AudiobooksView Recently Imported', () => {
     expect(vm.sortOrder).toBe('desc')
   })
 })
+
+describe('AudiobooksView filter/sort persistence', () => {
+  const SELECTED_FILTER_KEY = 'listenarr.selectedFilter'
+  const SORT_BOOKS_KEY = 'listenarr.sort.books'
+
+  const ensureGlobals = () => {
+    const g = globalThis as unknown as Record<string, unknown>
+    if (typeof (g as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+      g.ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+      }
+    }
+    if (typeof (g as { WebSocket?: unknown }).WebSocket === 'undefined') {
+      g.WebSocket = function () {}
+    }
+  }
+
+  const mountAt = async (initialLocation: string) => {
+    ensureGlobals()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/audiobooks', name: 'audiobooks', component: AudiobooksView },
+      ],
+    })
+    await router.push(initialLocation)
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    store.audiobooks = [
+      { id: 1, title: 'Newest', files: [{ format: 'm4b' }], importedAt: '2026-06-01T12:00:00Z' },
+      { id: 2, title: 'Older', files: [{ format: 'm4b' }], importedAt: '2026-01-01T00:00:00Z' },
+      { id: 3, title: 'Missing', files: [] },
+    ] as unknown as import('@/types').Audiobook[]
+    store.fetchLibrary = vi.fn(async () => undefined)
+
+    const wrapper = mount(AudiobooksView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: ['BulkEditModal', 'EditAudiobookModal', 'CustomFilterModal', 'FiltersDropdown', 'CustomSelect'],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    return { wrapper, router }
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+  })
+
+  it('restores the last-used filter and sort on a bare visit', async () => {
+    localStorage.setItem(SELECTED_FILTER_KEY, 'recently-imported')
+    localStorage.setItem(SORT_BOOKS_KEY, JSON.stringify({ key: 'imported', order: 'desc' }))
+
+    const { wrapper } = await mountAt('/audiobooks')
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+
+    expect(vm.selectedFilterId).toBe('recently-imported')
+    expect(vm.sortKey).toBe('imported')
+    expect(vm.sortOrder).toBe('desc')
+    // The restored filter actually applies (missing book excluded, newest first).
+    expect((vm.audiobooks as Array<{ id: number }>).map((b) => b.id)).toEqual([1, 2])
+  })
+
+  it('persists the filter selection to localStorage', async () => {
+    const { wrapper } = await mountAt('/audiobooks')
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+
+    vm.selectedFilterId = 'recently-imported'
+    await wrapper.vm.$nextTick()
+
+    expect(localStorage.getItem(SELECTED_FILTER_KEY)).toBe('recently-imported')
+  })
+
+  it('does NOT erase the stored filter when navigating to a dashboard drill-down', async () => {
+    localStorage.setItem(SELECTED_FILTER_KEY, 'recently-imported')
+    const { wrapper, router } = await mountAt('/audiobooks')
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+    expect(vm.selectedFilterId).toBe('recently-imported')
+
+    // Drill-down nav nulls selectedFilterId via route-sync; the guard must keep storage intact.
+    await router.push({ path: '/audiobooks', query: { missing: 'Description' } })
+    await wrapper.vm.$nextTick()
+
+    expect(vm.selectedFilterId).toBeNull()
+    expect(localStorage.getItem(SELECTED_FILTER_KEY)).toBe('recently-imported')
+  })
+
+  it('does NOT restore the stored filter on a drill-down route', async () => {
+    localStorage.setItem(SELECTED_FILTER_KEY, 'recently-imported')
+    const { wrapper } = await mountAt('/audiobooks?missing=Description')
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+
+    expect(vm.selectedFilterId).toBeNull()
+  })
+
+  it('clears the stored filter when the user explicitly clears filters', async () => {
+    localStorage.setItem(SELECTED_FILTER_KEY, 'recently-imported')
+    const { wrapper } = await mountAt('/audiobooks')
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+    expect(vm.selectedFilterId).toBe('recently-imported')
+
+    ;(vm.clearFilters as () => void)()
+    await wrapper.vm.$nextTick()
+
+    expect(vm.selectedFilterId).toBeNull()
+    expect(localStorage.getItem(SELECTED_FILTER_KEY)).toBeNull()
+  })
+
+  it('lets an explicit URL filter win over the stored one (shared link)', async () => {
+    localStorage.setItem(SELECTED_FILTER_KEY, 'recently-imported')
+    const { wrapper } = await mountAt('/audiobooks?filter=missing')
+    const vm = getVm(wrapper) as unknown as Record<string, unknown>
+
+    expect(vm.selectedFilterId).toBe('missing')
+  })
+})
