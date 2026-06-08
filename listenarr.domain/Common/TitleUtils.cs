@@ -15,17 +15,41 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 
 namespace Listenarr.Domain.Common
 {
     public class TitleUtils
     {
+        // NormalizeTitle is a pure function but runs seven regex passes per call.
+        // Hot paths (notably the download-queue match scan) normalize the same
+        // candidate titles repeatedly, so memoize results. The cache is bounded
+        // so a flood of distinct titles can't grow it without limit, and because
+        // the function is pure a process-wide cache is always correct.
+        private const int NormalizeCacheLimit = 50_000;
+        private static readonly ConcurrentDictionary<string, string> NormalizeCache = new(StringComparer.Ordinal);
+
         public static string NormalizeTitle(string title)
         {
             if (string.IsNullOrWhiteSpace(title))
                 return string.Empty;
 
+            if (NormalizeCache.TryGetValue(title, out var cached))
+                return cached;
+
+            var normalized = NormalizeTitleCore(title);
+
+            // Benign race on Count under concurrency — at worst we overshoot the
+            // cap slightly; correctness is unaffected.
+            if (NormalizeCache.Count < NormalizeCacheLimit)
+                NormalizeCache[title] = normalized;
+
+            return normalized;
+        }
+
+        private static string NormalizeTitleCore(string title)
+        {
             // Remove ALL bracketed content [anything] - more robust than specific patterns
             var result = Regex.Replace(title, @"\[.*?\]", "", RegexOptions.IgnoreCase);
 
