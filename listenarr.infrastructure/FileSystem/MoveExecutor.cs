@@ -285,6 +285,93 @@ namespace Listenarr.Infrastructure.FileSystem
         }
 
         /// <summary>
+        /// Why a flatten would (or wouldn't) succeed. <see cref="Ok"/> is the only
+        /// value <see cref="ExecuteFlatten"/> proceeds on.
+        /// </summary>
+        public enum FlattenFeasibility
+        {
+            Ok,
+            SourcePathEmpty,
+            TargetPathEmpty,
+            SourceMissing,
+            SamePath,
+            NotAncestor,
+            TargetMissing,
+            NoUsableParent,
+            TargetHasForeignFiles,
+            NoFiles,
+        }
+
+        /// <summary>
+        /// Read-only feasibility check for <see cref="ExecuteFlatten"/>: decides
+        /// whether collapsing <paramref name="source"/> into ancestor
+        /// <paramref name="dest"/> is safe, and returns the file count, without
+        /// touching the filesystem. Shared by the organize-preview (to bucket a
+        /// nested row and decide whether to offer the one-click flatten) and by
+        /// <see cref="ExecuteFlatten"/> (which refuses anything but
+        /// <see cref="FlattenFeasibility.Ok"/>) so the preview's promise and the
+        /// executor's guard can never disagree.
+        /// </summary>
+        public static (FlattenFeasibility Feasibility, int FileCount) EvaluateFlatten(string source, string dest)
+        {
+            if (string.IsNullOrWhiteSpace(source)) return (FlattenFeasibility.SourcePathEmpty, 0);
+            if (string.IsNullOrWhiteSpace(dest)) return (FlattenFeasibility.TargetPathEmpty, 0);
+            if (!Directory.Exists(source)) return (FlattenFeasibility.SourceMissing, 0);
+
+            var sourceFull = TrimTrailingSeparator(Path.GetFullPath(source));
+            var destFull = TrimTrailingSeparator(Path.GetFullPath(dest));
+            var sep = Path.DirectorySeparatorChar;
+
+            if (string.Equals(sourceFull, destFull, StringComparison.OrdinalIgnoreCase))
+                return (FlattenFeasibility.SamePath, 0);
+            // dest must be a STRICT ancestor of source. If it isn't, this isn't a flatten.
+            if (!(sourceFull + sep).StartsWith(destFull + sep, StringComparison.OrdinalIgnoreCase))
+                return (FlattenFeasibility.NotAncestor, 0);
+            if (!Directory.Exists(destFull))
+                return (FlattenFeasibility.TargetMissing, 0);
+            var destParent = Path.GetDirectoryName(destFull);
+            if (string.IsNullOrEmpty(destParent) || IsFilesystemRoot(destParent))
+                return (FlattenFeasibility.NoUsableParent, 0);
+
+            // Guard: every FILE under dest must already live under source. If dest
+            // holds any file outside source's subtree, flattening would merge into
+            // populated content — refuse and leave it for manual resolution.
+            var sourceWithSep = sourceFull + sep;
+            try
+            {
+                var destFiles = Directory.EnumerateFiles(destFull, "*", SearchOption.AllDirectories)
+                    .Select(f => TrimTrailingSeparator(Path.GetFullPath(f)))
+                    .ToList();
+                if (destFiles.Any(f => !f.StartsWith(sourceWithSep, StringComparison.OrdinalIgnoreCase)))
+                    return (FlattenFeasibility.TargetHasForeignFiles, 0);
+                if (destFiles.Count == 0)
+                    return (FlattenFeasibility.NoFiles, 0);
+                return (FlattenFeasibility.Ok, destFiles.Count);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                // Can't read the target — treat as not-feasible so neither the
+                // preview nor the executor offers a flatten it can't safely do.
+                return (FlattenFeasibility.TargetHasForeignFiles, 0);
+            }
+        }
+
+        /// <summary>Human-readable explanation of a non-Ok <see cref="FlattenFeasibility"/>.</summary>
+        public static string DescribeFeasibility(FlattenFeasibility f) => f switch
+        {
+            FlattenFeasibility.SourcePathEmpty => "Source path is empty",
+            FlattenFeasibility.TargetPathEmpty => "Target path is empty",
+            FlattenFeasibility.SourceMissing => "Source path does not exist",
+            FlattenFeasibility.SamePath => "Source and target are the same path",
+            FlattenFeasibility.NotAncestor => "Target is not an ancestor of source; not a flatten",
+            FlattenFeasibility.TargetMissing => "Target directory does not exist",
+            FlattenFeasibility.NoUsableParent => "Target has no usable parent directory (looks like a library root)",
+            FlattenFeasibility.TargetHasForeignFiles => "Target directory contains files outside the nested source folder; resolve manually",
+            FlattenFeasibility.NoFiles => "Nothing to flatten: no files under the source folder",
+            _ => "Flatten is not available for this row",
+        };
+
+        /// <summary>
         /// Flatten a redundantly-nested folder: collapse everything under
         /// <paramref name="source"/> up into <paramref name="dest"/>, where
         /// <paramref name="dest"/> is a strict ancestor of <paramref name="source"/>
@@ -295,88 +382,27 @@ namespace Listenarr.Infrastructure.FileSystem
         /// organize-library "nested one level too deep" rows, which a normal move
         /// can't resolve.
         ///
-        /// Strongly guarded so no real file is ever clobbered or lost: refuses
-        /// unless dest is a strict ancestor of source AND every file under dest
-        /// already lives under source. That guarantees dest holds nothing but
-        /// source's subtree wrapped in redundant (empty) directories, so the
-        /// operation only collapses empty wrappers. The move itself is two
-        /// same-volume <see cref="Directory.Move(string,string)"/> renames via a
-        /// sibling staging dir, with the source extracted before the redundant
-        /// dest shell is removed — so an interruption leaves the files recoverable
-        /// at the staging path rather than destroyed.
+        /// Strongly guarded via <see cref="EvaluateFlatten"/> so no real file is
+        /// ever clobbered or lost: refuses unless dest is a strict ancestor of
+        /// source AND every file under dest already lives under source. That
+        /// guarantees dest holds nothing but source's subtree wrapped in redundant
+        /// (empty) directories, so the operation only collapses empty wrappers. The
+        /// move itself is two same-volume <see cref="Directory.Move(string,string)"/>
+        /// renames via a sibling staging dir, with the source extracted before the
+        /// redundant dest shell is removed — so an interruption leaves the files
+        /// recoverable at the staging path rather than destroyed.
         /// </summary>
         public static MoveOutcome ExecuteFlatten(string source, string dest, Guid jobId, ILogger? logger)
         {
-            if (string.IsNullOrWhiteSpace(source))
+            var (feasibility, fileCount) = EvaluateFlatten(source, dest);
+            if (feasibility != FlattenFeasibility.Ok)
             {
-                return new MoveOutcome { Success = false, ErrorMessage = "Source path is empty" };
-            }
-            if (string.IsNullOrWhiteSpace(dest))
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Target path is empty" };
-            }
-            if (!Directory.Exists(source))
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Source path does not exist" };
+                return new MoveOutcome { Success = false, ErrorMessage = DescribeFeasibility(feasibility) };
             }
 
             var sourceFull = TrimTrailingSeparator(Path.GetFullPath(source));
             var destFull = TrimTrailingSeparator(Path.GetFullPath(dest));
-            var sep = Path.DirectorySeparatorChar;
-
-            if (string.Equals(sourceFull, destFull, StringComparison.OrdinalIgnoreCase))
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Source and target are the same path" };
-            }
-
-            // dest must be a STRICT ancestor of source. If it isn't, this isn't a
-            // flatten — refuse rather than guess.
-            if (!(sourceFull + sep).StartsWith(destFull + sep, StringComparison.OrdinalIgnoreCase))
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Target is not an ancestor of source; not a flatten" };
-            }
-
-            if (!Directory.Exists(destFull))
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Target directory does not exist" };
-            }
-
-            var destParent = Path.GetDirectoryName(destFull);
-            if (string.IsNullOrEmpty(destParent) || IsFilesystemRoot(destParent))
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Target has no usable parent directory (looks like a library root)" };
-            }
-
-            // Guard: every FILE under dest must already live under source. If dest
-            // holds any file outside source's subtree, flattening would merge into
-            // populated content — refuse and leave it for manual resolution.
-            var sourceWithSep = sourceFull + sep;
-            int fileCount;
-            try
-            {
-                var destFiles = Directory.EnumerateFiles(destFull, "*", SearchOption.AllDirectories)
-                    .Select(f => TrimTrailingSeparator(Path.GetFullPath(f)))
-                    .ToList();
-                if (destFiles.Any(f => !f.StartsWith(sourceWithSep, StringComparison.OrdinalIgnoreCase)))
-                {
-                    return new MoveOutcome
-                    {
-                        Success = false,
-                        ErrorMessage = "Target directory contains files outside the nested source folder; resolve manually",
-                    };
-                }
-                fileCount = destFiles.Count;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = TruncateErrorMessage(ex.Message) };
-            }
-
-            if (fileCount == 0)
-            {
-                return new MoveOutcome { Success = false, ErrorMessage = "Nothing to flatten: no files under the source folder" };
-            }
-
+            var destParent = Path.GetDirectoryName(destFull)!;
             var tempName = Path.Combine(destParent, $"{TempPrefix}{jobId:N}");
             try
             {

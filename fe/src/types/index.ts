@@ -1552,9 +1552,15 @@ export interface OrganizePreviewRow {
    * Set when status is `invalid_target` — machine-readable companion to
    * `reason`. One of the `OrganizeInvalidReasonCode` values the backend emits
    * (`missing_title`, `missing_author`, `source_at_root`, `target_ancestor`,
-   * `target_exists`, …). The UI groups invalid rows by this code.
+   * `target_exists`, `source_missing`, …). The UI groups invalid rows by this code.
    */
   reasonCode: string | null
+  /**
+   * True only for `target_ancestor` rows that pass the backend's read-only
+   * flatten feasibility check. The UI shows the one-click "Flatten" action only
+   * when this is true.
+   */
+  canFlatten: boolean
 }
 
 /**

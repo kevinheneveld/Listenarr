@@ -3201,9 +3201,24 @@ namespace Listenarr.Api.Controllers
                     if (IsTargetAncestorOfSource(currentPath, target))
                     {
                         row.Status = OrganizePreviewStatus.InvalidTarget;
-                        row.ReasonCode = OrganizeInvalidReasonCode.TargetAncestor;
-                        row.Reason = "Target is an ancestor of source; the move would flatten the source into one of its own parent directories. Adjust the Folder Naming Pattern or relocate the source manually.";
                         row.TargetPath = target;
+                        // Disk-check the flatten so the preview never offers a
+                        // one-click flatten the executor would refuse, and so an
+                        // orphaned record (folder gone from disk) is surfaced as
+                        // its own "files missing" case rather than a flatten-able
+                        // nested row.
+                        var (feasibility, _) = MoveExecutor.EvaluateFlatten(currentPath, target);
+                        if (feasibility == MoveExecutor.FlattenFeasibility.SourceMissing)
+                        {
+                            row.ReasonCode = OrganizeInvalidReasonCode.SourceMissing;
+                            row.Reason = "The record's folder no longer exists on disk — its files are gone. Re-scan the library to clear it, or remove the record.";
+                        }
+                        else
+                        {
+                            row.ReasonCode = OrganizeInvalidReasonCode.TargetAncestor;
+                            row.Reason = "Target is an ancestor of source; the move would flatten the source into one of its own parent directories. Adjust the Folder Naming Pattern or relocate the source manually.";
+                            row.CanFlatten = feasibility == MoveExecutor.FlattenFeasibility.Ok;
+                        }
                         rows.Add(row);
                         continue;
                     }

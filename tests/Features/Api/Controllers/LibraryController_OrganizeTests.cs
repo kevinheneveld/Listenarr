@@ -420,32 +420,118 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.Equal(1, preview.InvalidTargetCount);
         }
 
-        [Fact]
-        public async Task Preview_TargetIsAncestorOfSource_IsInvalidTarget()
+        /// <summary>
+        /// Re-point the seeded root folder + settings at a real temp directory so
+        /// the preview's on-disk flatten-feasibility check (added with the
+        /// one-click flatten) actually stats the fixture.
+        /// </summary>
+        private async Task UseTempRootAsync(string root)
         {
-            // Audiobook lives at /audiobooks/Author Y/Title/Narrator but the
-            // configured pattern only produces /audiobooks/Author Y/Title —
-            // the target is an ancestor of the source. MoveExecutor refuses
-            // this with "Target is an ancestor of source; refusing to flatten",
-            // so the preview must surface it as invalid_target.
-            //
-            // Uses the in-memory Root because no on-disk existence check is
-            // needed for the ancestor case.
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithFolderNamingPattern("{Author}/{Title}")
+                .WithOutputPath(root)
+                .Build());
+            foreach (var existing in await _rootFolderRepository.GetAllAsync())
+            {
+                await _rootFolderRepository.RemoveAsync(existing.Id);
+            }
+            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
+                .WithName("Library")
+                .WithPath(root)
+                .WithIsDefault()
+                .Build());
+        }
+
+        [Fact]
+        public async Task Preview_TargetIsAncestorOfSource_OfferableFlatten()
+        {
+            // Source /<tmp>/Author Y/Title/Narrator nests one level below its
+            // canonical target /<tmp>/Author Y/Title. The target holds nothing
+            // but the Narrator subtree, so the flatten is feasible and the
+            // preview marks the row CanFlatten.
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var source = Path.Combine(root, "Author Y", "Title", "Narrator");
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(Path.Combine(source, "book.m4b"), "audio");
+
             var ab = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Title",
                 Authors = new List<string> { "Author Y" },
-                BasePath = $"{Root}/Author Y/Title/Narrator",
+                BasePath = source,
             });
-            await AttachFileAsync(ab);
+            await AttachFileAsync(ab, Path.Combine(source, "book.m4b"));
 
             var preview = await GetPreviewAsync();
             var row = Assert.Single(preview.Rows);
             Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
-            Assert.Contains("ancestor", row.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
             Assert.Equal(OrganizeInvalidReasonCode.TargetAncestor, row.ReasonCode);
-            Assert.Equal($"{Root}/Author Y/Title", row.TargetPath);
-            Assert.Equal(0, preview.WillMoveCount);
+            Assert.Contains("ancestor", row.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(Path.Combine(root, "Author Y", "Title"), row.TargetPath);
+            Assert.True(row.CanFlatten);
+            Assert.Equal(1, preview.InvalidTargetCount);
+        }
+
+        [Fact]
+        public async Task Preview_TargetAncestor_TargetHasForeignFiles_NotFlattenable()
+        {
+            // Same nesting, but the canonical target also holds a foreign file
+            // directly — flattening would merge into populated content, so the
+            // executor would refuse. The preview must not offer the flatten.
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var target = Path.Combine(root, "Author Y", "Title");
+            var source = Path.Combine(target, "Narrator");
+            Directory.CreateDirectory(source);
+            await File.WriteAllTextAsync(Path.Combine(source, "book.m4b"), "audio");
+            await File.WriteAllTextAsync(Path.Combine(target, "stray.txt"), "foreign");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Title",
+                Authors = new List<string> { "Author Y" },
+                BasePath = source,
+            });
+            await AttachFileAsync(ab, Path.Combine(source, "book.m4b"));
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizeInvalidReasonCode.TargetAncestor, row.ReasonCode);
+            Assert.False(row.CanFlatten);
+            Assert.Equal(1, preview.InvalidTargetCount);
+        }
+
+        [Fact]
+        public async Task Preview_TargetAncestor_SourceMissingOnDisk_IsSourceMissing()
+        {
+            // The record points at a nested path that no longer exists on disk
+            // (an orphaned record). It must surface as its own source_missing
+            // case — not a flatten-able nested row — and never offer the flatten.
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            // Note: the nested source directory is deliberately NOT created.
+            var source = Path.Combine(root, "Author Y", "Title", "Narrator");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Title",
+                Authors = new List<string> { "Author Y" },
+                BasePath = source,
+            });
+            await AttachFileAsync(ab, Path.Combine(source, "book.m4b"));
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
+            Assert.Equal(OrganizeInvalidReasonCode.SourceMissing, row.ReasonCode);
+            Assert.False(row.CanFlatten);
             Assert.Equal(1, preview.InvalidTargetCount);
         }
 

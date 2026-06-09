@@ -367,5 +367,58 @@ namespace Listenarr.Tests.Features.Infrastructure.FileSystem
             Assert.Contains("ancestor", outcome.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
             Assert.True(File.Exists(Path.Combine(source, "book.m4b")));
         }
+
+        [Fact(DisplayName = "EvaluateFlatten: clean nested folder is Ok with the file count")]
+        public void EvaluateFlatten_Ok()
+        {
+            var dest = MakeDir("Author", "Title", "Narrator");
+            var source = Path.Combine(dest, "Title");
+            Directory.CreateDirectory(source);
+            WriteFile(source, "a.mp3", "x");
+            WriteFile(source, "b.mp3", "y");
+
+            var (feasibility, count) = MoveExecutor.EvaluateFlatten(source, dest);
+
+            Assert.Equal(MoveExecutor.FlattenFeasibility.Ok, feasibility);
+            Assert.Equal(2, count);
+        }
+
+        [Fact(DisplayName = "EvaluateFlatten: missing source folder reports SourceMissing")]
+        public void EvaluateFlatten_SourceMissing()
+        {
+            var dest = MakeDir("Author", "Title", "Narrator");
+            var source = Path.Combine(dest, "Title"); // never created
+
+            var (feasibility, count) = MoveExecutor.EvaluateFlatten(source, dest);
+
+            Assert.Equal(MoveExecutor.FlattenFeasibility.SourceMissing, feasibility);
+            Assert.Equal(0, count);
+        }
+
+        [Fact(DisplayName = "EvaluateFlatten: foreign file in target reports TargetHasForeignFiles")]
+        public void EvaluateFlatten_ForeignFiles()
+        {
+            var dest = MakeDir("Author", "Title", "Narrator");
+            var source = Path.Combine(dest, "Title");
+            Directory.CreateDirectory(source);
+            WriteFile(source, "book.mp3", "x");
+            WriteFile(dest, "stranger.mp3", "y");
+
+            var (feasibility, _) = MoveExecutor.EvaluateFlatten(source, dest);
+
+            Assert.Equal(MoveExecutor.FlattenFeasibility.TargetHasForeignFiles, feasibility);
+        }
+
+        [Fact(DisplayName = "EvaluateFlatten: non-ancestor target reports NotAncestor")]
+        public void EvaluateFlatten_NotAncestor()
+        {
+            var source = MakeDir("Author", "Title", "Narrator");
+            WriteFile(source, "book.mp3", "x");
+            var dest = MakeDir("Author", "OtherTitle");
+
+            var (feasibility, _) = MoveExecutor.EvaluateFlatten(source, dest);
+
+            Assert.Equal(MoveExecutor.FlattenFeasibility.NotAncestor, feasibility);
+        }
     }
 }

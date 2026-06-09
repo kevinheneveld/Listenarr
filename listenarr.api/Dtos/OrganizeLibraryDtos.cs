@@ -54,6 +54,11 @@ namespace Listenarr.Api.Dtos
         public const string TargetAncestor = "target_ancestor";
         /// <summary>Target directory already exists on disk and contains files.</summary>
         public const string TargetExists = "target_exists";
+        /// <summary>
+        /// An ancestor/nested row whose source folder no longer exists on disk —
+        /// the record's files are gone. Re-scan the library or remove the record.
+        /// </summary>
+        public const string SourceMissing = "source_missing";
     }
 
     /// <summary>
@@ -90,6 +95,14 @@ namespace Listenarr.Api.Dtos
         /// by this code and renders per-kind resolution guidance.
         /// </summary>
         public string? ReasonCode { get; set; }
+        /// <summary>
+        /// True only for <c>invalid_target</c> rows whose <see cref="ReasonCode"/>
+        /// is <c>target_ancestor</c> and that pass the read-only flatten
+        /// feasibility check (source exists on disk, target holds no foreign
+        /// files). The UI shows the one-click "Flatten" action only when this is
+        /// true, so it never offers a flatten the executor would refuse.
+        /// </summary>
+        public bool CanFlatten { get; set; }
     }
 
     public class OrganizeLibraryPreviewDto

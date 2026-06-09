@@ -162,7 +162,14 @@
                       </div>
                     </div>
                     <div v-if="!group.help" class="invalid-reason">{{ row.reason }}</div>
-                    <div v-if="group.code === 'target_ancestor'" class="invalid-row-action">
+                    <div
+                      v-if="group.code === 'target_ancestor' && !row.canFlatten"
+                      class="invalid-row-note"
+                    >
+                      Automatic flatten isn't available here — the canonical folder already holds
+                      other files. Move this book's files up a level by hand, then re-run the preview.
+                    </div>
+                    <div v-if="group.code === 'target_ancestor' && row.canFlatten" class="invalid-row-action">
                       <template v-if="flattenConfirmId !== row.id">
                         <button
                           type="button"
@@ -412,7 +419,11 @@ const INVALID_REASON_META: Record<string, { title: string; help: string }> = {
   },
   target_ancestor: {
     title: 'Nested one level too deep',
-    help: 'The files sit in an extra subfolder beneath their canonical folder (a historical import artifact). Organizing would flatten the source into its own parent, which is refused. Move the files up a level on disk and re-scan, or adjust the Folder Naming Pattern.',
+    help: 'The files sit in an extra subfolder beneath their canonical folder (a historical import artifact). Where the canonical folder is otherwise empty, use "Flatten" to collapse it in one click; where it already holds other files, the button is hidden — move those up a level on disk by hand first.',
+  },
+  source_missing: {
+    title: 'Files missing on disk',
+    help: "The record's folder no longer exists on disk — its files are gone (a stale record left by an earlier move or deletion). Re-scan the library to clear it, or open the record and remove it.",
   },
   target_exists: {
     title: 'Canonical folder already occupied',
@@ -993,6 +1004,12 @@ watch(
 .invalid-reason {
   margin-top: 3px;
   color: #e8b070;
+}
+.invalid-row-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #999;
+  font-style: italic;
 }
 .invalid-row-action {
   margin-top: 5px;
