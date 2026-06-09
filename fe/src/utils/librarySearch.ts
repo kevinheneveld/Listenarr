@@ -39,6 +39,8 @@ export interface LibrarySearchInput {
   narrators?: string[]
   series?: string
   imageUrl?: string
+  publishYear?: string | number
+  publishedDate?: string
 }
 
 export type LibrarySearchKind = 'book' | 'series' | 'author' | 'narrator'
@@ -48,6 +50,7 @@ export interface LibraryBookMatch {
   title: string
   author: string
   imageUrl: string
+  year?: number
 }
 
 export interface LibraryFacetMatch {
@@ -114,6 +117,16 @@ export function buildLibraryFacets(books: readonly LibrarySearchInput[]): Librar
   }
 }
 
+/** Best-effort 4-digit release year from publishYear or publishedDate. */
+function parsePublishYear(book: LibrarySearchInput): number | undefined {
+  if (book.publishYear != null && book.publishYear !== '') {
+    const y = Number.parseInt(String(book.publishYear), 10)
+    if (Number.isFinite(y)) return y
+  }
+  const match = (book.publishedDate || '').match(/\d{4}/)
+  return match ? Number.parseInt(match[0], 10) : undefined
+}
+
 /** Books whose title or any author contains the query (case-insensitive). */
 export function matchLibraryBooks(
   books: readonly LibrarySearchInput[],
@@ -134,6 +147,7 @@ export function matchLibraryBooks(
       title: book.title || 'Unknown',
       author: Array.isArray(book.authors) ? book.authors[0] || '' : '',
       imageUrl: book.imageUrl || '',
+      year: parsePublishYear(book),
     })
     if (limit != null && matches.length >= limit) break
   }

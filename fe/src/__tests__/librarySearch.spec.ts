@@ -113,6 +113,18 @@ describe('matchLibraryBooks', () => {
   it('honors the result limit', () => {
     expect(matchLibraryBooks(library, 'the', 1)).toHaveLength(1)
   })
+
+  it('parses a release year from publishYear or publishedDate', () => {
+    const books: LibrarySearchInput[] = [
+      { id: 1, title: 'Y From Field', authors: ['A'], publishYear: '2011' },
+      { id: 2, title: 'Y From Date', authors: ['A'], publishedDate: '2008-05-01' },
+      { id: 3, title: 'Y Missing', authors: ['A'] },
+    ]
+    const byId = Object.fromEntries(matchLibraryBooks(books, 'y ').map((b) => [b.id, b.year]))
+    expect(byId[1]).toBe(2011)
+    expect(byId[2]).toBe(2008)
+    expect(byId[3]).toBeUndefined()
+  })
 })
 
 describe('matchLibraryFacets', () => {
