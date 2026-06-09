@@ -900,7 +900,7 @@ import type {
   SeriesLookupResponse,
 } from '@/types'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
-import { safeText, stripHtmlAndNormalize } from '@/utils/textUtils'
+import { safeText, stripHtmlAndNormalize, normalizeCollectionText } from '@/utils/textUtils'
 import {
   getPrimarySeries,
   formatSeriesDisplay,
@@ -1029,16 +1029,6 @@ const isCurrentSeriesMonitored = computed(() => Boolean(seriesMonitoringStatus.v
 const seriesMetadataContextLabel = computed(() => {
   return `${seriesRegionLabel.value} / ${seriesLanguageLabel.value}`
 })
-
-function normalizeCollectionText(value: string | undefined | null): string {
-  if (!value) return ''
-  return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
 
 // Series names parsed from file/folder scans can drop punctuation or a leading
 // article relative to the canonical name (e.g. a filename "A Seekers Tale" vs the

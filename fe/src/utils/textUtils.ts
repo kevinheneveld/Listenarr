@@ -115,3 +115,50 @@ export function stripHtmlAndNormalize(text: string | undefined | null): string {
 
   return decodeHtmlEntities(raw)
 }
+
+/**
+ * Normalizes a collection key (author / series / narrator / genre / publisher name)
+ * for case- and punctuation-insensitive matching. Diacritics are stripped and any
+ * run of non-alphanumeric characters collapses to a single space.
+ *
+ * Shared so that library grouping, the collection page filter, and unified search
+ * all bucket the same names identically \u2014 a narrator card's count then matches the
+ * collection page it links to, and search by construction.
+ */
+export function normalizeCollectionText(value: string | undefined | null): string {
+  if (!value) return ''
+  return value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+// Narrator credits that name a production or ensemble rather than a browsable
+// person (a dramatized book can list "Full Cast" alongside ten real narrators).
+// Compared against normalizeCollectionText output.
+const NON_PERSON_NARRATOR_TOKENS = new Set([
+  'full cast',
+  'a full cast',
+  'full cast production',
+  'full cast dramatization',
+  'various',
+  'various narrators',
+  'uncredited',
+])
+
+/**
+ * True when a narrator credit isn't a real, browsable person (e.g. "Full Cast").
+ * Used to exclude such tokens from narrator grouping and unified search so the
+ * library doesn't sprout pseudo-narrator pages. Empty/blank credits count as
+ * non-person too. Not applied to the collection-page filter: you only reach a
+ * narrator page by clicking a real card, so there is nothing to exclude there.
+ */
+export function isNonPersonNarrator(name: string | undefined | null): boolean {
+  const normalized = normalizeCollectionText(name)
+  if (!normalized) return true
+  if (NON_PERSON_NARRATOR_TOKENS.has(normalized)) return true
+  // Catch "... full cast ..." phrasings not in the explicit set.
+  return normalized.includes('full cast')
+}

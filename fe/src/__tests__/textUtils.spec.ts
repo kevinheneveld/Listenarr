@@ -16,7 +16,12 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 import { describe, expect, it } from 'vitest'
-import { decodeHtmlEntities, stripHtmlAndNormalize } from '@/utils/textUtils'
+import {
+  decodeHtmlEntities,
+  stripHtmlAndNormalize,
+  normalizeCollectionText,
+  isNonPersonNarrator,
+} from '@/utils/textUtils'
 
 describe('textUtils', () => {
   it('decodes common named HTML entities', () => {
@@ -37,5 +42,45 @@ describe('textUtils', () => {
     expect(stripHtmlAndNormalize('<p>Hello&nbsp;<strong>world</strong></p><br>Next')).toBe(
       'Hello world\n\nNext',
     )
+  })
+})
+
+describe('normalizeCollectionText', () => {
+  it('lowercases, strips punctuation and diacritics, collapses whitespace', () => {
+    expect(normalizeCollectionText('  R.C. Bray  ')).toBe('r c bray')
+    expect(normalizeCollectionText('Brandon Sanderson')).toBe('brandon sanderson')
+    expect(normalizeCollectionText('Tomás de Torquemada')).toBe('tomas de torquemada')
+  })
+
+  it('buckets casing/punctuation variants to the same key', () => {
+    expect(normalizeCollectionText('full cast')).toBe(normalizeCollectionText('Full Cast'))
+    expect(normalizeCollectionText('R. C. Bray')).toBe(normalizeCollectionText('r c bray'))
+    expect(normalizeCollectionText('Tim  Gerard   Reynolds')).toBe('tim gerard reynolds')
+  })
+
+  it('returns empty string for blank/nullish input', () => {
+    expect(normalizeCollectionText(undefined)).toBe('')
+    expect(normalizeCollectionText('   ')).toBe('')
+    expect(normalizeCollectionText('!!!')).toBe('')
+  })
+})
+
+describe('isNonPersonNarrator', () => {
+  it('treats production/ensemble credits as non-person', () => {
+    expect(isNonPersonNarrator('Full Cast')).toBe(true)
+    expect(isNonPersonNarrator('A Full Cast')).toBe(true)
+    expect(isNonPersonNarrator('Full Cast Production')).toBe(true)
+    expect(isNonPersonNarrator('various')).toBe(true)
+    expect(isNonPersonNarrator('uncredited')).toBe(true)
+  })
+
+  it('treats blank/nullish credits as non-person', () => {
+    expect(isNonPersonNarrator('')).toBe(true)
+    expect(isNonPersonNarrator(undefined)).toBe(true)
+  })
+
+  it('keeps real people', () => {
+    expect(isNonPersonNarrator('Ray Porter')).toBe(false)
+    expect(isNonPersonNarrator('Tim Gerard Reynolds')).toBe(false)
   })
 })
