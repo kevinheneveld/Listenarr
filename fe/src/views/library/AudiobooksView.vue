@@ -648,9 +648,8 @@
                     }}
                   </div>
                 </div>
-                <div v-if="audiobook.series" class="detail-line small">
-                  Series: {{ safeText(audiobook.series)
-                  }}<span v-if="audiobook.seriesNumber"> #{{ audiobook.seriesNumber }}</span>
+                <div v-if="formatSeriesMemberships(audiobook)" class="detail-line small">
+                  Series: {{ safeText(formatSeriesMemberships(audiobook)) }}
                 </div>
                 <div class="detail-line small">
                   {{ safeText(audiobook.publisher)
@@ -767,9 +766,11 @@
                 }}
               </div>
               <div v-if="showItemDetails" class="list-extra-details">
-                <div v-if="audiobook.series" class="detail-line small list-narrow-only-block">
-                  Series: {{ safeText(audiobook.series)
-                  }}<span v-if="audiobook.seriesNumber"> #{{ audiobook.seriesNumber }}</span>
+                <div
+                  v-if="formatSeriesMemberships(audiobook)"
+                  class="detail-line small list-narrow-only-block"
+                >
+                  Series: {{ safeText(formatSeriesMemberships(audiobook)) }}
                 </div>
                 <div class="detail-line small">
                   <span class="list-narrow-only-inline">
@@ -1048,6 +1049,7 @@ import { evaluateRules } from '@/utils/customFilterEvaluator'
 import type { RuleLike } from '@/utils/customFilterEvaluator'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
 import { safeText, normalizeCollectionText, isNonPersonNarrator } from '@/utils/textUtils'
+import { formatSeriesMemberships } from '@/utils/seriesUtils'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import { errorTracking } from '@/services/errorTracking'
 import { isLikelyBackendImageUrl, useProtectedImages } from '@/composables/useProtectedImages'
@@ -1303,8 +1305,12 @@ function clearDrilldownFilters() {
     filterLanguage.value = 'all'
     filterLanguageFromUrl.value = false
   }
-  const { missing: _m, author: _a, narrator: _n, genre: _g, language: _l, ...rest } =
-    route.query as Record<string, unknown>
+  const rest = { ...(route.query as Record<string, unknown>) }
+  delete rest.missing
+  delete rest.author
+  delete rest.narrator
+  delete rest.genre
+  delete rest.language
   router.replace({ path: '/audiobooks', query: rest as Record<string, string> })
 }
 
@@ -1924,6 +1930,27 @@ watch(groupBy, (v) => {
 
 // (grouping sync handled earlier in file)
 
+// All series a book belongs to (deduped), so a multi-series book is grouped under each
+// of its series rather than only its primary. Falls back to the legacy single series.
+function getBookSeriesNames(book: Audiobook): string[] {
+  const memberships = book.seriesMemberships
+  if (memberships && memberships.length > 0) {
+    const names: string[] = []
+    const seen = new Set<string>()
+    for (const membership of memberships) {
+      const name = (membership.seriesName || '').trim()
+      if (!name) continue
+      const dedupeKey = name.toLowerCase()
+      if (seen.has(dedupeKey)) continue
+      seen.add(dedupeKey)
+      names.push(name)
+    }
+    if (names.length > 0) return names
+  }
+  const legacy = (book.series || '').trim()
+  return legacy ? [legacy] : []
+}
+
 const groupedCollections = computed(() => {
   if (groupBy.value === 'books') return []
 
@@ -1943,11 +1970,12 @@ const groupedCollections = computed(() => {
   const profiles = qualityProfiles.value
 
   books.forEach((book) => {
-    // A book contributes one membership per group key. Authors/series map to a
-    // single raw key; narrators fan out — one membership per credited person.
-    // Narrator keys are normalized (so casing/punctuation variants merge and the
-    // card count matches the collection page), while the displayed name keeps the
-    // first-seen casing. Non-person credits ("Full Cast") are excluded.
+    // A book contributes one membership per group key. Authors map to a single raw
+    // key; narrators fan out — one membership per credited person; series fan out via
+    // getBookSeriesNames so a book appears under every series it belongs to.
+    // Narrator keys are normalized (so casing/punctuation variants merge and the card
+    // count matches the collection page), while the displayed name keeps the first-seen
+    // casing. Non-person credits ("Full Cast") are excluded.
     const entries: { key: string; display: string }[] = []
     if (groupBy.value === 'narrators') {
       const seen = new Set<string>()
@@ -1959,9 +1987,13 @@ const groupedCollections = computed(() => {
         seen.add(key)
         entries.push({ key, display })
       }
-    } else {
-      const raw = groupBy.value === 'authors' ? book.authors?.[0] : book.series
+    } else if (groupBy.value === 'authors') {
+      const raw = book.authors?.[0]
       if (raw) entries.push({ key: raw, display: raw })
+    } else {
+      for (const name of getBookSeriesNames(book)) {
+        if (name) entries.push({ key: name, display: name })
+      }
     }
 
     for (const { key, display } of entries) {

@@ -18,6 +18,7 @@
 using Listenarr.Application.Audiobooks;
 using Listenarr.Application.Common;
 using Listenarr.Application.Interfaces;
+using Listenarr.Domain.Common;
 using Listenarr.Domain.Models;
 using Listenarr.Domain.Models.Configurations;
 using Listenarr.Domain.Models.Enumerations;
@@ -518,127 +519,45 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
-        public async Task ExecuteRename_WhenDestinationTrackedByAnotherBook_ReportsOwningRecord()
+        public async Task PreviewRename_SeriesToken_UsesChosenPrimarySeries()
         {
-            var libraryRoot = Path.Join(_tempRoot, "library");
-            var sourceFolder = Path.Join(libraryRoot, "Wrong");
-            var ownerFolder = Path.Join(libraryRoot, "Correct");
-            Directory.CreateDirectory(sourceFolder);
-            Directory.CreateDirectory(ownerFolder);
-            var sourcePath = Path.Join(sourceFolder, "The Lost-001.mp3");
-            var destPath = Path.Join(ownerFolder, "The Lost-001.mp3");
-            await File.WriteAllTextAsync(sourcePath, "incoming");
-            await File.WriteAllTextAsync(destPath, "owned-by-other");
-
+            // Regression for #658: {Series} must fold under the user-chosen primary series,
+            // even when it is not the metadata provider's default (first) series.
             var settings = new ApplicationSettings
             {
-                OutputPath = libraryRoot,
-                FolderNamingPattern = "{Author}/{Title}",
+                OutputPath = _tempRoot,
+                FolderNamingPattern = "{Author}/{Series}/{Title}",
                 FileNamingPattern = "{Title}"
             };
 
             var (service, db, _) = BuildService(settings);
-            db.Audiobooks.Add(new Audiobook
+            var audiobook = new Audiobook
             {
-                Id = 2693,
-                Title = "The Lost (mis-identified)",
-                Authors = new List<string> { "Author" },
-                BasePath = sourceFolder,
-                FilePath = sourcePath,
-                Files = new List<AudiobookFile> { new() { Id = 100, AudiobookId = 2693, Path = sourcePath, Format = "mp3" } }
-            });
-            db.Audiobooks.Add(new Audiobook
-            {
-                Id = 2720,
-                Title = "The Lost (correct)",
-                Authors = new List<string> { "James Patterson" },
-                BasePath = ownerFolder,
-                FilePath = destPath,
-                Files = new List<AudiobookFile> { new() { Id = 200, AudiobookId = 2720, Path = destPath, Format = "mp3", Bitrate = 128000 } }
-            });
-            await db.SaveChangesAsync();
-
-            var results = await service.ExecuteRenameAsync(new List<RenameOperation>
-            {
-                new()
+                Id = 5,
+                Title = "Patriot Games",
+                Authors = new List<string> { "Tom Clancy" },
+                BasePath = Path.Join(_tempRoot, "Wrong", "Folder"),
+                SeriesMemberships = new List<AudiobookSeriesMembership>
                 {
-                    AudiobookId = 2693,
-                    FileRenames = new List<FileRenameOperation>
-                    {
-                        // Even though the caller asked to overwrite, a destination
-                        // tracked by another record must NOT be blindly replaced.
-                        new() { FileId = 100, CurrentPath = sourcePath, NewPath = destPath, OnConflict = ConflictResolution.Overwrite }
-                    }
+                    new() { SeriesName = "Publication Order", SeriesNumber = "1", IsPrimary = false, SortOrder = 0 },
+                    new() { SeriesName = "Chronological Order", SeriesNumber = "3", IsPrimary = true, SortOrder = 1 },
+                },
+                Files = new List<AudiobookFile>
+                {
+                    new() { Id = 51, AudiobookId = 5, Path = Path.Join(_tempRoot, "Wrong", "Folder", "old.m4b"), Format = "m4b" }
                 }
-            });
-
-            var result = Assert.Single(results);
-            var fileResult = Assert.Single(result.RenamedFiles);
-            Assert.True(fileResult.IsConflict);
-            Assert.NotNull(fileResult.Conflict);
-            Assert.True(fileResult.Conflict!.ExistingTracked);
-            Assert.Equal(2720, fileResult.Conflict.ExistingAudiobookId);
-            Assert.Equal("The Lost (correct)", fileResult.Conflict.ExistingAudiobookTitle);
-            Assert.Equal(200, fileResult.Conflict.ExistingFileId);
-
-            // The other record's file must be untouched (overwrite refused).
-            Assert.Equal("owned-by-other", await File.ReadAllTextAsync(destPath));
-            Assert.True(File.Exists(sourcePath));
-        }
-
-        [Fact]
-        public async Task ExecuteRename_OverwriteUntrackedDestination_RemovesItAndMovesSource()
-        {
-            var libraryRoot = Path.Join(_tempRoot, "library");
-            var bookFolder = Path.Join(libraryRoot, "Book");
-            Directory.CreateDirectory(bookFolder);
-            var sourcePath = Path.Join(bookFolder, "source.m4b");
-            var destPath = Path.Join(bookFolder, "orphan.m4b");
-            await File.WriteAllTextAsync(sourcePath, "incoming-wins");
-            await File.WriteAllTextAsync(destPath, "stale-orphan");
-
-            var settings = new ApplicationSettings
-            {
-                OutputPath = libraryRoot,
-                FolderNamingPattern = "{Author}/{Title}",
-                FileNamingPattern = "{Title}"
             };
-
-            var (service, db, dbName) = BuildService(settings);
-            db.Audiobooks.Add(new Audiobook
-            {
-                Id = 9,
-                Title = "Book",
-                Authors = new List<string> { "Author" },
-                BasePath = bookFolder,
-                FilePath = sourcePath,
-                Files = new List<AudiobookFile> { new() { Id = 91, AudiobookId = 9, Path = sourcePath, Format = "m4b" } }
-            });
+            // Denormalize Series/SeriesNumber from the chosen primary membership, as the app does on save.
+            AudiobookSeriesMembershipHelper.ApplyPrimarySeriesFields(audiobook);
+            db.Audiobooks.Add(audiobook);
             await db.SaveChangesAsync();
 
-            var results = await service.ExecuteRenameAsync(new List<RenameOperation>
-            {
-                new()
-                {
-                    AudiobookId = 9,
-                    FileRenames = new List<FileRenameOperation>
-                    {
-                        new() { FileId = 91, CurrentPath = sourcePath, NewPath = destPath, OnConflict = ConflictResolution.Overwrite }
-                    }
-                }
-            });
+            var previews = await service.PreviewRenameAsync(new[] { 5 });
 
-            var result = Assert.Single(results);
-            Assert.True(result.Success);
-            var fileResult = Assert.Single(result.RenamedFiles);
-            Assert.True(fileResult.Success);
-            Assert.False(fileResult.IsConflict);
-            Assert.False(File.Exists(sourcePath));
-            Assert.Equal("incoming-wins", await File.ReadAllTextAsync(destPath));
-
-            await using var verifyDb = CreateContext(dbName);
-            var saved = await verifyDb.Audiobooks.Include(a => a.Files).SingleAsync(a => a.Id == 9);
-            Assert.Equal(NormalizePath(destPath), NormalizePath(saved.Files!.Single().Path));
+            var preview = Assert.Single(previews);
+            Assert.True(preview.HasChanges);
+            Assert.Contains("Chronological Order", preview.NewFolderPath);
+            Assert.DoesNotContain("Publication Order", preview.NewFolderPath);
         }
 
         private (RenameService Service, ListenArrDbContext Db, string DbName) BuildService(

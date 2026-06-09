@@ -103,7 +103,6 @@ const currentPath = ref('')
 const directory = computed(() => splitPath(currentPath.value).directory)
 const currentFilename = computed(() => splitPath(currentPath.value).filename)
 const currentExtension = computed(() => extractExtension(currentFilename.value))
-const currentStem = computed(() => stripExtension(currentFilename.value))
 
 const newFilename = computed(() => {
   const raw = newName.value.trim()

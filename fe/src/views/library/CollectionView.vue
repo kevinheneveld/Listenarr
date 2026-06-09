@@ -453,7 +453,13 @@
             />
 
             <div class="list-details">
-              <div class="audiobook-title">{{ safeText(audiobook.title) }}</div>
+              <div class="audiobook-title">
+                <span
+                  v-if="type === 'series' && audiobook.seriesNumber"
+                  class="list-series-position"
+                  >#{{ audiobook.seriesNumber }}</span
+                >{{ safeText(audiobook.title) }}
+              </div>
               <div class="audiobook-author">
                 {{
                   audiobook.authors
@@ -625,6 +631,12 @@
                 />
               </div>
               <div class="collection-cover">
+                <div
+                  v-if="type === 'series' && audiobook.seriesNumber"
+                  class="series-position-badge"
+                >
+                  #{{ audiobook.seriesNumber }}
+                </div>
                 <img
                   v-if="audiobook.imageUrl"
                   :src="getProtectedImageSrc(audiobook.imageUrl, getPlaceholderUrl())"
@@ -1113,7 +1125,18 @@ function matchesCurrentCollection(book: Audiobook): boolean {
   }
 
   if (type.value === 'series') {
-    return normalizeSeriesName(book.series) === normalizeSeriesName(name.value)
+    // normalizeSeriesName (not the plain collection normalizer) so a slug that drops a
+    // leading article or apostrophe ("A Seekers Tale") still matches the canonical
+    // stored series ("Seeker's Tale"); membership iteration adds canary's multi-series
+    // matching on top.
+    const target = normalizeSeriesName(name.value)
+    const memberships = book.seriesMemberships
+    if (memberships && memberships.length > 0) {
+      return memberships.some(
+        (membership) => normalizeSeriesName(membership.seriesName) === target,
+      )
+    }
+    return normalizeSeriesName(book.series) === target
   }
 
   if (isGenreCollection.value) {
@@ -1136,12 +1159,34 @@ function matchesCurrentCollection(book: Audiobook): boolean {
 }
 
 function mapLibraryItem(book: Audiobook): CollectionDisplayItem {
+  // In a series collection a book may be matched via a non-primary membership, so show the
+  // series name/number for THIS collection rather than the book's primary series.
+  const seriesContext = type.value === 'series' ? resolveSeriesForCollection(book) : null
   return {
     ...book,
+    ...(seriesContext
+      ? { series: seriesContext.seriesName, seriesNumber: seriesContext.seriesNumber }
+      : {}),
     key: `library-${book.id}`,
     inLibrary: true,
     addMetadata: null,
   }
+}
+
+function resolveSeriesForCollection(
+  book: Audiobook,
+): { seriesName: string; seriesNumber?: string } | null {
+  const target = normalizeCollectionText(name.value)
+  const memberships = book.seriesMemberships
+  if (memberships && memberships.length > 0) {
+    const match = memberships.find(
+      (membership) => normalizeCollectionText(membership.seriesName) === target,
+    )
+    if (match) {
+      return { seriesName: match.seriesName, seriesNumber: match.seriesNumber }
+    }
+  }
+  return null
 }
 
 function buildCatalogMetadata(book: RemoteCatalogBook): AudibleBookMetadata {
@@ -1241,6 +1286,8 @@ function shouldIncludeRemoteCatalogBook(
 
 function getSortValue(book: CollectionDisplayItem): string {
   switch (sortKey.value) {
+    case 'series-position':
+      return seriesPositionSortKey(book.seriesNumber)
     case 'author':
       return book.authors?.[0] || ''
     case 'series':
@@ -1250,6 +1297,23 @@ function getSortValue(book: CollectionDisplayItem): string {
     default:
       return book.title || ''
   }
+}
+
+// Build a lexicographically-comparable key from a series position number so a plain string
+// sort (localeCompare) yields reading order. Each tier is led by a digit so the tiers sort
+// deterministically across locales (a leading symbol like "~" does NOT reliably sort after
+// digits — that was the original bug for missing positions):
+//   tier 1 = fully-numeric positions ("1", "2.5", "10"), ordered numerically via zero-padding;
+//   tier 2 = other non-empty positions ("1-2", "1a"), ordered by their text, after the numbers;
+//   tier 3 = missing positions, always sorted last.
+function seriesPositionSortKey(value: string | null | undefined): string {
+  const raw = (value || '').trim()
+  if (!raw) return '3'
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const [intPart, fracPart = ''] = raw.split('.')
+    return `1${intPart.padStart(8, '0')}${fracPart ? `.${fracPart}` : ''}`
+  }
+  return `2${raw.toLowerCase()}`
 }
 
 const libraryCollectionAudiobooks = computed(() =>
@@ -1381,6 +1445,9 @@ const audiobooks = computed<CollectionDisplayItem[]>(() => {
   )
 
   return searched.sort((a, b) => {
+    // Metadata collections group owned books ahead of not-added ones (the view also renders
+    // these as separate "In Library" / "Not Added" sections); the active sort — series
+    // position by default — then orders books within each group.
     if (isMetadataCollection.value && a.inLibrary !== b.inLibrary) {
       return a.inLibrary ? -1 : 1
     }
@@ -1392,6 +1459,7 @@ const audiobooks = computed<CollectionDisplayItem[]>(() => {
 })
 
 const baseSortOptions = [
+  { value: 'series-position', label: 'Series Position' },
   { value: 'title', label: 'Title' },
   { value: 'author', label: 'Author' },
   { value: 'series', label: 'Series' },
@@ -1399,27 +1467,34 @@ const baseSortOptions = [
 ]
 
 const sortOptions = computed(() => {
-  return baseSortOptions
-    .filter((o) => {
-      // Hide the axis every book in the collection already shares.
-      if (type.value === 'author' && o.value === 'author') return false
-      return true
-    })
-    .map((o) => {
-      // On a series page every book is in the same series, so the "series" sort
-      // means ordering by the book's position within it — label it accordingly.
-      if (type.value === 'series' && o.value === 'series') {
-        return { ...o, label: 'Series Order' }
-      }
-      return o
-    })
+  return baseSortOptions.filter((o) => {
+    // Reading-order sort only makes sense inside a single series.
+    if (o.value === 'series-position') return type.value === 'series'
+    if (type.value === 'author' && o.value === 'author') return false
+    // Sorting by series name is meaningless when every book shares the series.
+    if (type.value === 'series' && o.value === 'series') return false
+    return true
+  })
 })
 
-// Ensure current sortKey is valid for the current view; reset to title if not
+// A series collection defaults to reading order (#626); everything else to title.
+function defaultSortForType(collectionType: string): string {
+  return collectionType === 'series' ? 'series-position' : 'title'
+}
+
+watch(
+  type,
+  (newType) => {
+    sortKey.value = defaultSortForType(newType)
+  },
+  { immediate: true },
+)
+
+// Ensure current sortKey is valid for the current view; reset to the type default if not
 watch(sortOptions, (newOpts) => {
   const vals = newOpts.map((o) => o.value)
   if (!vals.includes(sortKey.value)) {
-    sortKey.value = 'title'
+    sortKey.value = defaultSortForType(type.value)
   }
 })
 
@@ -4564,6 +4639,33 @@ defineExpose({
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Series position indicator (only shown inside a single-series collection) */
+.list-series-position {
+  display: inline-block;
+  margin-right: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  font-size: 0.8em;
+  font-weight: 700;
+  color: var(--brand-500);
+  background-color: rgba(var(--brand-rgb), 0.16);
+}
+
+.series-position-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  padding: 0.15rem 0.45rem;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background-color: rgba(var(--brand-rgb), 0.92);
+  pointer-events: none;
 }
 
 .list-details .audiobook-title {
