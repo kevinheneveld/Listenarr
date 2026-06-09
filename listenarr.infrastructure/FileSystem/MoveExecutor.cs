@@ -284,6 +284,134 @@ namespace Listenarr.Infrastructure.FileSystem
             }
         }
 
+        /// <summary>
+        /// Flatten a redundantly-nested folder: collapse everything under
+        /// <paramref name="source"/> up into <paramref name="dest"/>, where
+        /// <paramref name="dest"/> is a strict ancestor of <paramref name="source"/>
+        /// (e.g. source <c>/a/Title/Narrator/Title</c> → dest <c>/a/Title/Narrator</c>).
+        /// This is the inverse of the source-contains-target case
+        /// <see cref="ExecuteMoveAsync"/> handles and the exact case that method
+        /// deliberately refuses ("Target is an ancestor of source"). It backs the
+        /// organize-library "nested one level too deep" rows, which a normal move
+        /// can't resolve.
+        ///
+        /// Strongly guarded so no real file is ever clobbered or lost: refuses
+        /// unless dest is a strict ancestor of source AND every file under dest
+        /// already lives under source. That guarantees dest holds nothing but
+        /// source's subtree wrapped in redundant (empty) directories, so the
+        /// operation only collapses empty wrappers. The move itself is two
+        /// same-volume <see cref="Directory.Move(string,string)"/> renames via a
+        /// sibling staging dir, with the source extracted before the redundant
+        /// dest shell is removed — so an interruption leaves the files recoverable
+        /// at the staging path rather than destroyed.
+        /// </summary>
+        public static MoveOutcome ExecuteFlatten(string source, string dest, Guid jobId, ILogger? logger)
+        {
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Source path is empty" };
+            }
+            if (string.IsNullOrWhiteSpace(dest))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Target path is empty" };
+            }
+            if (!Directory.Exists(source))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Source path does not exist" };
+            }
+
+            var sourceFull = TrimTrailingSeparator(Path.GetFullPath(source));
+            var destFull = TrimTrailingSeparator(Path.GetFullPath(dest));
+            var sep = Path.DirectorySeparatorChar;
+
+            if (string.Equals(sourceFull, destFull, StringComparison.OrdinalIgnoreCase))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Source and target are the same path" };
+            }
+
+            // dest must be a STRICT ancestor of source. If it isn't, this isn't a
+            // flatten — refuse rather than guess.
+            if (!(sourceFull + sep).StartsWith(destFull + sep, StringComparison.OrdinalIgnoreCase))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Target is not an ancestor of source; not a flatten" };
+            }
+
+            if (!Directory.Exists(destFull))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Target directory does not exist" };
+            }
+
+            var destParent = Path.GetDirectoryName(destFull);
+            if (string.IsNullOrEmpty(destParent) || IsFilesystemRoot(destParent))
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Target has no usable parent directory (looks like a library root)" };
+            }
+
+            // Guard: every FILE under dest must already live under source. If dest
+            // holds any file outside source's subtree, flattening would merge into
+            // populated content — refuse and leave it for manual resolution.
+            var sourceWithSep = sourceFull + sep;
+            int fileCount;
+            try
+            {
+                var destFiles = Directory.EnumerateFiles(destFull, "*", SearchOption.AllDirectories)
+                    .Select(f => TrimTrailingSeparator(Path.GetFullPath(f)))
+                    .ToList();
+                if (destFiles.Any(f => !f.StartsWith(sourceWithSep, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return new MoveOutcome
+                    {
+                        Success = false,
+                        ErrorMessage = "Target directory contains files outside the nested source folder; resolve manually",
+                    };
+                }
+                fileCount = destFiles.Count;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = TruncateErrorMessage(ex.Message) };
+            }
+
+            if (fileCount == 0)
+            {
+                return new MoveOutcome { Success = false, ErrorMessage = "Nothing to flatten: no files under the source folder" };
+            }
+
+            var tempName = Path.Combine(destParent, $"{TempPrefix}{jobId:N}");
+            try
+            {
+                if (Directory.Exists(tempName)) Directory.Delete(tempName, true);
+
+                // 1. Extract source's subtree to a sibling staging dir (atomic
+                //    same-volume rename). dest now holds only empty wrappers.
+                Directory.Move(sourceFull, tempName);
+
+                // 2. Remove the redundant dest shell (guaranteed file-free by the
+                //    guard above), then promote the extracted subtree into dest.
+                Directory.Delete(destFull, true);
+                var finalParent = Path.GetDirectoryName(destFull);
+                if (!string.IsNullOrEmpty(finalParent) && !Directory.Exists(finalParent))
+                {
+                    Directory.CreateDirectory(finalParent);
+                }
+                Directory.Move(tempName, destFull);
+
+                return new MoveOutcome { Success = true, FilesCopied = fileCount, TempPathUsed = tempName };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger?.LogError(ex,
+                    "Flatten failed collapsing {Source} into {Dest}. Files may be staged at {Temp} — recover manually if needed.",
+                    sourceFull, destFull, tempName);
+                return new MoveOutcome
+                {
+                    Success = false,
+                    ErrorMessage = TruncateErrorMessage(ex.Message),
+                    TempPathUsed = tempName,
+                };
+            }
+        }
+
         public static string TruncateErrorMessage(string? message)
         {
             if (string.IsNullOrEmpty(message)) return string.Empty;

@@ -126,17 +126,79 @@
               <header class="section-header">
                 <h3>Invalid target ({{ invalidRows.length }})</h3>
                 <p class="section-help">
-                  Skipped because the canonical path can't be computed. Fix the underlying
-                  metadata and re-run the preview.
+                  These rows can't be safely organized as-is. They're grouped by problem
+                  below, each with how to resolve it. Open any record in a new tab to fix
+                  it, then re-run the preview.
                 </p>
               </header>
-              <ul class="invalid-list">
-                <li v-for="row in invalidRows" :key="row.id">
-                  <strong>id {{ row.id }}</strong>: {{ row.title || '(no title)' }} —
-                  <em>{{ row.author || 'Unknown Author' }}</em>
-                  · <span class="invalid-reason">{{ row.reason }}</span>
-                </li>
-              </ul>
+              <div v-for="group in invalidGroups" :key="group.code" class="invalid-group">
+                <div class="invalid-group-head">
+                  <span class="invalid-group-title">{{ group.title }}</span>
+                  <span class="invalid-group-count">{{ group.rows.length }}</span>
+                </div>
+                <p v-if="group.help" class="invalid-group-help">{{ group.help }}</p>
+                <ul class="invalid-list">
+                  <li v-for="row in group.rows" :key="row.id" class="invalid-row">
+                    <div class="invalid-row-head">
+                      <strong>{{ row.title || '(no title)' }}</strong>
+                      <span class="row-author">{{ row.author || 'Unknown Author' }}</span>
+                      <a
+                        class="row-link"
+                        :href="`/audiobooks/${row.id}`"
+                        target="_blank"
+                        rel="noopener"
+                        title="Open audiobook detail in a new tab"
+                        @click.stop
+                      >id {{ row.id }} ↗</a>
+                    </div>
+                    <div class="invalid-row-paths">
+                      <div class="row-path" :title="row.currentPath || ''">
+                        <span class="path-label">from</span>
+                        <span class="path-value">{{ row.currentPath || '(empty)' }}</span>
+                      </div>
+                      <div v-if="row.targetPath" class="row-path" :title="row.targetPath">
+                        <span class="path-label">to</span>
+                        <span class="path-value path-target">{{ row.targetPath }}</span>
+                      </div>
+                    </div>
+                    <div v-if="!group.help" class="invalid-reason">{{ row.reason }}</div>
+                    <div v-if="group.code === 'target_ancestor'" class="invalid-row-action">
+                      <template v-if="flattenConfirmId !== row.id">
+                        <button
+                          type="button"
+                          class="link"
+                          :disabled="flatteningId !== null"
+                          @click="flattenConfirmId = row.id"
+                        >
+                          Flatten into canonical folder
+                        </button>
+                      </template>
+                      <template v-else>
+                        <span class="flatten-confirm-text">
+                          Move {{ row.fileCount }} file{{ row.fileCount === 1 ? '' : 's' }} up into the
+                          canonical folder and remove the empty subfolder?
+                        </span>
+                        <button
+                          type="button"
+                          class="link flatten-go"
+                          :disabled="flatteningId !== null"
+                          @click="flattenRow(row)"
+                        >
+                          {{ flatteningId === row.id ? 'Flattening…' : 'Confirm' }}
+                        </button>
+                        <button
+                          type="button"
+                          class="link flatten-cancel"
+                          :disabled="flatteningId !== null"
+                          @click="flattenConfirmId = null"
+                        >
+                          Cancel
+                        </button>
+                      </template>
+                    </div>
+                  </li>
+                </ul>
+              </div>
             </section>
 
             <div v-if="willMoveRows.length === 0 && collisionGroups.length === 0 && invalidRows.length === 0" class="state-msg">
@@ -322,6 +384,103 @@ const collisionGroups = computed<CollisionGroup[]>(() => {
   }
   return Array.from(byKey.values()).sort((a, b) => a.targetPath.localeCompare(b.targetPath))
 })
+
+interface InvalidGroup {
+  code: string
+  title: string
+  help: string
+  rows: OrganizePreviewRow[]
+}
+
+// Human copy + resolution guidance keyed by the backend's machine-readable
+// reasonCode (OrganizeInvalidReasonCode). Order here is also the display
+// order of the groups. Keep prose here so the backend's `reason` string can
+// be reworded without touching grouping/styling. Codes not listed fall into
+// an "Other" bucket that shows each row's raw `reason` verbatim.
+const INVALID_REASON_META: Record<string, { title: string; help: string }> = {
+  missing_author: {
+    title: 'Missing author',
+    help: 'No author metadata, so no canonical folder can be built. Open the record, set an author, then re-run the preview.',
+  },
+  missing_title: {
+    title: 'Missing title',
+    help: 'No title metadata, so no canonical folder can be built. Open the record, set a title, then re-run the preview.',
+  },
+  source_at_root: {
+    title: 'Folder is the library root',
+    help: "The record's path points at a library root itself rather than the book's own subfolder. Re-scan the library to correct BasePath before organizing.",
+  },
+  target_ancestor: {
+    title: 'Nested one level too deep',
+    help: 'The files sit in an extra subfolder beneath their canonical folder (a historical import artifact). Organizing would flatten the source into its own parent, which is refused. Move the files up a level on disk and re-scan, or adjust the Folder Naming Pattern.',
+  },
+  target_exists: {
+    title: 'Canonical folder already occupied',
+    help: 'Another folder already exists at the canonical path (shown under "to") and contains files — usually a leftover duplicate copy from an earlier import. Check the Duplicates tool to see if it is a tracked duplicate you can resolve there; otherwise remove or merge the stale folder on disk, then re-run the preview.',
+  },
+  outside_root: {
+    title: 'Outside library roots',
+    help: 'This book lives outside every configured library root. Add the root (or move the folder under one) and re-scan, then re-run the preview.',
+  },
+  pattern_not_configured: {
+    title: 'Naming pattern not configured',
+    help: 'No Folder Naming Pattern is set. Configure one under Settings → Media Management, then re-run the preview.',
+  },
+  empty_pattern: {
+    title: 'Pattern produced an empty path',
+    help: "The naming pattern rendered to an empty path for this book's metadata. Check the pattern and the record's fields.",
+  },
+}
+
+const invalidGroups = computed<InvalidGroup[]>(() => {
+  const order = Object.keys(INVALID_REASON_META)
+  const byCode = new Map<string, InvalidGroup>()
+  for (const r of invalidRows.value) {
+    const code = r.reasonCode || 'other'
+    let group = byCode.get(code)
+    if (!group) {
+      const meta = INVALID_REASON_META[code]
+      group = { code, title: meta?.title || 'Other', help: meta?.help || '', rows: [] }
+      byCode.set(code, group)
+    }
+    group.rows.push(r)
+  }
+  return Array.from(byCode.values()).sort((a, b) => {
+    const ia = order.indexOf(a.code)
+    const ib = order.indexOf(b.code)
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib)
+  })
+})
+
+// Per-row "flatten" action for the nested-one-level-too-deep group. Tracks
+// which row is awaiting confirmation and which is mid-request so the buttons
+// can disable/spinner without a heavier state machine.
+const flattenConfirmId = ref<number | null>(null)
+const flatteningId = ref<number | null>(null)
+
+async function flattenRow(row: OrganizePreviewRow) {
+  flatteningId.value = row.id
+  try {
+    const res = await apiService.flattenOrganizeRow(row.id)
+    if (res.success) {
+      const label = row.title || `id ${row.id}`
+      const suffix = res.error ? ` — ${res.error}` : ''
+      toast.success('Organize library', `Flattened "${label}" (${res.filesMoved} file${res.filesMoved === 1 ? '' : 's'})${suffix}`)
+      await load()
+    } else {
+      toast.error('Flatten failed', res.error || 'Unknown error')
+    }
+  } catch (err) {
+    toast.error('Flatten failed', err instanceof Error ? err.message : 'Unknown error')
+    errorTracking.captureException(err as Error, {
+      component: 'OrganizeLibraryModal',
+      operation: 'flatten',
+    })
+  } finally {
+    flatteningId.value = null
+    flattenConfirmId.value = null
+  }
+}
 
 const selectedCount = computed(() => willMoveRows.value.filter((r) => selected[r.id] === true).length)
 const selectedBytes = computed(() =>
@@ -761,17 +920,97 @@ watch(
 .collision-members li {
   margin-bottom: 4px;
 }
+.invalid-group {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.invalid-group:last-child {
+  border-bottom: 0;
+}
+.invalid-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.invalid-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e8b070;
+}
+.invalid-group-count {
+  font-size: 11px;
+  color: #aaa;
+  background: rgba(240, 176, 96, 0.12);
+  border: 1px solid rgba(176, 128, 64, 0.3);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.invalid-group-help {
+  margin: 5px 0 8px;
+  font-size: 12px;
+  color: #aaa;
+  line-height: 1.45;
+}
 .invalid-list {
   margin: 0;
-  padding: 10px 14px 10px 30px;
+  padding: 0;
+  list-style: none;
   color: #ccc;
   font-size: 12px;
 }
-.invalid-list li {
-  margin-bottom: 4px;
+.invalid-row {
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+.invalid-row:first-child {
+  border-top: 0;
+}
+.invalid-row-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.invalid-row-head strong {
+  color: #fff;
+  font-size: 12px;
+}
+.invalid-row-paths {
+  margin-top: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.row-link {
+  font-size: 11px;
+  color: #6fa8e8;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.row-link:hover {
+  text-decoration: underline;
 }
 .invalid-reason {
+  margin-top: 3px;
   color: #e8b070;
+}
+.invalid-row-action {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.flatten-confirm-text {
+  font-size: 11px;
+  color: #e8b070;
+}
+.flatten-go {
+  color: #80c896;
+  font-weight: 600;
+}
+.flatten-cancel {
+  color: #999;
 }
 .btn {
   padding: 6px 14px;

@@ -30,6 +30,33 @@ namespace Listenarr.Api.Dtos
     }
 
     /// <summary>
+    /// Machine-readable code accompanying an <c>invalid_target</c> row's
+    /// human-readable <see cref="OrganizePreviewRowDto.Reason"/>. Lets the UI
+    /// group rows by failure kind and pick the right "how to resolve" copy /
+    /// action without parsing the prose reason string (the prose may be
+    /// reworded freely without breaking the frontend or tests).
+    /// </summary>
+    public static class OrganizeInvalidReasonCode
+    {
+        /// <summary>Title metadata is blank — no canonical path can be built.</summary>
+        public const string MissingTitle = "missing_title";
+        /// <summary>Author metadata is blank — no canonical path can be built.</summary>
+        public const string MissingAuthor = "missing_author";
+        /// <summary>No <c>FolderNamingPattern</c> is configured.</summary>
+        public const string PatternNotConfigured = "pattern_not_configured";
+        /// <summary>Current path lives outside every configured library root.</summary>
+        public const string OutsideRoot = "outside_root";
+        /// <summary>The naming pattern rendered to an empty path for this row.</summary>
+        public const string EmptyPattern = "empty_pattern";
+        /// <summary>BasePath equals a library root folder — re-scan needed.</summary>
+        public const string SourceAtRoot = "source_at_root";
+        /// <summary>Target is an ancestor of source (move would flatten/nest-collapse).</summary>
+        public const string TargetAncestor = "target_ancestor";
+        /// <summary>Target directory already exists on disk and contains files.</summary>
+        public const string TargetExists = "target_exists";
+    }
+
+    /// <summary>
     /// One row in the organize-library preview. Computed by applying the
     /// configured <c>FolderNamingPattern</c> to the audiobook's metadata and
     /// comparing the resulting path against the current <c>BasePath</c>.
@@ -56,6 +83,13 @@ namespace Listenarr.Api.Dtos
         /// reason the target couldn't be computed (e.g. "Missing author").
         /// </summary>
         public string? Reason { get; set; }
+        /// <summary>
+        /// Set when <see cref="Status"/> is <c>invalid_target</c> — the
+        /// machine-readable companion to <see cref="Reason"/>. One of
+        /// <see cref="OrganizeInvalidReasonCode"/>. The UI groups invalid rows
+        /// by this code and renders per-kind resolution guidance.
+        /// </summary>
+        public string? ReasonCode { get; set; }
     }
 
     public class OrganizeLibraryPreviewDto
@@ -95,6 +129,23 @@ namespace Listenarr.Api.Dtos
         public int AudiobookId { get; set; }
         public string? AudiobookTitle { get; set; }
         public string? TargetPath { get; set; }
+    }
+
+    /// <summary>
+    /// Body for the organize "flatten" action — collapse a single
+    /// nested-one-level-too-deep row into its canonical parent folder.
+    /// </summary>
+    public class OrganizeFlattenRequest
+    {
+        public int AudiobookId { get; set; }
+    }
+
+    public class OrganizeFlattenResultDto
+    {
+        public bool Success { get; set; }
+        public int FilesMoved { get; set; }
+        public string? NewPath { get; set; }
+        public string? Error { get; set; }
     }
 
     public class OrganizeLibraryApplyResultDto

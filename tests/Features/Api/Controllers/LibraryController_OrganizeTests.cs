@@ -216,6 +216,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
             var row = Assert.Single(preview.Rows);
             Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
             Assert.Equal("Missing author", row.Reason);
+            Assert.Equal(OrganizeInvalidReasonCode.MissingAuthor, row.ReasonCode);
             Assert.Null(row.TargetPath);
             Assert.Equal(1, preview.InvalidTargetCount);
         }
@@ -235,6 +236,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
             var row = Assert.Single(preview.Rows);
             Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
             Assert.Equal("Missing title", row.Reason);
+            Assert.Equal(OrganizeInvalidReasonCode.MissingTitle, row.ReasonCode);
         }
 
         [Fact]
@@ -410,6 +412,10 @@ namespace Listenarr.Tests.Features.Api.Controllers
             var row = Assert.Single(preview.Rows);
             Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
             Assert.Contains("already exists", row.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(OrganizeInvalidReasonCode.TargetExists, row.ReasonCode);
+            // TargetPath is surfaced on the invalid row so the UI can show the
+            // occupied canonical path the operator needs to resolve.
+            Assert.Contains("Occupied", row.TargetPath ?? string.Empty);
             Assert.Equal(0, preview.WillMoveCount);
             Assert.Equal(1, preview.InvalidTargetCount);
         }
@@ -437,6 +443,8 @@ namespace Listenarr.Tests.Features.Api.Controllers
             var row = Assert.Single(preview.Rows);
             Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
             Assert.Contains("ancestor", row.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(OrganizeInvalidReasonCode.TargetAncestor, row.ReasonCode);
+            Assert.Equal($"{Root}/Author Y/Title", row.TargetPath);
             Assert.Equal(0, preview.WillMoveCount);
             Assert.Equal(1, preview.InvalidTargetCount);
         }

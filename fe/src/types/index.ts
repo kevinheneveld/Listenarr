@@ -1548,6 +1548,13 @@ export interface OrganizePreviewRow {
   collisionKey: string | null
   /** Set when status is `invalid_target` — the human-readable reason. */
   reason: string | null
+  /**
+   * Set when status is `invalid_target` — machine-readable companion to
+   * `reason`. One of the `OrganizeInvalidReasonCode` values the backend emits
+   * (`missing_title`, `missing_author`, `source_at_root`, `target_ancestor`,
+   * `target_exists`, …). The UI groups invalid rows by this code.
+   */
+  reasonCode: string | null
 }
 
 /**
@@ -1607,6 +1614,13 @@ export interface OrganizeLibraryPreview {
 export interface OrganizeApplySkipped {
   audiobookId: number
   reason: string
+}
+
+export interface OrganizeFlattenResult {
+  success: boolean
+  filesMoved: number
+  newPath: string | null
+  error: string | null
 }
 
 export interface OrganizeQueuedJob {

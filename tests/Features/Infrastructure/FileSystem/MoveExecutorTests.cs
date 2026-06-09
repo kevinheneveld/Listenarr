@@ -291,5 +291,81 @@ namespace Listenarr.Tests.Features.Infrastructure.FileSystem
             var roundtrip = File.ReadAllText(Path.Combine(target, "book.m4b"));
             Assert.Equal(payload, roundtrip);
         }
+
+        [Fact(DisplayName = "Flatten: nested-one-level-too-deep collapses up into the canonical parent")]
+        public void Flatten_CollapsesNestedFolder()
+        {
+            // dest = /root/Author/Title/Narrator ; source = dest/Title (the
+            // redundant level). Files live in source. After flatten they should
+            // live directly under dest and the redundant subfolder is gone.
+            var dest = MakeDir("Author", "Title", "Narrator");
+            var source = Path.Combine(dest, "Title");
+            Directory.CreateDirectory(source);
+            WriteFile(source, "book-01.m4b", "payload-1");
+            WriteFile(source, "book-02.m4b", "payload-2");
+
+            var outcome = MoveExecutor.ExecuteFlatten(source, dest, Guid.NewGuid(), logger: null);
+
+            Assert.True(outcome.Success, outcome.ErrorMessage);
+            Assert.Equal(2, outcome.FilesCopied);
+            Assert.True(Directory.Exists(dest));
+            Assert.False(Directory.Exists(source));
+            Assert.True(File.Exists(Path.Combine(dest, "book-01.m4b")));
+            Assert.Equal("payload-2", File.ReadAllText(Path.Combine(dest, "book-02.m4b")));
+            // No staging dir left behind in dest's parent.
+            var destParent = Path.GetDirectoryName(dest)!;
+            Assert.DoesNotContain(
+                Directory.EnumerateDirectories(destParent),
+                d => Path.GetFileName(d).StartsWith(MoveExecutor.TempPrefix, StringComparison.Ordinal));
+        }
+
+        [Fact(DisplayName = "Flatten: preserves subdirectory structure under the nested folder")]
+        public void Flatten_PreservesSubtree()
+        {
+            var dest = MakeDir("Author", "Title", "Narrator");
+            var source = Path.Combine(dest, "Title");
+            var disc = Path.Combine(source, "Disc 1");
+            Directory.CreateDirectory(disc);
+            WriteFile(disc, "track.mp3", "disc-payload");
+
+            var outcome = MoveExecutor.ExecuteFlatten(source, dest, Guid.NewGuid(), logger: null);
+
+            Assert.True(outcome.Success, outcome.ErrorMessage);
+            Assert.Equal("disc-payload", File.ReadAllText(Path.Combine(dest, "Disc 1", "track.mp3")));
+        }
+
+        [Fact(DisplayName = "Flatten: refuses when the target holds files outside the nested source")]
+        public void Flatten_RefusesForeignContent()
+        {
+            var dest = MakeDir("Author", "Title", "Narrator");
+            var source = Path.Combine(dest, "Title");
+            Directory.CreateDirectory(source);
+            WriteFile(source, "book.m4b", "payload");
+            // A foreign file sitting directly in dest — flattening must not
+            // clobber/merge it.
+            WriteFile(dest, "stranger.m4b", "do-not-touch");
+
+            var outcome = MoveExecutor.ExecuteFlatten(source, dest, Guid.NewGuid(), logger: null);
+
+            Assert.False(outcome.Success);
+            Assert.Contains("outside", outcome.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            // Nothing moved — both files still where they were.
+            Assert.True(File.Exists(Path.Combine(source, "book.m4b")));
+            Assert.True(File.Exists(Path.Combine(dest, "stranger.m4b")));
+        }
+
+        [Fact(DisplayName = "Flatten: refuses when target is not an ancestor of source")]
+        public void Flatten_RefusesNonAncestor()
+        {
+            var source = MakeDir("Author", "Title", "Narrator");
+            WriteFile(source, "book.m4b", "payload");
+            var dest = MakeDir("Author", "OtherTitle");
+
+            var outcome = MoveExecutor.ExecuteFlatten(source, dest, Guid.NewGuid(), logger: null);
+
+            Assert.False(outcome.Success);
+            Assert.Contains("ancestor", outcome.ErrorMessage ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(Path.Combine(source, "book.m4b")));
+        }
     }
 }

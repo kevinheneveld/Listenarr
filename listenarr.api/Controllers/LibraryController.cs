@@ -39,6 +39,7 @@ using Microsoft.AspNetCore.SignalR;
 using Listenarr.Application.Audiobooks;
 using Listenarr.Api.Attributes;
 using Listenarr.Api.Dtos;
+using Listenarr.Infrastructure.FileSystem;
 using Listenarr.Infrastructure.Persistence;
 
 namespace Listenarr.Api.Controllers
@@ -2405,7 +2406,7 @@ namespace Listenarr.Api.Controllers
             foreach (var audiobook in allAudiobooks)
             {
                 if (asinGroupedIds.Contains(audiobook.Id)) continue;
-                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                var (target, invalidReason, _) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
                 if (!string.IsNullOrEmpty(invalidReason) || string.IsNullOrWhiteSpace(target)) continue;
                 titleAuthorTargetByAudiobookId[audiobook.Id] = NormalizeOrganizeKey(target);
             }
@@ -3172,16 +3173,18 @@ namespace Listenarr.Api.Controllers
                 if (IsSourceAtRootFolder(currentPath, rootFolders))
                 {
                     row.Status = OrganizePreviewStatus.InvalidTarget;
+                    row.ReasonCode = OrganizeInvalidReasonCode.SourceAtRoot;
                     row.Reason = "Source path is the library root folder. Re-scan the library so this audiobook's BasePath points at its actual subfolder before organizing.";
                     rows.Add(row);
                     continue;
                 }
 
-                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                var (target, invalidReason, invalidReasonCode) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
                 if (!string.IsNullOrEmpty(invalidReason))
                 {
                     row.Status = OrganizePreviewStatus.InvalidTarget;
                     row.Reason = invalidReason;
+                    row.ReasonCode = invalidReasonCode;
                     rows.Add(row);
                     continue;
                 }
@@ -3198,14 +3201,18 @@ namespace Listenarr.Api.Controllers
                     if (IsTargetAncestorOfSource(currentPath, target))
                     {
                         row.Status = OrganizePreviewStatus.InvalidTarget;
+                        row.ReasonCode = OrganizeInvalidReasonCode.TargetAncestor;
                         row.Reason = "Target is an ancestor of source; the move would flatten the source into one of its own parent directories. Adjust the Folder Naming Pattern or relocate the source manually.";
+                        row.TargetPath = target;
                         rows.Add(row);
                         continue;
                     }
                     if (TargetExistsWithContent(target))
                     {
                         row.Status = OrganizePreviewStatus.InvalidTarget;
+                        row.ReasonCode = OrganizeInvalidReasonCode.TargetExists;
                         row.Reason = "Target directory already exists on disk and contains files. Resolve the existing content (move or delete) before organizing this row.";
+                        row.TargetPath = target;
                         rows.Add(row);
                         continue;
                     }
@@ -3325,7 +3332,7 @@ namespace Listenarr.Api.Controllers
                     continue;
                 }
 
-                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                var (target, invalidReason, _) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
                 if (!string.IsNullOrEmpty(invalidReason))
                 {
                     result.Skipped++;
@@ -3404,13 +3411,145 @@ namespace Listenarr.Api.Controllers
         }
 
         /// <summary>
+        /// Collapse a single "nested one level too deep" row (organize-preview
+        /// reason code <c>target_ancestor</c>) into its canonical parent folder.
+        /// These rows — a historical import artifact where the files sit in a
+        /// redundant subfolder beneath their canonical folder — can't go through
+        /// the normal move queue because the target is an ancestor of the source,
+        /// which <see cref="MoveExecutor.ExecuteMoveAsync"/> refuses. The flatten
+        /// is strongly guarded (see <see cref="MoveExecutor.ExecuteFlatten"/>): it
+        /// only collapses empty wrapper directories and never touches a target
+        /// that holds foreign files. On success the audiobook's BasePath and file
+        /// paths are rebased in place so the DB matches the new on-disk layout.
+        /// </summary>
+        [HttpPost("organize/flatten")]
+        public async Task<IActionResult> FlattenOrganize([FromBody] OrganizeFlattenRequest request, CancellationToken ct = default)
+        {
+            if (request == null || request.AudiobookId <= 0)
+            {
+                return BadRequest(new OrganizeFlattenResultDto { Success = false, Error = "No audiobook id provided" });
+            }
+
+            var audiobooks = await _repo.GetByIdsWithFilesAsync(new List<int> { request.AudiobookId }, ct);
+            var audiobook = audiobooks.FirstOrDefault();
+            if (audiobook == null)
+            {
+                return NotFound(new OrganizeFlattenResultDto { Success = false, Error = $"Audiobook {request.AudiobookId} not found" });
+            }
+
+            using var scope = _scopeFactory.CreateScope();
+            var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+            var settings = await configService.GetApplicationSettingsAsync();
+            var rootFolders = _rootFolderService != null
+                ? await _rootFolderService.GetAllAsync()
+                : new List<RootFolder>();
+
+            var currentPath = NormalizeOrganizePath(audiobook.BasePath);
+            if (string.IsNullOrEmpty(currentPath))
+            {
+                return BadRequest(new OrganizeFlattenResultDto { Success = false, Error = "Audiobook has no current folder path." });
+            }
+
+            var (target, invalidReason, _) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+            if (!string.IsNullOrEmpty(invalidReason))
+            {
+                return BadRequest(new OrganizeFlattenResultDto { Success = false, Error = invalidReason });
+            }
+
+            // Only the ancestor/nested case is a flatten. Re-validate against the
+            // live state rather than trusting the caller's snapshot.
+            if (!IsTargetAncestorOfSource(currentPath, target))
+            {
+                return BadRequest(new OrganizeFlattenResultDto
+                {
+                    Success = false,
+                    Error = "This row is not a 'nested one level too deep' case; flatten only applies to those.",
+                });
+            }
+
+            var outcome = MoveExecutor.ExecuteFlatten(currentPath, target, Guid.NewGuid(), _logger);
+            if (!outcome.Success)
+            {
+                _logger.LogWarning("Organize flatten for audiobook {Id} ({Source} -> {Target}) refused: {Reason}",
+                    audiobook.Id, currentPath, target, outcome.ErrorMessage);
+                return BadRequest(new OrganizeFlattenResultDto { Success = false, Error = outcome.ErrorMessage });
+            }
+
+            // Files are on disk at the canonical path now — rebase the DB record
+            // so a re-scan isn't required. Mirrors RenameService's in-place rebase.
+            var newBase = NormalizeOrganizePath(target);
+            audiobook.BasePath = newBase;
+            if (audiobook.Files != null)
+            {
+                foreach (var file in audiobook.Files.Where(f => !string.IsNullOrWhiteSpace(f.Path)))
+                {
+                    var fp = NormalizeOrganizePath(file.Path);
+                    if (string.Equals(fp, currentPath, StringComparison.OrdinalIgnoreCase) || FileUtils.IsPathInsideOf(fp, currentPath))
+                    {
+                        var rel = Path.GetRelativePath(currentPath, fp);
+                        file.Path = NormalizeOrganizePath(Path.Combine(newBase, rel));
+                    }
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(audiobook.FilePath))
+            {
+                var fp = NormalizeOrganizePath(audiobook.FilePath);
+                if (string.Equals(fp, currentPath, StringComparison.OrdinalIgnoreCase) || FileUtils.IsPathInsideOf(fp, currentPath))
+                {
+                    var rel = Path.GetRelativePath(currentPath, fp);
+                    audiobook.FilePath = NormalizeOrganizePath(Path.Combine(newBase, rel));
+                }
+            }
+
+            try
+            {
+                await _repo.SaveChangesAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex,
+                    "Flatten moved audiobook {Id} files to {Target} on disk but persisting the new paths failed; a re-scan will recover.",
+                    audiobook.Id, newBase);
+                return Ok(new OrganizeFlattenResultDto
+                {
+                    Success = true,
+                    FilesMoved = outcome.FilesCopied,
+                    NewPath = newBase,
+                    Error = "Files were flattened on disk but the database update failed — re-scan the library to reconcile.",
+                });
+            }
+
+            try
+            {
+                await _historyRepository.AddAsync(new History
+                {
+                    AudiobookId = audiobook.Id,
+                    AudiobookTitle = audiobook.Title,
+                    EventType = "Organized",
+                    Message = $"Flattened nested folder into canonical path ({outcome.FilesCopied} file(s))",
+                    Source = "Organize",
+                    Timestamp = DateTime.UtcNow,
+                    NotificationSent = false,
+                });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "Non-fatal: failed to add history entry after flatten for audiobook {Id}", audiobook.Id);
+            }
+
+            _logger.LogInformation("Flattened audiobook {Id} from {Source} into {Target} ({Files} files)",
+                audiobook.Id, currentPath, newBase, outcome.FilesCopied);
+            return Ok(new OrganizeFlattenResultDto { Success = true, FilesMoved = outcome.FilesCopied, NewPath = newBase });
+        }
+
+        /// <summary>
         /// Build the canonical target folder path for <paramref name="audiobook"/>
         /// using the configured <c>FolderNamingPattern</c>. Returns the
         /// <c>(target, invalidReason)</c> pair — when <c>invalidReason</c> is
         /// non-empty the audiobook should be bucketed as
         /// <see cref="OrganizePreviewStatus.InvalidTarget"/>.
         /// </summary>
-        private (string Target, string? InvalidReason) ComputeOrganizeTarget(
+        private (string Target, string? InvalidReason, string? InvalidReasonCode) ComputeOrganizeTarget(
             Audiobook audiobook,
             ApplicationSettings settings,
             List<RootFolder> rootFolders)
@@ -3418,21 +3557,21 @@ namespace Listenarr.Api.Controllers
             var firstAuthor = audiobook.Authors?.FirstOrDefault(a => !string.IsNullOrWhiteSpace(a));
             if (string.IsNullOrWhiteSpace(audiobook.Title))
             {
-                return (string.Empty, "Missing title");
+                return (string.Empty, "Missing title", OrganizeInvalidReasonCode.MissingTitle);
             }
             if (string.IsNullOrWhiteSpace(firstAuthor))
             {
-                return (string.Empty, "Missing author");
+                return (string.Empty, "Missing author", OrganizeInvalidReasonCode.MissingAuthor);
             }
             if (string.IsNullOrWhiteSpace(settings?.FolderNamingPattern))
             {
-                return (string.Empty, "FolderNamingPattern is not configured");
+                return (string.Empty, "FolderNamingPattern is not configured", OrganizeInvalidReasonCode.PatternNotConfigured);
             }
 
             var root = ResolveOrganizeRoot(audiobook.BasePath, settings, rootFolders);
             if (string.IsNullOrEmpty(root))
             {
-                return (string.Empty, "Audiobook is outside any configured library root");
+                return (string.Empty, "Audiobook is outside any configured library root", OrganizeInvalidReasonCode.OutsideRoot);
             }
 
             var variables = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
@@ -3456,11 +3595,11 @@ namespace Listenarr.Api.Controllers
             var relative = _fileNamingService.ApplyNamingPattern(settings.FolderNamingPattern, variables, false);
             if (string.IsNullOrWhiteSpace(relative))
             {
-                return (string.Empty, "Naming pattern produced an empty path");
+                return (string.Empty, "Naming pattern produced an empty path", OrganizeInvalidReasonCode.EmptyPattern);
             }
 
             var combined = Path.IsPathRooted(relative) ? relative : Path.Join(root, relative);
-            return (NormalizeOrganizePath(combined), null);
+            return (NormalizeOrganizePath(combined), null, null);
         }
 
         /// <summary>
@@ -5191,7 +5330,7 @@ namespace Listenarr.Api.Controllers
                 // Compute canonical target via the same logic organize-library
                 // uses. If the book lacks metadata to compute one, skip with a
                 // reason — those rows need manual attention.
-                var (target, invalidReason) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
+                var (target, invalidReason, _) = ComputeOrganizeTarget(audiobook, settings, rootFolders);
                 if (!string.IsNullOrEmpty(invalidReason) || string.IsNullOrWhiteSpace(target))
                 {
                     skippedEntries.Add(new

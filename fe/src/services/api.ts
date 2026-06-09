@@ -74,6 +74,7 @@ import type {
   MergeDuplicatesResult,
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
+  OrganizeFlattenResult,
   MoveQueueSummary,
 } from '@/types'
 import { getStartupConfigCached, resetCache as resetStartupConfigCache } from './startupConfigCache'
@@ -1419,6 +1420,18 @@ class ApiService {
     return this.request<OrganizeLibraryApplyResult>(`/library/organize/apply`, {
       method: 'POST',
       body: JSON.stringify({ audiobookIds }),
+    })
+  }
+
+  /**
+   * Collapse a single nested-one-level-too-deep row into its canonical parent
+   * folder. Only valid for `target_ancestor` invalid rows; the server
+   * re-validates and refuses anything else.
+   */
+  async flattenOrganizeRow(audiobookId: number): Promise<OrganizeFlattenResult> {
+    return this.request<OrganizeFlattenResult>(`/library/organize/flatten`, {
+      method: 'POST',
+      body: JSON.stringify({ audiobookId }),
     })
   }
 
