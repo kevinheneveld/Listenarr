@@ -50,7 +50,14 @@
                 ? groupedCollections.length
                 : 0
           }}
-          {{ groupBy === 'books' ? 'Book' : groupBy === 'authors' ? 'Author' : 'Series'
+          {{
+            groupBy === 'books'
+              ? 'Book'
+              : groupBy === 'authors'
+                ? 'Author'
+                : groupBy === 'narrators'
+                  ? 'Narrator'
+                  : 'Series'
           }}{{
             (groupBy === 'books'
               ? audiobooks.length
@@ -65,8 +72,17 @@
           <button class="toolbar-btn group-btn" @click="showGroupMenu = !showGroupMenu">
             <PhBook v-if="groupBy === 'books'" />
             <PhUser v-else-if="groupBy === 'authors'" />
+            <PhMicrophoneStage v-else-if="groupBy === 'narrators'" />
             <PhBooks v-else />
-            {{ groupBy === 'books' ? 'Books' : groupBy === 'authors' ? 'Authors' : 'Series' }}
+            {{
+              groupBy === 'books'
+                ? 'Books'
+                : groupBy === 'authors'
+                  ? 'Authors'
+                  : groupBy === 'narrators'
+                    ? 'Narrators'
+                    : 'Series'
+            }}
             <PhCaretDown />
           </button>
           <div v-if="showGroupMenu" class="group-menu">
@@ -93,6 +109,14 @@
             >
               <PhBooks />
               Series
+            </button>
+            <button
+              class="menu-item"
+              :class="{ active: groupBy === 'narrators' }"
+              @click="setGroupBy('narrators')"
+            >
+              <PhMicrophoneStage />
+              Narrators
             </button>
           </div>
         </div>
@@ -245,7 +269,9 @@
           class="list-header collections-list-header"
         >
           <div class="col-cover">Cover</div>
-          <div class="col-title">{{ groupBy === 'authors' ? 'Author' : 'Series' }}</div>
+          <div class="col-title">
+            {{ groupBy === 'authors' ? 'Author' : groupBy === 'narrators' ? 'Narrator' : 'Series' }}
+          </div>
           <div class="col-count">Books</div>
         </div>
         <div
@@ -254,7 +280,7 @@
           class="audiobook-list-item collection-list-item"
           :class="{
             'author-collection': groupBy === 'authors',
-            'series-collection': groupBy === 'series',
+            'series-collection': groupBy === 'series' || groupBy === 'narrators',
           }"
           tabindex="0"
           role="button"
@@ -304,7 +330,7 @@
             'collection-card',
             {
               'author-collection': groupBy === 'authors',
-              'series-collection': groupBy === 'series',
+              'series-collection': groupBy === 'series' || groupBy === 'narrators',
             },
           ]"
           @click="navigateToCollection(collection)"
@@ -353,7 +379,7 @@
                 </div>
               </div>
             </template>
-            <template v-else-if="groupBy === 'series'">
+            <template v-else-if="groupBy === 'series' || groupBy === 'narrators'">
               <div
                 v-if="collection.coverUrls && collection.coverUrls.length > 0"
                 class="series-covers-container"
@@ -483,7 +509,10 @@
             </div>
           </div>
           <!-- Bottom placard for series (only show when item details are enabled) -->
-          <div v-if="groupBy === 'series' && showItemDetails" class="series-bottom-placard">
+          <div
+            v-if="(groupBy === 'series' || groupBy === 'narrators') && showItemDetails"
+            class="series-bottom-placard"
+          >
             <div class="series-bottom-content">
               <p class="series-bottom-title">{{ collection.name }}</p>
               <p class="series-bottom-count">
@@ -993,6 +1022,7 @@ import {
   PhX,
   PhUser,
   PhBooks,
+  PhMicrophoneStage,
   PhFolderOpen,
   PhFunnel,
 } from '@phosphor-icons/vue'
@@ -1017,7 +1047,7 @@ import type { Audiobook, AudiobookStatus, QualityProfile } from '@/types'
 import { evaluateRules } from '@/utils/customFilterEvaluator'
 import type { RuleLike } from '@/utils/customFilterEvaluator'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
-import { safeText } from '@/utils/textUtils'
+import { safeText, normalizeCollectionText, isNonPersonNarrator } from '@/utils/textUtils'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import { errorTracking } from '@/services/errorTracking'
 import { isLikelyBackendImageUrl, useProtectedImages } from '@/composables/useProtectedImages'
@@ -1089,12 +1119,16 @@ const DEFAULT_SORTS = {
   books: { key: 'title', order: 'asc' },
   authors: { key: 'author-last', order: 'asc' },
   series: { key: 'title', order: 'asc' },
+  // Narrators are people: default to last-name like authors (getAuthorSortKey works
+  // on any "First Last" name).
+  narrators: { key: 'author-last', order: 'asc' },
 } as const
 
 const sortState = reactive({
   books: { key: 'title', order: 'asc' as 'asc' | 'desc' },
   authors: { key: 'author-last', order: 'asc' as 'asc' | 'desc' },
   series: { key: 'title', order: 'asc' as 'asc' | 'desc' },
+  narrators: { key: 'author-last', order: 'asc' as 'asc' | 'desc' },
 })
 
 // Persist the user's last-used filter + sort so the view is restored when they
@@ -1107,6 +1141,7 @@ const SORT_STORAGE_KEYS = {
   books: 'listenarr.sort.books',
   authors: 'listenarr.sort.authors',
   series: 'listenarr.sort.series',
+  narrators: 'listenarr.sort.narrators',
 } as const
 const BUILTIN_FILTER_IDS = new Set([
   'monitored',
@@ -1739,10 +1774,10 @@ const activeDownloadAudiobookIds = computed(() => {
 
 // Grouping mode
 const GROUP_BY_KEY = 'listenarr.groupBy'
-const GROUP_BY_MODES = ['books', 'authors', 'series'] as const
+const GROUP_BY_MODES = ['books', 'authors', 'series', 'narrators'] as const
 type GroupByMode = (typeof GROUP_BY_MODES)[number]
 const DEFAULT_VISIBLE_RANGE_END = 20
-const groupBy = ref<'books' | 'authors' | 'series'>('books')
+const groupBy = ref<GroupByMode>('books')
 const showGroupMenu = ref(false)
 
 function normalizeGroupBy(value: unknown): GroupByMode | null {
@@ -1829,7 +1864,8 @@ try {
         'status',
       ]
     }
-    if (groupBy.value === 'authors') return ['author-last', 'author-first', 'count']
+    if (groupBy.value === 'authors' || groupBy.value === 'narrators')
+      return ['author-last', 'author-first', 'count']
     return ['title', 'count']
   })()
   const qSort = route.query.sort
@@ -1907,8 +1943,28 @@ const groupedCollections = computed(() => {
   const profiles = qualityProfiles.value
 
   books.forEach((book) => {
-    const key = groupBy.value === 'authors' ? book.authors?.[0] : book.series
-    if (key) {
+    // A book contributes one membership per group key. Authors/series map to a
+    // single raw key; narrators fan out — one membership per credited person.
+    // Narrator keys are normalized (so casing/punctuation variants merge and the
+    // card count matches the collection page), while the displayed name keeps the
+    // first-seen casing. Non-person credits ("Full Cast") are excluded.
+    const entries: { key: string; display: string }[] = []
+    if (groupBy.value === 'narrators') {
+      const seen = new Set<string>()
+      for (const raw of book.narrators ?? []) {
+        const display = (raw ?? '').trim()
+        if (!display || isNonPersonNarrator(display)) continue
+        const key = normalizeCollectionText(display)
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        entries.push({ key, display })
+      }
+    } else {
+      const raw = groupBy.value === 'authors' ? book.authors?.[0] : book.series
+      if (raw) entries.push({ key: raw, display: raw })
+    }
+
+    for (const { key, display } of entries) {
       if (!groups.has(key)) {
         if (groupBy.value === 'authors') {
           // Prefer override (fetched author image) first, then author ASIN, then book cover
@@ -1935,15 +1991,16 @@ const groupedCollections = computed(() => {
           }
 
           groups.set(key, {
-            name: key,
+            name: display,
             count: 0,
             readyCount: 0,
             qualityMismatchCount: 0,
             coverUrl: cover,
           })
         } else {
+          // Series and narrators both use a book-cover mosaic (no portrait source).
           groups.set(key, {
-            name: key,
+            name: display,
             count: 0,
             readyCount: 0,
             qualityMismatchCount: 0,
@@ -1965,7 +2022,11 @@ const groupedCollections = computed(() => {
           if (authorAsin) group.coverUrl = buildApiPath(`/images/${encodeURIComponent(authorAsin)}`)
         } catch {}
       }
-      if (groupBy.value === 'series' && group.coverUrls && group.coverUrls.length < 8) {
+      if (
+        (groupBy.value === 'series' || groupBy.value === 'narrators') &&
+        group.coverUrls &&
+        group.coverUrls.length < 8
+      ) {
         if (bookCover && !group.coverUrls.includes(bookCover)) {
           group.coverUrls.push(bookCover)
         }
@@ -2098,6 +2159,15 @@ const sortOptions = computed(() => {
     ]
   }
 
+  // Narrators are people too — sort by name (reuses author-name sort keys) or count.
+  if (groupBy.value === 'narrators') {
+    return [
+      { value: 'author-last', label: 'Narrator Last Name' },
+      { value: 'author-first', label: 'Narrator First Name' },
+      { value: 'count', label: 'Books' },
+    ]
+  }
+
   return [
     { value: 'title', label: 'Series' }, // sort by series name
     { value: 'count', label: 'Books' }, // number of books in the collection
@@ -2207,9 +2277,10 @@ const VIEWMODE_KEYS = {
   books: 'listenarr.viewMode.books',
   authors: 'listenarr.viewMode.authors',
   series: 'listenarr.viewMode.series',
+  narrators: 'listenarr.viewMode.narrators',
 } as const
 
-function loadViewModeFor(g: 'books' | 'authors' | 'series'): 'grid' | 'list' {
+function loadViewModeFor(g: GroupByMode): 'grid' | 'list' {
   try {
     const legacy = localStorage.getItem(VIEWMODE_KEY_LEGACY)
     if (legacy === 'grid' || legacy === 'list') {
@@ -2864,7 +2935,12 @@ async function setGroupBy(mode: GroupByMode) {
 }
 
 function navigateToCollection(collection: { name: string }) {
-  const type = groupBy.value === 'authors' ? 'author' : 'series'
+  const type =
+    groupBy.value === 'authors'
+      ? 'author'
+      : groupBy.value === 'narrators'
+        ? 'narrator'
+        : 'series'
   router.push(`/collection/${type}/${encodeURIComponent(collection.name)}`)
 }
 

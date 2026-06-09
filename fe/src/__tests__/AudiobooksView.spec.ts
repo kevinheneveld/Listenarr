@@ -325,6 +325,98 @@ describe('AudiobooksView Grouping', () => {
     })
   })
 
+  it('groups by narrator with fan-out and excludes "Full Cast" when groupBy is narrators', async () => {
+    if (
+      typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver === 'undefined'
+    ) {
+      ;(globalThis as unknown as Record<string, unknown>).ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+      }
+    }
+    if (typeof (globalThis as unknown as { WebSocket?: unknown }).WebSocket === 'undefined') {
+      ;(globalThis as unknown as Record<string, unknown>).WebSocket = function () {
+        /* noop */
+      }
+    }
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/audiobooks', name: 'audiobooks', component: AudiobooksView },
+      ],
+    })
+    await router.push('/audiobooks')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    store.audiobooks = [
+      {
+        id: 1,
+        title: 'Book 1',
+        authors: ['Author A'],
+        narrators: ['Ray Porter'],
+        imageUrl: 'cover1.jpg',
+        files: [],
+      },
+      {
+        id: 2,
+        title: 'Book 2',
+        authors: ['Author B'],
+        // Same narrator (different casing/spacing) must merge with Book 1; the
+        // "Full Cast" production token must be excluded entirely.
+        narrators: ['ray  porter', 'Full Cast'],
+        imageUrl: 'cover2.jpg',
+        files: [],
+      },
+      {
+        id: 3,
+        title: 'Book 3',
+        authors: ['Author C'],
+        narrators: ['Suzy Jackson'],
+        imageUrl: 'cover3.jpg',
+        files: [],
+      },
+    ] as unknown as import('@/types').Audiobook[]
+
+    store.fetchLibrary = vi.fn(async () => undefined)
+    const wrapper = mount(AudiobooksView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: [
+          'BulkEditModal',
+          'EditAudiobookModal',
+          'CustomFilterModal',
+          'FiltersDropdown',
+          'CustomSelect',
+        ],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+
+    const vm = getVm(wrapper)
+    await vm.setGroupBy?.('narrators')
+    await wrapper.vm.$nextTick()
+
+    const groupedCollections = vm.groupedCollections ?? []
+    // Two real narrators; "Full Cast" is not a browsable person.
+    expect(groupedCollections).toHaveLength(2)
+    expect(groupedCollections.map((g) => g.name)).not.toContain('Full Cast')
+
+    const rayPorter = groupedCollections.find((g) => g.name === 'Ray Porter')!
+    expect(rayPorter.count).toBe(2) // fanned out across both books despite casing
+    expect(rayPorter.coverUrls).toEqual(['cover1.jpg', 'cover2.jpg'])
+
+    const suzy = groupedCollections.find((g) => g.name === 'Suzy Jackson')!
+    expect(suzy.count).toBe(1)
+
+    // Narrators are people: default sort mirrors authors (last name ascending).
+    expect((vm as unknown as { sortKey: string }).sortKey).toBe('author-last')
+  })
+
   it('updates toolbar sort options and sorts grouped collections by count/name depending on grouping', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

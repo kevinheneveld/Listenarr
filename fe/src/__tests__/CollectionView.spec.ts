@@ -366,6 +366,17 @@ describe('CollectionView', () => {
     expect(wrapper.text()).toContain('Dune')
     expect(wrapper.text()).toContain('Children of Dune')
     expect(wrapper.text()).not.toContain('Hyperion')
+
+    // A narrator collection is library-only — there is no narrator catalog API, so
+    // it must never fall into the author/series remote-fetch or monitoring paths.
+    expect(mockGetAuthorCatalog).not.toHaveBeenCalled()
+    expect(mockGetSeriesCatalog).not.toHaveBeenCalled()
+    expect(mockGetAuthorMonitoringStatus).not.toHaveBeenCalled()
+    expect(mockGetSeriesMonitoringStatus).not.toHaveBeenCalled()
+    expect(wrapper.find('.author-hero-section').exists()).toBe(false)
+    expect(wrapper.find('.series-hero-section').exists()).toBe(false)
+    // The simple top-nav title (not a hero) is used for narrator collections.
+    expect(wrapper.find('.top-nav').exists()).toBe(true)
   })
 
   it('shows other audiobooks in a publisher collection', async () => {
