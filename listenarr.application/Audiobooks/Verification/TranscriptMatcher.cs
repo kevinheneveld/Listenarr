@@ -92,13 +92,19 @@ namespace Listenarr.Application.Audiobooks.Verification
         {
             if (names == null) return null;
 
+            // Single-letter tokens are dropped from BOTH sides: the stored name's
+            // middle initial ("Sarah J. Maas" → [sarah, maas]) AND the transcript's
+            // spoken initial — otherwise the aligned window compares "maas" against
+            // "j" and a perfectly-read credit scores 0.5.
+            var heardTokens = transcriptTokens.Where(t => t.Length >= 2).ToList();
+
             VerificationFieldMatch? best = null;
             foreach (var name in names)
             {
                 var nameTokens = Tokenize(name).Where(t => t.Length >= 2).ToList();
                 if (nameTokens.Count == 0) continue;
 
-                var match = BestWindow(transcriptTokens, nameTokens, nameMode: true);
+                var match = BestWindow(heardTokens, nameTokens, nameMode: true);
                 if (best == null || match.Score > best.Score) best = match;
             }
             return best;

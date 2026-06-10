@@ -175,6 +175,14 @@ namespace Listenarr.Application.Audiobooks.Verification
                 outcome = VerificationOutcome.Match;
                 confidence = Math.Round(Math.Min(0.85, weighted), 3);
             }
+            else if ((title?.Score ?? 0) >= TitleMatchThreshold && (narrator?.Score ?? 0) >= 0.85)
+            {
+                // Clear title + clearly-heard narrator: the narrator is read from
+                // the same spoken credits, so it corroborates identity as well as
+                // the author does when STT mangles the author's name.
+                outcome = VerificationOutcome.Match;
+                confidence = Math.Round(Math.Min(0.85, weighted), 3);
+            }
             else
             {
                 outcome = VerificationOutcome.Uncertain;

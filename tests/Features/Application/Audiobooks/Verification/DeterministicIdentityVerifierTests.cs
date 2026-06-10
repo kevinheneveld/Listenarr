@@ -116,6 +116,28 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Evaluate_MangledAuthorButExactTitleAndNarrator_IsMatch()
+        {
+            // Observed live on A Court of Thorns and Roses: title, narrator, and
+            // publisher all exact but the author rendering imperfect — the
+            // narrator corroboration path must accept this, not flag it.
+            var book = new Audiobook
+            {
+                Id = 3,
+                Title = "A Court of Thorns and Roses",
+                Authors = new List<string> { "Sarah Q. Maazzz" }, // unmatchable rendering
+                Narrators = new List<string> { "Jennifer Ikeda" }
+            };
+
+            var verdict = CreateVerifier().Evaluate(
+                book,
+                "a court of thorns and roses written by somebody unclear narrated by jennifer ikeda",
+                closingText: null);
+
+            Assert.Equal(VerificationOutcome.Match, verdict.Outcome);
+        }
+
+        [Fact]
         public void Evaluate_ClosingWindowCredits_CountTowardMatch()
         {
             var verdict = CreateVerifier().Evaluate(

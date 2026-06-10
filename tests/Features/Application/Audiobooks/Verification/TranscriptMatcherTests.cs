@@ -108,6 +108,22 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.True(match!.Score < 0.35, $"expected gross mismatch, got {match.Score}");
         }
 
+        [Theory]
+        // Spoken middle initials must not break window alignment — observed live:
+        // "Sarah J. Maas" heard as "sarah j mass" scored 0.5 because the aligned
+        // window compared "maas" against "j".
+        [InlineData("a court of thorns and roses by sarah j mass narrated by jennifer ikeda", "Sarah J. Maas")]
+        [InlineData("written by george r r martin", "George R. R. Martin")]
+        public void MatchNames_SpokenMiddleInitials_StillScoreHigh(string transcript, string storedName)
+        {
+            var tokens = TranscriptMatcher.Tokenize(transcript);
+
+            var match = TranscriptMatcher.MatchNames(tokens, new[] { storedName });
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.85, $"'{storedName}' with initials scored {match.Score}");
+        }
+
         [Fact]
         public void MatchNames_PicksBestOfMultipleAuthors()
         {
