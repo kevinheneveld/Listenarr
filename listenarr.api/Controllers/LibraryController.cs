@@ -5157,7 +5157,7 @@ namespace Listenarr.Api.Controllers
         /// </summary>
         private sealed class AudiobookFolderIndex
         {
-            // Composite key: "{authorKey} {titleKey}" so we can use a
+            // Composite key: "{authorKey}\0{titleKey}" so we can use a
             // plain Dictionary without a custom IEqualityComparer.
             private readonly Dictionary<string, List<string>> _byAuthorAndTitle =
                 new(StringComparer.Ordinal);
@@ -5168,7 +5168,7 @@ namespace Listenarr.Api.Controllers
             {
                 var titleKey = NormalizeForFolderMatch(folderName);
                 if (string.IsNullOrEmpty(titleKey)) return;
-                var key = authorFolderName.ToUpperInvariant() + " " + titleKey;
+                var key = authorFolderName.ToUpperInvariant() + "\0" + titleKey;
                 if (!_byAuthorAndTitle.TryGetValue(key, out var list))
                 {
                     list = new List<string>(1);
@@ -5182,7 +5182,7 @@ namespace Listenarr.Api.Controllers
             {
                 var titleKey = NormalizeForFolderMatch(title);
                 if (string.IsNullOrEmpty(titleKey)) return Array.Empty<string>();
-                var key = author.ToUpperInvariant() + " " + titleKey;
+                var key = author.ToUpperInvariant() + "\0" + titleKey;
                 return _byAuthorAndTitle.TryGetValue(key, out var list) ? list : (IReadOnlyList<string>)Array.Empty<string>();
             }
         }
