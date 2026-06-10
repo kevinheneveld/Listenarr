@@ -429,8 +429,9 @@ namespace Listenarr.Tests.Features.Infrastructure.Adapters
         // History-reconciliation classification: NZBGet's dupe-deleted grabs (DELETED/COPY|GOOD) must
         // be blocked (terminal, no auto-search re-grab — which with FailedDownloadAutoSearch on would
         // just re-fetch a duplicate NZBGet rejects again), while genuine failures (FAILURE/*, bad/
-        // unhealthy DELETEs) fail so the normal retry path applies. SUCCESS/* and non-terminal states
-        // are left untouched so the completion-detection path keeps owning them.
+        // unhealthy DELETEs) fail so the normal retry path applies. SUCCESS/* returns no-action here
+        // because the reconcile loop completes successes directly (see ReadHistoryDir); non-terminal
+        // states (WARNING/*) are genuinely left untouched.
         [Theory]
         [InlineData("DELETED/COPY")]
         [InlineData("DELETED/DUPE")]
@@ -471,6 +472,34 @@ namespace Listenarr.Tests.Features.Infrastructure.Adapters
             var (act, block, _) = NzbgetAdapter.ClassifyNzbgetHistoryStatus(status);
             Assert.False(act);
             Assert.False(block);
+        }
+
+        private static System.Text.Json.JsonElement Obj(string json)
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return doc.RootElement.Clone();
+        }
+
+        // ReadHistoryDir feeds DownloadPath when completing a SUCCESS grab from history: FinalDir is
+        // the post-processed location and wins; DestDir is the pre-move fallback; null when neither is
+        // a usable string so the caller leaves any existing path untouched.
+        [Fact]
+        public void ReadHistoryDir_PrefersFinalDir_FallsBackToDestDir()
+        {
+            Assert.Equal("/done/Book", NzbgetAdapter.ReadHistoryDir(
+                Obj("{\"FinalDir\":\"/done/Book\",\"DestDir\":\"/inter/Book\"}")));
+            Assert.Equal("/inter/Book", NzbgetAdapter.ReadHistoryDir(
+                Obj("{\"FinalDir\":\"\",\"DestDir\":\"/inter/Book\"}")));
+            Assert.Equal("/inter/Book", NzbgetAdapter.ReadHistoryDir(
+                Obj("{\"DestDir\":\"/inter/Book\"}")));
+        }
+
+        [Fact]
+        public void ReadHistoryDir_ReturnsNull_WhenNoUsableDir()
+        {
+            Assert.Null(NzbgetAdapter.ReadHistoryDir(Obj("{}")));
+            Assert.Null(NzbgetAdapter.ReadHistoryDir(Obj("{\"FinalDir\":\"   \",\"DestDir\":\"\"}")));
+            Assert.Null(NzbgetAdapter.ReadHistoryDir(Obj("{\"FinalDir\":null,\"DestDir\":null}")));
         }
     }
 }

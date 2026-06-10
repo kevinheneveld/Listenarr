@@ -1301,13 +1301,14 @@ namespace Listenarr.Infrastructure.Adapters
         /// Reconcile tracked downloads against NZBGet history — parity with the SABnzbd/qBittorrent
         /// adapters, which the NZBGet adapter was missing. Items NZBGet has finished with leave the
         /// active queue (listgroups) and move to history; the queue-only progress poll never sees a
-        /// terminal state for them, so without this pass a download NZBGet deleted as a duplicate
-        /// (DELETED/COPY, DELETED/GOOD) or failed (FAILURE/*) is orphaned in Queued/Downloading
-        /// forever. Acts only on tracked downloads still in a non-terminal state and absent from the
-        /// queue this cycle; SUCCESS/* is left to the completion-detection path. Duplicate removals are
-        /// blocked (terminal, no re-search) so they don't trigger an auto-search that re-grabs the same
-        /// duplicate NZBGet will reject again; genuine failures are failed so the normal retry/
-        /// auto-search applies.
+        /// terminal state for them, so without this pass a download NZBGet finished — whether it
+        /// succeeded (SUCCESS/*), was deleted as a duplicate (DELETED/COPY, DELETED/GOOD), or failed
+        /// (FAILURE/*) — is orphaned in Queued/Downloading forever. Acts only on tracked downloads
+        /// still in a non-terminal state and absent from the queue this cycle. Successes are completed
+        /// (DownloadPath pointed at the history FinalDir so the import job can find the files);
+        /// duplicate removals are blocked (terminal, no re-search) so they don't trigger an auto-search
+        /// that re-grabs the same duplicate NZBGet will reject again; genuine failures are failed so the
+        /// normal retry/auto-search applies.
         /// </summary>
         private async Task ReconcileTerminalFromHistoryAsync(
             DownloadClientConfiguration client, List<Download> downloads, HashSet<string> queueNzbIds,
@@ -1342,21 +1343,51 @@ namespace Listenarr.Infrastructure.Adapters
                         : entry.TryGetProperty("NZBName", out var nnProp) ? nnProp.GetString() ?? string.Empty : string.Empty;
                     if (string.IsNullOrEmpty(status)) continue;
 
+                    // A small audiobook can be grabbed, downloaded, post-processed, and moved out of
+                    // listgroups into history all within one 30s poll window, so the queue-only
+                    // completion path (MapDownloadProgress, which only runs for items still in
+                    // listgroups) never observes its terminal state. Complete SUCCESS/* here too, not
+                    // just dupe-deleted/failed — otherwise every fast usenet grab is orphaned in Queued
+                    // forever, and auto-search re-grabs it into a DELETED/COPY dupe block on the next try.
+                    var isSuccess = status.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase);
                     var (act, block, reason) = ClassifyNzbgetHistoryStatus(status);
-                    if (!act) continue;
+                    if (!isSuccess && !act) continue;
 
                     var match = pending.FirstOrDefault(d =>
                     {
                         var id = d.GetExternalId();
                         return !string.IsNullOrEmpty(id) && id.Equals(nzbId.ToString(), StringComparison.OrdinalIgnoreCase);
                     });
+                    var matchedById = match != null;
                     if (match == null && !string.IsNullOrEmpty(name))
                     {
                         match = pending.FirstOrDefault(d => TitleUtils.AreTitlesSimilar(d.Title, name));
                     }
                     if (match == null) continue;
 
-                    if (block)
+                    if (isSuccess)
+                    {
+                        // Complete a finished grab only on an exact NZBID match with a resolved on-disk
+                        // location. The loose title fallback is acceptable for block/fail (worst case: a
+                        // wrong block) but NOT for success — it could attach another book's files to this
+                        // download's AudiobookId. And completing with no FinalDir/DestDir would hand the
+                        // processor an empty DownloadPath, looping it on ScheduleRetry. If either gate
+                        // fails, leave the record in Queued (no worse than before) for a later cycle.
+                        // NZBGet's history carries the post-processed location in FinalDir (or DestDir
+                        // before a move); the gateway applies any remote-path mapping to DownloadPath
+                        // after we return. Unlike qBittorrent/SABnzbd, the NZBGet adapter never set
+                        // DownloadPath during the queue poll, so a completed grab reached the processor
+                        // with an empty path and could never import.
+                        var finalDir = ReadHistoryDir(entry);
+                        if (!matchedById || string.IsNullOrWhiteSpace(finalDir))
+                        {
+                            continue;
+                        }
+                        match.DownloadPath = finalDir;
+                        match.Completed();
+                        _logger.LogInformation("Completed NZBGet download {Id} from history ({Status})", LogRedaction.SanitizeText(match.Id), status);
+                    }
+                    else if (block)
                     {
                         // ImportBlocked is only reachable from Downloading/Processing/ImportPending/
                         // Completed; nudge a queued-but-removed dupe through Downloading so the terminal
@@ -1385,18 +1416,19 @@ namespace Listenarr.Infrastructure.Adapters
         }
 
         /// <summary>
-        /// Classify an NZBGet history <c>Status</c> string for reconciliation. Returns whether to act,
-        /// whether to block (vs fail), and a human reason. SUCCESS/* and non-terminal states (WARNING/*)
-        /// are left alone. Duplicate removals (DELETED/COPY|DUPE|GOOD) and ambiguous removals
-        /// (DELETED/MANUAL|SCAN) block — terminal, no auto-search re-grab; genuine failures
-        /// (FAILURE/*, DELETED/HEALTH, DELETED/BAD) fail so the normal retry/auto-search applies.
+        /// Classify an NZBGet history <c>Status</c> string for the fail-vs-block decision. Returns
+        /// whether to act, whether to block (vs fail), and a human reason. SUCCESS/* is handled by the
+        /// caller (completed directly, not via this method) and non-terminal states (WARNING/*) are
+        /// left alone — both return act=false here. Duplicate removals (DELETED/COPY|DUPE|GOOD) and
+        /// ambiguous removals (DELETED/MANUAL|SCAN) block — terminal, no auto-search re-grab; genuine
+        /// failures (FAILURE/*, DELETED/HEALTH, DELETED/BAD) fail so the normal retry/auto-search applies.
         /// </summary>
         internal static (bool act, bool block, string reason) ClassifyNzbgetHistoryStatus(string status)
         {
             var s = (status ?? string.Empty).ToUpperInvariant();
             if (s.StartsWith("SUCCESS", StringComparison.Ordinal))
             {
-                return (false, false, string.Empty); // completion-detection path owns successes
+                return (false, false, string.Empty); // caller completes successes from history directly
             }
             if (s.StartsWith("FAILURE", StringComparison.Ordinal) || s.StartsWith("FAILED", StringComparison.Ordinal))
             {
@@ -1417,6 +1449,29 @@ namespace Listenarr.Infrastructure.Adapters
                 return (true, true, $"NZBGet removed this download ({status})"); // MANUAL/SCAN/other: terminal, don't re-search
             }
             return (false, false, string.Empty); // WARNING/* and anything else: not terminal
+        }
+
+        /// <summary>
+        /// Reads the on-disk location of a completed download from a NZBGet history entry: FinalDir
+        /// (set once post-processing moves the files) with a fallback to DestDir. Returns null when
+        /// neither is a non-empty string so the caller can complete the download without overwriting an
+        /// existing path.
+        /// </summary>
+        internal static string? ReadHistoryDir(JsonElement entry)
+        {
+            if (entry.TryGetProperty("FinalDir", out var finalDir)
+                && finalDir.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(finalDir.GetString()))
+            {
+                return finalDir.GetString();
+            }
+            if (entry.TryGetProperty("DestDir", out var destDir)
+                && destDir.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(destDir.GetString()))
+            {
+                return destDir.GetString();
+            }
+            return null;
         }
     }
 }
