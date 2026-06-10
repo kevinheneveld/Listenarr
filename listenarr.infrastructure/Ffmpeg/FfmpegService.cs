@@ -35,6 +35,8 @@ namespace Listenarr.Infrastructure.Ffmpeg
         private readonly string _baseDir;
         private readonly string _ffprobeName;
         private readonly string _ffprobePath;
+        private readonly string _ffmpegName;
+        private readonly string _ffmpegPath;
         private readonly ILogger<FfmpegService> _logger;
         private readonly HttpClient _httpClient;
         private readonly IStartupConfigService _startupConfigService;
@@ -68,6 +70,8 @@ namespace Listenarr.Infrastructure.Ffmpeg
             _baseDir = applicationPathService.FfmpegRootPath;
             _ffprobeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffprobe.exe" : "ffprobe";
             _ffprobePath = Path.Join(_baseDir, _ffprobeName);
+            _ffmpegName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "ffmpeg.exe" : "ffmpeg";
+            _ffmpegPath = Path.Join(_baseDir, _ffmpegName);
         }
 
         private static async Task TryDeleteFileAsync(string path, int retries = 3, int delayMs = 100, CancellationToken cancellationToken = default)
@@ -360,119 +364,10 @@ namespace Listenarr.Infrastructure.Ffmpeg
                     }
                 }
 
-                try
-                {
-                    // Find any extracted ffprobe candidates under the baseDir
-                    var candidates = new List<string>();
-                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                    {
-                        candidates.AddRange(Directory.GetFiles(_baseDir, "ffprobe.exe", SearchOption.AllDirectories));
-                    }
-                    else
-                    {
-                        candidates.AddRange(Directory.GetFiles(_baseDir, "ffprobe", SearchOption.AllDirectories));
-                        // include any file names that contain ffprobe (fallback)
-                        candidates.AddRange(Directory.EnumerateFiles(_baseDir, "*ffprobe*", SearchOption.AllDirectories));
-                    }
-
-                    // Prefer exact filename matches, and prefer those located in a 'bin' directory
-                    string? chosen = null;
-                    var exactMatches = candidates.Where(p => string.Equals(Path.GetFileName(p), _ffprobeName, StringComparison.OrdinalIgnoreCase)).ToList();
-                    if (exactMatches.Any())
-                    {
-                        // Prefer candidates with '/bin/' in the path (common for ffmpeg archives)
-                        chosen = exactMatches.FirstOrDefault(p => p.IndexOf(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) >= 0)
-                                 ?? exactMatches.OrderBy(p => p.Length).FirstOrDefault();
-                    }
-                    else if (candidates.Any())
-                    {
-                        chosen = candidates.OrderBy(p => p.Length).First();
-                    }
-
-                    if (!string.IsNullOrEmpty(chosen))
-                    {
-                        var dest = _ffprobePath;
-                        try
-                        {
-                            // Ensure destination directory exists
-                            Directory.CreateDirectory(Path.GetDirectoryName(dest) ?? _baseDir);
-
-                            var chosenFull = Path.GetFullPath(chosen);
-                            var destFull = Path.GetFullPath(dest);
-
-                            if (string.Equals(chosenFull, destFull, StringComparison.OrdinalIgnoreCase))
-                            {
-                                _logger.LogInformation("ffprobe already extracted at destination {Dest}", destFull);
-                            }
-                            else
-                            {
-                                // If destination already exists, remove to allow move
-                                if (File.Exists(dest))
-                                {
-                                    try { File.Delete(dest); }
-                                    catch (Exception caughtEx_8) when (caughtEx_8 is not OperationCanceledException && caughtEx_8 is not OutOfMemoryException && caughtEx_8 is not StackOverflowException)
-                                    { /* best-effort */
-                                        System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
-                                    }
-                                }
-
-                                // Attempt to move the file into the baseDir root. If move fails (cross-volume), fall back to copy.
-                                try
-                                {
-                                    File.Move(chosen, dest);
-                                    _logger.LogInformation("Moved ffprobe from {Src} to {Dest}", chosen, dest);
-                                }
-                                catch (Exception mvEx) when (mvEx is not OperationCanceledException && mvEx is not OutOfMemoryException && mvEx is not StackOverflowException)
-                                {
-                                    try
-                                    {
-                                        File.Copy(chosen, dest, overwrite: true);
-                                        _logger.LogInformation("Copied ffprobe from {Src} to {Dest} (move failed: {Err})", chosen, dest, mvEx.Message);
-                                    }
-                                    catch (Exception cpEx) when (cpEx is not OperationCanceledException && cpEx is not OutOfMemoryException && cpEx is not StackOverflowException)
-                                    {
-                                        _logger.LogWarning(cpEx, "Failed to copy ffprobe from {Src} to {Dest}", chosen, dest);
-                                    }
-                                }
-                            }
-
-                            // Ensure executable bit on non-Windows
-                            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(dest))
-                            {
-                                try
-                                {
-                                    var psiCh = new System.Diagnostics.ProcessStartInfo
-                                    {
-                                        FileName = "chmod",
-                                        Arguments = $"+x \"{dest}\"",
-                                        RedirectStandardOutput = true,
-                                        RedirectStandardError = true,
-                                        UseShellExecute = false,
-                                        CreateNoWindow = true
-                                    };
-
-                                    await _processRunner.RunAsync(psiCh, 3000);
-                                }
-                                catch (Exception caughtEx_9) when (caughtEx_9 is not OperationCanceledException && caughtEx_9 is not OutOfMemoryException && caughtEx_9 is not StackOverflowException)
-                                { /* best effort */
-                                    System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
-                                }
-                            }
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                        {
-                            _logger.LogWarning(ex, "Failed to move or copy ffprobe candidate {Src} to {Dest}", chosen, _ffprobePath);
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogInformation("No ffprobe binary found in extracted files under {BaseDir}", _baseDir);
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                {
-                    _logger.LogDebug(ex, "Non-fatal error while locating/copying ffprobe from extracted files");
-                }
+                await TryPromoteExtractedBinaryAsync(_ffprobeName, _ffprobePath);
+                // The same static archive ships the ffmpeg binary; promote it too so audio
+                // clipping (ADR-0001 verification) doesn't require a second download.
+                await TryPromoteExtractedBinaryAsync(_ffmpegName, _ffmpegPath);
 
                 if (!File.Exists(_ffprobePath))
                 {
@@ -481,7 +376,7 @@ namespace Listenarr.Infrastructure.Ffmpeg
                 }
 
                 var licensePath = Path.Join(_baseDir, "LICENSE_NOTICE.txt");
-                await File.WriteAllTextAsync(licensePath, "ffprobe binaries downloaded. Review FFmpeg licensing (LGPL/GPL) at https://ffmpeg.org/legal.html\nSource: " + downloadUrl + "\n");
+                await File.WriteAllTextAsync(licensePath, "ffmpeg/ffprobe binaries downloaded. Review FFmpeg licensing (LGPL/GPL) at https://ffmpeg.org/legal.html\nSource: " + downloadUrl + "\n");
 
                 _logger.LogInformation("ffprobe installed to {Path}", _ffprobePath);
                 return _ffprobePath;
@@ -500,6 +395,167 @@ namespace Listenarr.Infrastructure.Ffmpeg
             {
                 _logger.LogWarning(ex, "Failed to download or install ffprobe");
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Return the ffmpeg path if it exists in the configured bundled directory. This method
+        /// does NOT attempt to download or install ffmpeg.
+        /// </summary>
+        public Task<string?> GetFfmpegPathAsync()
+        {
+            if (File.Exists(_ffmpegPath))
+            {
+                return Task.FromResult<string?>(_ffmpegPath);
+            }
+
+            _logger.LogInformation("No bundled ffmpeg found at {Path}", _ffmpegPath);
+            return Task.FromResult<string?>(null);
+        }
+
+        /// <summary>
+        /// Ensure the ffmpeg binary is available in the bundled directory. The static archive
+        /// downloaded for ffprobe contains ffmpeg as well, so this first tries to promote a
+        /// binary left behind in the extracted tree by a previous install, then falls back to
+        /// the full download flow (which promotes both binaries).
+        /// </summary>
+        public async Task<string?> EnsureFfmpegInstalledAsync()
+        {
+            if (File.Exists(_ffmpegPath))
+            {
+                return _ffmpegPath;
+            }
+
+            if (await TryPromoteExtractedBinaryAsync(_ffmpegName, _ffmpegPath))
+            {
+                return _ffmpegPath;
+            }
+
+            if (!_autoInstall)
+            {
+                _logger.LogInformation("Auto-install of ffmpeg is disabled via LISTENARR_AUTO_INSTALL_FFPROBE");
+                return null;
+            }
+
+            if (await GetFfprobePathAsync() == null)
+            {
+                await EnsureFfprobeInstalledAsync();
+                if (File.Exists(_ffmpegPath))
+                {
+                    return _ffmpegPath;
+                }
+            }
+
+            _logger.LogWarning(
+                "ffmpeg binary unavailable: ffprobe is installed but the extracted archive no longer contains ffmpeg. Delete {Path} and restart to re-download the archive.",
+                _ffprobePath);
+            return null;
+        }
+
+        /// <summary>
+        /// Locate a binary by name in the extracted archive tree under the base directory and
+        /// move it to <paramref name="destPath"/>, setting the executable bit on non-Windows.
+        /// Returns true when the binary exists at the destination afterwards.
+        /// </summary>
+        private async Task<bool> TryPromoteExtractedBinaryAsync(string binaryName, string destPath)
+        {
+            if (File.Exists(destPath)) return true;
+
+            try
+            {
+                if (!Directory.Exists(_baseDir)) return false;
+
+                var candidates = new List<string>();
+                candidates.AddRange(Directory.GetFiles(_baseDir, binaryName, SearchOption.AllDirectories));
+                if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    // include any file names that contain the binary name (fallback)
+                    candidates.AddRange(Directory.EnumerateFiles(_baseDir, "*" + Path.GetFileNameWithoutExtension(binaryName) + "*", SearchOption.AllDirectories));
+                }
+
+                var destFull = Path.GetFullPath(destPath);
+                candidates = candidates
+                    .Where(p => !string.Equals(Path.GetFullPath(p), destFull, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                // Prefer exact filename matches, and prefer those located in a 'bin' directory
+                string? chosen = null;
+                var exactMatches = candidates.Where(p => string.Equals(Path.GetFileName(p), binaryName, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (exactMatches.Any())
+                {
+                    // Prefer candidates with '/bin/' in the path (common for ffmpeg archives)
+                    chosen = exactMatches.FirstOrDefault(p => p.IndexOf(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) >= 0)
+                             ?? exactMatches.OrderBy(p => p.Length).FirstOrDefault();
+                }
+                else if (candidates.Any())
+                {
+                    chosen = candidates.OrderBy(p => p.Length).First();
+                }
+
+                if (string.IsNullOrEmpty(chosen))
+                {
+                    _logger.LogInformation("No {Binary} binary found in extracted files under {BaseDir}", binaryName, _baseDir);
+                    return false;
+                }
+
+                try
+                {
+                    // Ensure destination directory exists
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath) ?? _baseDir);
+
+                    // Attempt to move the file into the baseDir root. If move fails (cross-volume), fall back to copy.
+                    try
+                    {
+                        File.Move(chosen, destPath);
+                        _logger.LogInformation("Moved {Binary} from {Src} to {Dest}", binaryName, chosen, destPath);
+                    }
+                    catch (Exception mvEx) when (mvEx is not OperationCanceledException && mvEx is not OutOfMemoryException && mvEx is not StackOverflowException)
+                    {
+                        try
+                        {
+                            File.Copy(chosen, destPath, overwrite: true);
+                            _logger.LogInformation("Copied {Binary} from {Src} to {Dest} (move failed: {Err})", binaryName, chosen, destPath, mvEx.Message);
+                        }
+                        catch (Exception cpEx) when (cpEx is not OperationCanceledException && cpEx is not OutOfMemoryException && cpEx is not StackOverflowException)
+                        {
+                            _logger.LogWarning(cpEx, "Failed to copy {Binary} from {Src} to {Dest}", binaryName, chosen, destPath);
+                        }
+                    }
+
+                    // Ensure executable bit on non-Windows
+                    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(destPath))
+                    {
+                        try
+                        {
+                            var psiCh = new System.Diagnostics.ProcessStartInfo
+                            {
+                                FileName = "chmod",
+                                Arguments = $"+x \"{destPath}\"",
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                                UseShellExecute = false,
+                                CreateNoWindow = true
+                            };
+
+                            await _processRunner.RunAsync(psiCh, 3000);
+                        }
+                        catch (Exception caughtEx_9) when (caughtEx_9 is not OperationCanceledException && caughtEx_9 is not OutOfMemoryException && caughtEx_9 is not StackOverflowException)
+                        { /* best effort */
+                            System.Diagnostics.Debug.WriteLine("Suppressed non-fatal exception in catch block.");
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Failed to move or copy {Binary} candidate {Src} to {Dest}", binaryName, chosen, destPath);
+                }
+
+                return File.Exists(destPath);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "Non-fatal error while locating/copying {Binary} from extracted files", binaryName);
+                return false;
             }
         }
 

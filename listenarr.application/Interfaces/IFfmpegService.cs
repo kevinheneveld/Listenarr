@@ -38,6 +38,20 @@ namespace Listenarr.Application.Interfaces
         Task<string?> EnsureFfprobeInstalledAsync();
 
         /// <summary>
+        /// Return the full path to the ffmpeg binary if present in the application's configured
+        /// directory. This method will NOT attempt to download or install ffmpeg.
+        /// </summary>
+        Task<string?> GetFfmpegPathAsync();
+
+        /// <summary>
+        /// Ensure the ffmpeg binary is available in the application's bundled directory. The
+        /// static archive downloaded for ffprobe ships ffmpeg too, so this either promotes a
+        /// previously-extracted binary or runs the full download flow.
+        /// Returns the installed path or null if not available.
+        /// </summary>
+        Task<string?> EnsureFfmpegInstalledAsync();
+
+        /// <summary>
         /// Execute the utility ffprobe against the given file
         /// </summary>
         /// <param name="filePath">File to execute ffprobe on</param>
