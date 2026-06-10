@@ -18,6 +18,7 @@
 
 using System.ComponentModel.DataAnnotations;
 using Listenarr.Domain.Common;
+using Listenarr.Domain.Models.Enumerations;
 
 namespace Listenarr.Domain.Models
 {
@@ -81,6 +82,15 @@ namespace Listenarr.Domain.Models
 
         // Automatic search tracking
         public DateTime? LastSearchTime { get; set; }
+
+        // Audio-based identity verification (ADR-0001). Manual states are sticky:
+        // agent passes must check VerificationStatus.IsAgentWritable() before writing.
+        public VerificationStatus VerificationStatus { get; set; } = VerificationStatus.Unverified;
+        public double? VerificationConfidence { get; set; } // 0..1
+        public DateTime? VerifiedAt { get; set; }
+        public string? VerifiedBy { get; set; }             // "agent:whisper-base.en" | username
+        public string? VerificationMethod { get; set; }     // "deterministic" | "llm:..." | "manual"
+        public string? VerificationTranscript { get; set; } // audit: what STT heard (sampled windows)
 
         /// <summary>
         /// Create AudioMetadata from the Audiobook as a basic metadata for imported files
