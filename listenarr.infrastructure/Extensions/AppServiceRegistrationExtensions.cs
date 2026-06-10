@@ -17,6 +17,7 @@
  */
 // csharp
 using Listenarr.Application.Audiobooks;
+using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Application.Common;
 using Listenarr.Application.Common.Images;
 using Listenarr.Application.Downloads;
@@ -35,6 +36,7 @@ using Listenarr.Infrastructure.Search.Providers;
 using Listenarr.Infrastructure.Security;
 using Listenarr.Infrastructure.Services;
 using Listenarr.Infrastructure.SignalR;
+using Listenarr.Infrastructure.Whisper;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -71,6 +73,10 @@ namespace Listenarr.Infrastructure.Extensions
             services.AddSingleton<MetadataExtractionLimiter>();
             // Ffmpeg installer: provides a bundled ffprobe binary when not present on the system
             services.AddSingleton<IFfmpegService, FfmpegService>();
+            // Audio verification (ADR-0001): local STT + deterministic identity matching
+            services.AddSingleton<IWhisperService, WhisperService>();
+            services.AddScoped<IAudioSampleExtractor, AudioSampleExtractor>();
+            services.AddScoped<IIdentityVerifier, DeterministicIdentityVerifier>();
             // Service to accept client-pushed download updates and maintain recent-push cache
             services.AddSingleton<IDownloadPushService, DownloadPushService>();
             services.AddScoped<IAsinLookupService, AsinLookupService>();

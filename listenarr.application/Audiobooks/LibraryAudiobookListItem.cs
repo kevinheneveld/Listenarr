@@ -16,6 +16,8 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Listenarr.Domain.Models.Enumerations;
+
 namespace Listenarr.Application.Audiobooks
 {
     public class LibraryAudiobookListItem
@@ -52,5 +54,9 @@ namespace Listenarr.Application.Audiobooks
         /// Null when no tracked file rows exist (e.g. missing books, or legacy filePath-only records).
         /// </summary>
         public DateTime? ImportedAt { get; set; }
+
+        /// <summary>Audio-based identity verification state (ADR-0001).</summary>
+        public VerificationStatus VerificationStatus { get; set; }
+        public double? VerificationConfidence { get; set; }
     }
 }

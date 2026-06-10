@@ -17,6 +17,7 @@
  */
 // csharp
 using Listenarr.Application.Audiobooks;
+using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Application.Common;
 using Listenarr.Application.Downloads;
 using Listenarr.Application.Interfaces;
@@ -95,6 +96,9 @@ namespace Listenarr.Infrastructure.Extensions
 
             // Background worker that processes unmatched-file scan jobs
             services.AddHostedService<UnmatchedScanBackgroundService>();
+
+            // Background worker for audio-based library verification (ADR-0001)
+            services.AddHostedService<LibraryVerificationBackgroundService>();
 
             return services;
         }

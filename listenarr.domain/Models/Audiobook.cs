@@ -91,6 +91,9 @@ namespace Listenarr.Domain.Models
         public string? VerifiedBy { get; set; }             // "agent:whisper-base.en" | username
         public string? VerificationMethod { get; set; }     // "deterministic" | "llm:..." | "manual"
         public string? VerificationTranscript { get; set; } // audit: what STT heard (sampled windows)
+        // Serialized VerificationVerdict (camelCase JSON, per-field scores + matched text)
+        // so the triage UI can show WHICH field diverged without re-running the matcher.
+        public string? VerificationDetailJson { get; set; }
 
         /// <summary>
         /// Create AudioMetadata from the Audiobook as a basic metadata for imported files

@@ -155,7 +155,9 @@ namespace Listenarr.Application.Audiobooks
                          files),
                     ImportedAt = importedAtById.TryGetValue(a.Id, out var importedAt)
                         ? importedAt
-                        : (DateTime?)null
+                        : (DateTime?)null,
+                    VerificationStatus = a.VerificationStatus,
+                    VerificationConfidence = a.VerificationConfidence
                 };
             }).ToList();
         }

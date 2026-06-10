@@ -106,6 +106,13 @@ namespace Listenarr.Domain.Models.Configurations
         // Whether to show completed downloads from external clients in the Activity view
         public bool ShowCompletedExternalDownloads { get; set; } = false;
 
+        // Audio verification (ADR-0001) sample-window strategy: how much of the book's
+        // opening (first file) and closing (last file) audio is transcribed when looking
+        // for spoken credits. Opening credits sometimes sit behind a publisher ident or
+        // cold open, hence the generous default; closing credits are a short repeat.
+        public int VerificationOpeningSeconds { get; set; } = 90;
+        public int VerificationClosingSeconds { get; set; } = 30;
+
         // Failed download handling settings
         public bool FailedDownloadHandlingEnabled { get; set; } = true;
         public bool FailedDownloadAutoSearch { get; set; } = false;

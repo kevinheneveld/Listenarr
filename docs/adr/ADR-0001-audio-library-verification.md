@@ -246,9 +246,9 @@ public enum VerificationStatus
 ## Action Items
 
 ### Phase 0 — Foundations (this ADR)
-1. [ ] Land this ADR; establish `docs/adr/` convention.
-2. [ ] Add `VerificationStatus` enum + `Audiobook` fields + EF migration.
-3. [ ] Define `IIdentityVerifier` and the `VerificationVerdict` record. **The
+1. [x] Land this ADR; establish `docs/adr/` convention.
+2. [x] Add `VerificationStatus` enum + `Audiobook` fields + EF migration.
+3. [x] Define `IIdentityVerifier` and the `VerificationVerdict` record. **The
        verdict carries per-field results** — `TitleMatch`, `AuthorMatch`,
        `NarratorMatch`, `PublisherMatch`, each `{ score, matchedText }` — plus an
        aggregate status/confidence, the transcript snippet, and method. Per-field
@@ -258,31 +258,32 @@ public enum VerificationStatus
        file** (see #5), not "primary file."
 
 ### Phase 1 — Local pipeline, deterministic, batch (the immediate triage tool)
-4. [ ] **(Blocked on packaging decision — verify whisper.cpp distribution for the
-       Docker target arch first.)** `WhisperService` shell-out wrapper; install via
-       Dockerfile build-time bake (binary + `ggml-base.en` model + license notice),
-       not runtime per-arch download unless a prebuilt source is confirmed.
-5. [ ] Audio extractor: select the **correctly-ordered first file** for
+4. [x] **(Packaging resolved 2026-06-10: whisper.cpp v1.8.6 publishes NO Linux
+       binaries — only Windows zips and an Apple xcframework — so the Dockerfile
+       builds it from source in a dedicated stage; arch-agnostic for amd64/arm64.)**
+       `WhisperService` shell-out wrapper; install via Dockerfile build-time bake
+       (binary + `ggml-base.en` model + license notice).
+5. [x] Audio extractor: select the **correctly-ordered first file** for
        multi-file books — sort by track number (natural sort, so "Chapter 2"
        precedes "Chapter 10"), not alphabetically — then clip via FFmpeg to
        16 kHz mono WAV (temp file, reuse FFmpeg temp dir). The sample window is a
        **configurable strategy** (default e.g. first 90s + last 30s), not a
        hardcoded 60s, since credits may sit behind a publisher ident/cold open or
        only appear at the end.
-6. [ ] `DeterministicIdentityVerifier` — transcript vs. stored metadata producing
+6. [x] `DeterministicIdentityVerifier` — transcript vs. stored metadata producing
        per-field results: title via `NormalizeTitle`/exact-ish; author + narrator
        via **phonetic + edit-distance** (names are the discriminating field and
        the one STT mangles most). Frame the high-confidence signal as **gross
        mismatch detection** (the obvious junk), with match-confirmation treated as
        the lower-confidence path.
-7. [ ] `LibraryVerificationBackgroundService` + queue, modeled on
+7. [x] `LibraryVerificationBackgroundService` + queue, modeled on
        `UnmatchedScanBackgroundService`; idempotent (skips manual/already-verified),
        SignalR progress.
-8. [ ] API: trigger batch verify, per-book verify, set/clear manual verification.
-9. [ ] FE: verification badge on book detail + Books list; "Verify library" action;
+8. [x] API: trigger batch verify, per-book verify, set/clear manual verification.
+9. [x] FE: verification badge on book detail + Books list; "Verify library" action;
        a "Needs review" (AgentFlagged + Uncertain) filter/view; manual
        verify / reject buttons.
-10. [ ] Tests: extractor windowing, deterministic matcher (match/mismatch/uncertain
+10. [x] Tests: extractor windowing, deterministic matcher (match/mismatch/uncertain
         fixtures), sticky manual-state rule, batch idempotency.
 
 ### Phase 2 — LLM tier (opt-in) + ingestion hook
