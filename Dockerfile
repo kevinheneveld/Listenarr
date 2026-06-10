@@ -15,11 +15,13 @@ RUN CGO_ENABLED=0 go install github.com/tianon/gosu@${GOSU_VERSION}
 # both possible and simpler. Source build is arch-agnostic (amd64/arm64).
 # GGML_NATIVE=OFF keeps the binary portable across CPUs of the same arch;
 # GGML_OPENMP=OFF avoids a libgomp runtime dep the aspnet base image lacks.
-# The AVX-family flags must be OFF explicitly: ggml's x86 defaults enable
-# AVX/AVX2/FMA even with GGML_NATIVE=OFF, which SIGILLs (exit 132) on hosts
-# without them — e.g. a QEMU VM with the default "qemu64" CPU model, which
-# exposes only SSE4.2. (If the VM CPU type is ever set to "host" passthrough,
-# re-enabling these makes whisper several times faster.)
+# Instruction-set flags are pinned explicitly (x86-64-v3 baseline: AVX/AVX2/
+# FMA/F16C) rather than left to ggml's defaults, so the binary's requirements
+# are visible here. The deploy host's VM passes through the physical CPU
+# (Proxmox cpu=host since 2026-06-10); a build with these ON dies with SIGILL
+# (exit 132) on hosts capped at SSE4.2 (e.g. QEMU's default or x86-64-v2 CPU
+# models) — flip them OFF if the image must run on such a host. AVX-512 stays
+# OFF: the i3-N305 deploy target doesn't have it.
 FROM debian:trixie-slim AS whisper-builder
 ARG WHISPER_CPP_VERSION=v1.8.6
 ARG WHISPER_MODEL=base.en
@@ -32,13 +34,13 @@ RUN git clone --depth 1 --branch ${WHISPER_CPP_VERSION} https://github.com/ggml-
 		-DBUILD_SHARED_LIBS=OFF \
 		-DGGML_NATIVE=OFF \
 		-DGGML_OPENMP=OFF \
-		-DGGML_AVX=OFF \
-		-DGGML_AVX2=OFF \
+		-DGGML_AVX=ON \
+		-DGGML_AVX2=ON \
 		-DGGML_AVX512=OFF \
 		-DGGML_AVX_VNNI=OFF \
-		-DGGML_FMA=OFF \
-		-DGGML_F16C=OFF \
-		-DGGML_BMI2=OFF \
+		-DGGML_FMA=ON \
+		-DGGML_F16C=ON \
+		-DGGML_BMI2=ON \
 		-DWHISPER_BUILD_TESTS=OFF \
 		-DWHISPER_BUILD_SERVER=OFF \
 	&& cmake --build /whisper/build --config Release -j"$(nproc)" --target whisper-cli \
