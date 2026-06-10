@@ -99,6 +99,73 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.False(filter.ShouldFilter(result, ab));
         }
 
+        [Theory]
+        // Live false positives: a generic single-word title matched only on the title word inside a
+        // longer, different book's title — with no author overlap — must now be rejected.
+        [InlineData("Mark Johnson - Wasted: A Childhood Stolen, An Innocence Betrayed, A Life Redeemed",
+            "Betrayed", "Lindsay Buroker")]
+        [InlineData("Entrepreneurial Bootcamp 03 - The Seven Nuts & Bolts of the Pent Family Vision - Arnold Pent",
+            "The Vision", "Dean Koontz")]
+        public void ShouldFilter_GenericTitleWordOnly_NoAuthorOverlap_IsRejected(
+            string resultTitle, string audiobookTitle, string author)
+        {
+            var filter = new RelevanceFilter();
+            var result = new SearchResult { Title = resultTitle };
+            var ab = new Audiobook { Title = audiobookTitle, Authors = new List<string> { author } };
+
+            // The combined ratio alone clears 0.30 (1 of 3 tokens), but the author-corroboration
+            // guard rejects it because no author token appears in the result.
+            Assert.True(RelevanceFilter.ComputeRelevance(resultTitle, audiobookTitle, new[] { author })
+                >= RelevanceFilter.DefaultMinRelevance);
+            Assert.True(filter.ShouldFilter(result, ab));
+        }
+
+        [Fact]
+        public void ShouldFilter_GenericTitle_WithAuthorPresent_IsKept()
+        {
+            // The correct release names the author, so corroboration passes.
+            var filter = new RelevanceFilter();
+            var result = new SearchResult { Title = "Betrayed - Lindsay Buroker (Unabridged) [M4B]" };
+            var ab = new Audiobook { Title = "Betrayed", Authors = new List<string> { "Lindsay Buroker" } };
+
+            Assert.False(filter.ShouldFilter(result, ab));
+        }
+
+        [Fact]
+        public void ShouldFilter_DistinctiveMultiWordTitle_AuthorOmitted_IsKept()
+        {
+            // A multi-word distinctive title (more than MaxGenericTitleTokens significant tokens)
+            // can stand on its own — the guard does not require the author, so an author-less
+            // release still passes.
+            var filter = new RelevanceFilter();
+            var result = new SearchResult { Title = "Mistborn - The Final Empire (Unabridged) [M4B]" };
+            var ab = new Audiobook { Title = "Mistborn: The Final Empire", Authors = new List<string> { "Brandon Sanderson" } };
+
+            Assert.False(filter.ShouldFilter(result, ab));
+        }
+
+        [Fact]
+        public void ShouldFilter_GenericTitle_NoKnownAuthor_FailsOpen()
+        {
+            // With no author to corroborate against, the guard cannot judge and does not reject.
+            var filter = new RelevanceFilter();
+            var result = new SearchResult { Title = "Some Other Story That Mentions Betrayed Somewhere" };
+            var ab = new Audiobook { Title = "Betrayed", Authors = null };
+
+            Assert.False(filter.ShouldFilter(result, ab));
+        }
+
+        [Theory]
+        [InlineData("Mark Johnson - Wasted: An Innocence Betrayed", "Betrayed", "Lindsay Buroker", true)]
+        [InlineData("Betrayed by Lindsay Buroker", "Betrayed", "Lindsay Buroker", false)] // author present
+        [InlineData("Mistborn The Final Empire", "Mistborn The Final Empire", "Brandon Sanderson", false)] // distinctive
+        public void RequiresAuthorCorroboration_Cases(
+            string resultTitle, string audiobookTitle, string author, bool expected)
+        {
+            Assert.Equal(expected,
+                RelevanceFilter.RequiresAuthorCorroboration(resultTitle, audiobookTitle, new[] { author }));
+        }
+
         [Fact]
         public void SignificantTokens_DropsStopWordsAndShortTokens()
         {

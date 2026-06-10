@@ -40,6 +40,14 @@ namespace Listenarr.Application.Search.Filters
         /// </summary>
         public const double DefaultMinRelevance = 0.30;
 
+        /// <summary>
+        /// Maximum number of significant title tokens for a title to count as "generic" and
+        /// therefore require author corroboration (see <see cref="RequiresAuthorCorroboration"/>).
+        /// Default 1: only single-significant-word titles ("Betrayed", "Vision", "Titans") are
+        /// considered too ambiguous to match on the title word alone. Raise to be stricter.
+        /// </summary>
+        public const int MaxGenericTitleTokens = 1;
+
         public string FilterReason => "title_not_relevant";
 
         // No audiobook context — fail open. Manual search and per-result calls
@@ -49,8 +57,20 @@ namespace Listenarr.Application.Search.Filters
         public bool ShouldFilter(SearchResult result, Audiobook? audiobook)
         {
             if (audiobook == null) return false;
+
             var relevance = ComputeRelevance(result.Title, audiobook.Title, audiobook.Authors);
-            return relevance < DefaultMinRelevance;
+            if (relevance < DefaultMinRelevance) return true;
+
+            // The combined title+author ratio alone clears a common single-word title on the
+            // title word by itself: a 1-token title with a 2-token author gives an expected set
+            // of {title, a1, a2}, so matching only the title word scores 1/3 = 0.33 > 0.30 even
+            // though the result is a different book whose title merely *contains* that common word
+            // (e.g. "Mark Johnson - Wasted: ...An Innocence Betrayed..." matched the wanted
+            // "Betrayed" by Lindsay Buroker). For such generic titles, require the author to
+            // corroborate the match.
+            if (RequiresAuthorCorroboration(result.Title, audiobook.Title, audiobook.Authors)) return true;
+
+            return false;
         }
 
         /// <summary>
@@ -80,6 +100,46 @@ namespace Listenarr.Application.Search.Filters
             var resultTokens = new HashSet<string>(SignificantTokens.From(resultTitle), StringComparer.OrdinalIgnoreCase);
             var hits = expected.Count(t => resultTokens.Contains(t));
             return (double)hits / expected.Count;
+        }
+
+        /// <summary>
+        /// True when a result must be rejected for lacking author corroboration: the audiobook's
+        /// title is generic (at most <see cref="MaxGenericTitleTokens"/> significant tokens), the
+        /// author is known, and the result title shares none of the author's significant tokens.
+        /// That is the signature of a common-word title collision rather than a real match.
+        ///
+        /// Fails open (returns false) when the title is distinctive enough on its own (more than
+        /// <see cref="MaxGenericTitleTokens"/> significant tokens) or when no author is known to
+        /// corroborate with. Note: this only gates the automatic-search path — manual search passes
+        /// no audiobook context, so a legitimate author-less release of a single-word-titled book
+        /// can still be grabbed by hand.
+        /// </summary>
+        public static bool RequiresAuthorCorroboration(
+            string? resultTitle,
+            string? audiobookTitle,
+            IEnumerable<string>? authors)
+        {
+            var titleTokenCount = SignificantTokens.From(audiobookTitle)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            // Distinctive multi-word titles can stand on their own — only generic short titles
+            // need the author to vouch for the match.
+            if (titleTokenCount == 0 || titleTokenCount > MaxGenericTitleTokens) return false;
+
+            var authorTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (authors != null)
+            {
+                foreach (var author in authors)
+                {
+                    foreach (var t in SignificantTokens.From(author)) authorTokens.Add(t);
+                }
+            }
+            // No author to corroborate with — cannot judge, do not reject.
+            if (authorTokens.Count == 0) return false;
+
+            var resultTokens = new HashSet<string>(SignificantTokens.From(resultTitle), StringComparer.OrdinalIgnoreCase);
+            var authorHits = authorTokens.Count(t => resultTokens.Contains(t));
+            return authorHits == 0;
         }
     }
 }
