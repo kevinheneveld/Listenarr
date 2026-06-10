@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System.Text.RegularExpressions;
 using Listenarr.Application.Interfaces;
 using Listenarr.Domain.Models;
 
@@ -28,6 +29,17 @@ namespace Listenarr.Application.Search.Filters;
 public class AudiobookOnlyFilter : ISearchResultFilter
 {
     public string FilterReason => "non_audiobook_filtered";
+
+    // Music-scene release naming: a release-type token (SINGLE/EP/ALBUM/…) immediately followed by a
+    // medium (WEB/CD/VINYL/FLAC/…), e.g. "...-Clash of the Titans-[IVT075]-SINGLE-WEB-2026-PTC". That
+    // pairing is the scene grammar for music releases and does not occur in audiobook release titles,
+    // so — with no positive audio signal — it marks a music single/album that matched an audiobook
+    // title by chance (a real live case: a techno single grabbed for the generic audiobook "Titans").
+    // Deliberately kept to the *delimited format-pair* rather than bare "SINGLE" or "WEB" so ordinary
+    // titles ("Single Malt", a "...WEB..." audiobook web rip) are not caught.
+    private static readonly Regex MusicSceneReleasePattern = new(
+        @"\b(SINGLE|EP|ALBUM|CDM|CDS|CDEP|MCD|VLS|CDA|VINYL|LP|MAXI)[-_ .](WEB|CD|CDDA|VINYL|FLAC|CABLE|SAT|DAB|DVBC|MP3)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public bool ShouldFilter(SearchResult result)
     {
@@ -97,10 +109,11 @@ public class AudiobookOnlyFilter : ISearchResultFilter
         var hasPhrase = HasAny(phraseIndicators, title) || HasAny(phraseIndicators, format);
         var hasSuffix = HasAny(suffixIndicators, title) || HasAny(suffixIndicators, format);
         var hasNonAudioFormat = HasAny(nonAudioFormatIndicators, title) || HasAny(nonAudioFormatIndicators, format);
+        var hasMusicSceneFormat = MusicSceneReleasePattern.IsMatch(title) || MusicSceneReleasePattern.IsMatch(format);
 
-        // If we see strong signals of a print/box-set/collection or a non-audio media format, and we
-        // have no audio evidence, filter out.
-        if (hasPhrase || hasSuffix || hasSimple || hasNonAudioFormat)
+        // If we see strong signals of a print/box-set/collection, a non-audio media format, or a
+        // music-scene release, and we have no audio evidence, filter out.
+        if (hasPhrase || hasSuffix || hasSimple || hasNonAudioFormat || hasMusicSceneFormat)
         {
             return true;
         }

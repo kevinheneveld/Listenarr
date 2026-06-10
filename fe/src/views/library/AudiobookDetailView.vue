@@ -635,6 +635,25 @@
             </label>
           </div>
         </div>
+
+        <div class="not-audiobook-option">
+          <div class="not-audiobook-text">
+            <span class="not-audiobook-title">This isn't an audiobook?</span>
+            <small
+              >Keep the entry but remove the wrong files (e.g. a music or other non-audiobook
+              release that matched the title) and search for a correct version instead of
+              deleting the whole book.</small
+            >
+          </div>
+          <button
+            type="button"
+            class="not-audiobook-button"
+            :disabled="rejectingNotAudiobook"
+            @click="executeNotAudiobook"
+          >
+            {{ rejectingNotAudiobook ? 'Working…' : 'Not an audiobook — find a better match' }}
+          </button>
+        </div>
       </template>
     </DeleteConfirmationModal>
 
@@ -834,6 +853,7 @@ const activeTab = ref<DetailTab>('details')
 const showDeleteDialog = ref(false)
 const showManualSearchModal = ref(false)
 const deleting = ref(false)
+const rejectingNotAudiobook = ref(false)
 const deleteFilesOnDisk = ref(false)
 const deleteFolderOnDisk = ref(false)
 type AudiobookFile = NonNullable<AudiobookType['files']>[number]
@@ -1722,6 +1742,40 @@ async function executeDelete() {
     deleting.value = false
     resetDeleteOptions()
     showDeleteDialog.value = false
+  }
+}
+
+async function executeNotAudiobook() {
+  if (!audiobook.value) return
+
+  rejectingNotAudiobook.value = true
+  const toast = useToast()
+  try {
+    const res = await apiService.rejectNotAudiobook(audiobook.value.id)
+    const searchMsg =
+      res.searchQueued > 0
+        ? `Started a search and queued ${res.searchQueued} download(s).`
+        : 'Started a new search — nothing better grabbed yet, so the book is back to wanted.'
+    toast.success(
+      'Marked not an audiobook',
+      `Removed ${res.filesRemoved} file(s). ${searchMsg}`,
+    )
+    if (res.warnings && res.warnings.length > 0) {
+      toast.warning('Some files could not be removed', res.warnings.join(' '))
+    }
+    showDeleteDialog.value = false
+    resetDeleteOptions()
+    // Reload so the detail reflects the now-missing files and re-search state.
+    await loadAudiobook()
+  } catch (err) {
+    toast.error('Action failed', 'Could not mark this as not an audiobook.')
+    errorTracking.captureException(err as Error, {
+      component: 'AudiobookDetailView',
+      operation: 'executeNotAudiobook',
+      metadata: { audiobookId: audiobook.value?.id },
+    })
+  } finally {
+    rejectingNotAudiobook.value = false
   }
 }
 
@@ -3599,6 +3653,56 @@ a.identifier-link:hover {
 .delete-options .checkbox-content small {
   color: #b9c0c8;
   line-height: 1.4;
+}
+
+.not-audiobook-option {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  text-align: left;
+}
+
+.not-audiobook-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.not-audiobook-title {
+  color: #f5f7fa;
+  font-weight: 600;
+}
+
+.not-audiobook-text small {
+  color: #b9c0c8;
+  line-height: 1.4;
+}
+
+.not-audiobook-button {
+  align-self: flex-start;
+  padding: 0.55rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid rgba(var(--brand-rgb), 0.45);
+  background: rgba(var(--brand-rgb), 0.12);
+  color: #f5f7fa;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.not-audiobook-button:hover:not(:disabled) {
+  border-color: rgba(var(--brand-rgb), 0.7);
+  background: rgba(var(--brand-rgb), 0.2);
+}
+
+.not-audiobook-button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* Ensure visible spacing between secondary action buttons across breakpoints */

@@ -77,6 +77,36 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.False(Filter.ShouldFilter(result));
         }
 
+        [Theory]
+        [InlineData("Calhem Parker and Ola Rostrom-Clash of the Titans-[IVT075]-SINGLE-WEB-2026-PTC")]
+        [InlineData("Some Artist - Some Track-EP-WEB-2024-GRP")]
+        [InlineData("Various - Some Comp-ALBUM-CD-2019-GRP")]
+        [InlineData("Artist - Title (CDM-FLAC-2020-XYZ)")]
+        public void ShouldFilter_MusicSceneRelease_MisMatchedToAudiobook_IsFiltered(string title)
+        {
+            // The live case: a techno single "...Clash of the Titans-[IVT075]-SINGLE-WEB-2026-PTC"
+            // matched the generic audiobook "Titans" by title, passed the filter (music files are
+            // .mp3/.flac, same as audiobooks), was grabbed and imported as the wrong content. With no
+            // audio signal, the scene format-pair (SINGLE-WEB / EP-WEB / ALBUM-CD / CDM-FLAC) filters it.
+            Assert.True(Filter.ShouldFilter(new SearchResult { Title = title }));
+        }
+
+        [Theory]
+        [InlineData("Brandon Sanderson - The Hero of Ages (Mistborn #3) [Graphic Audio]")]
+        [InlineData("James Patterson - Michael Bennett 17 - Paranoia.m4b")]
+        [InlineData("Starsight, Skyward (02) by Brandon Sanderson M4B")]
+        [InlineData("Roald Dahl - Boy - Going Solo - BBC Audio Drama")]
+        [InlineData("Ann Cleeves - Single Malt Murder (Unabridged) [MP3]")]
+        [InlineData("The Outcast - Some Story - WEB Edition 2024")]
+        public void ShouldFilter_RealAudiobook_NotMisreadAsMusic_IsNotFiltered(string title)
+        {
+            // False-positive guard against the music heuristic. None of these is a music-scene
+            // format-pair: "Single Malt" / a bare "WEB Edition" have no release-type+medium pairing,
+            // and the M4B/MP3 titles are plain audiobooks. The pattern requires the *delimited pair*
+            // (SINGLE-WEB, EP-CD, …), so generic titles and web rips are not caught.
+            Assert.False(Filter.ShouldFilter(new SearchResult { Title = title }));
+        }
+
         [Fact]
         public void ShouldFilter_NonAudioExtension_ButHasAudioRuntime_IsNotFiltered()
         {

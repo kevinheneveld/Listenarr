@@ -1481,6 +1481,18 @@ class ApiService {
     })
   }
 
+  async rejectNotAudiobook(
+    id: number,
+  ): Promise<{
+    message: string
+    id: number
+    filesRemoved: number
+    searchQueued: number
+    warnings: string[]
+  }> {
+    return this.request(`/library/${id}/not-audiobook`, { method: 'POST' })
+  }
+
   async bulkRemoveFromLibrary(
     id: number,
     mapping: Partial<RemotePathMapping>,

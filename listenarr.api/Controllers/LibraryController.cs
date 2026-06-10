@@ -1633,6 +1633,115 @@ namespace Listenarr.Api.Controllers
             }
         }
 
+        /// <summary>
+        /// "Not an audiobook": the content imported for this book is the wrong thing (e.g. a music
+        /// single that matched the title). Removes every tracked file from disk and the library, keeps
+        /// the audiobook record and re-monitors it, then kicks off a fresh search. The improved
+        /// <see cref="Listenarr.Application.Search.Filters.AudiobookOnlyFilter"/> runs in every search
+        /// path, so the same non-audiobook release is not re-grabbed — this finds a better match or
+        /// correctly leaves the book wanted rather than re-importing the junk.
+        /// </summary>
+        /// <param name="id">Audiobook whose imported files are the wrong content.</param>
+        [HttpPost("{id}/not-audiobook")]
+        public async Task<IActionResult> RejectNotAudiobook(int id)
+        {
+            var ct = HttpContext.RequestAborted;
+            var audiobook = await _repo.GetByIdAsync(id);
+            if (audiobook == null)
+            {
+                return NotFound(new { message = "Audiobook not found" });
+            }
+
+            var filesRemoved = 0;
+            var warnings = new List<string>();
+
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var sp = scope.ServiceProvider;
+                var audioFileService = sp.GetRequiredService<IAudiobookFileService>();
+
+                var files = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
+                foreach (var file in files)
+                {
+                    try
+                    {
+                        var result = await audioFileService.DeleteAudiobookFileAsync(
+                            audiobook, file.Id, deleteFromDisk: true, source: "not-audiobook", ct: ct);
+                        if (result.Outcome == DeleteAudiobookFileOutcome.Deleted)
+                        {
+                            filesRemoved++;
+                        }
+                        if (result.Warnings != null)
+                        {
+                            warnings.AddRange(result.Warnings);
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        warnings.Add($"Could not remove file id {file.Id}.");
+                        _logger.LogWarning(ex, "not-audiobook: failed to remove AudiobookFile {FileId} for audiobook {AudiobookId}", file.Id, id);
+                    }
+                }
+
+                // Keep the book tracked so the re-search can fill it with the correct release.
+                if (!audiobook.Monitored)
+                {
+                    audiobook.Monitored = true;
+                    await _repo.UpdateAsync(audiobook);
+                }
+
+                try
+                {
+                    await _historyRepository.AddAsync(new History
+                    {
+                        AudiobookId = audiobook.Id,
+                        AudiobookTitle = audiobook.Title ?? "Unknown Title",
+                        EventType = "Rejected",
+                        Message = $"Marked not an audiobook: removed {filesRemoved} file(s) and started a new search.",
+                        Source = "not-audiobook",
+                        Timestamp = DateTime.UtcNow
+                    });
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "not-audiobook: failed to record history for audiobook {AudiobookId} (non-critical)", id);
+                }
+
+                // Kick off a fresh search. The invoker is optional (parity with SearchController); if it
+                // is unavailable the files are still removed and the book is left monitored to be picked
+                // up by the next automatic-search cycle.
+                var searchQueued = 0;
+                var searchInvoker = sp.GetService<IAutomaticSearchInvoker>();
+                if (searchInvoker != null)
+                {
+                    try
+                    {
+                        var search = await searchInvoker.SearchAudiobookNowAsync(id, ct);
+                        searchQueued = search.DownloadsQueued;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        _logger.LogWarning(ex, "not-audiobook: search-now failed for audiobook {AudiobookId} (will retry on next cycle)", id);
+                    }
+                }
+
+                return Ok(new
+                {
+                    message = "Removed non-audiobook files and started a new search",
+                    id,
+                    filesRemoved,
+                    searchQueued,
+                    warnings
+                });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "not-audiobook: failed for audiobook {AudiobookId}", id);
+                return StatusCode(500, new { message = "Failed to mark as not an audiobook" });
+            }
+        }
+
         private sealed class DeleteFilesystemResult
         {
             public int DeletedFiles { get; set; }
