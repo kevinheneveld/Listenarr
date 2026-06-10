@@ -819,6 +819,7 @@
             </label>
           </div>
         </div>
+        <NotAudiobookAction :audiobook-id="deleteTarget?.id" @done="onNotAudiobookDone" />
       </template>
     </DeleteConfirmationModal>
 
@@ -891,6 +892,7 @@ import AddLibraryModal from '@/components/domain/audiobook/AddLibraryModal.vue'
 import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
+import NotAudiobookAction from '@/components/library/NotAudiobookAction.vue'
 import SeriesPickerModal from '@/components/domain/audiobook/SeriesPickerModal.vue'
 import AddSelectedBooksModal from '@/components/domain/audiobook/AddSelectedBooksModal.vue'
 import { showConfirm } from '@/composables/useConfirm'
@@ -2518,6 +2520,13 @@ async function executeDelete() {
     deleteTarget.value = null
     showDeleteDialog.value = false
   }
+}
+
+async function onNotAudiobookDone() {
+  deleteTarget.value = null
+  showDeleteDialog.value = false
+  // The book stays but loses its files and re-searches — refresh so its state updates.
+  await refreshLibrary()
 }
 
 const onAudiobookSaved = () => {

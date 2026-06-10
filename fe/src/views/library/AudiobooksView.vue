@@ -992,6 +992,7 @@
             </label>
           </div>
         </div>
+        <NotAudiobookAction :audiobook-id="deleteTarget?.id" @done="onNotAudiobookDone" />
       </template>
     </DeleteConfirmationModal>
 
@@ -1039,6 +1040,7 @@ import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
+import NotAudiobookAction from '@/components/library/NotAudiobookAction.vue'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import FiltersDropdown from '@/components/ui/FiltersDropdown.vue'
 import CustomFilterModal from '@/components/domain/collection/CustomFilterModal.vue'
@@ -3127,6 +3129,14 @@ async function executeDelete() {
     deleteTarget.value = null
     showDeleteDialog.value = false
   }
+}
+
+async function onNotAudiobookDone() {
+  deleteTarget.value = null
+  showDeleteDialog.value = false
+  // The book stays in the library but loses its files (and drops off the "Recently Imported"
+  // view), so refresh the list to reflect the now-missing/re-searching state.
+  await refreshLibrary()
 }
 
 async function confirmBulkDelete() {
