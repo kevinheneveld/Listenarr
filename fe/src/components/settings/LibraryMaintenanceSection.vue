@@ -70,6 +70,30 @@
 
       <div class="maintenance-row">
         <div class="maintenance-copy">
+          <div class="maintenance-title">Verify library audio</div>
+          <div class="maintenance-help">
+            Transcribe the opening and closing of each book with local
+            speech-to-text and compare the spoken credits ("…by Author, narrated
+            by Narrator") against the stored metadata, flagging entries whose
+            audio doesn't match. Flag-only — nothing is deleted or re-searched.
+            Safe to re-run: already-verified and manually-marked books are skipped.
+          </div>
+          <div v-if="verificationMessage" class="maintenance-result">
+            {{ verificationMessage }}
+          </div>
+        </div>
+        <button
+          type="button"
+          class="action-button"
+          :disabled="isVerifying"
+          @click="runVerification"
+        >
+          {{ isVerifying ? verifyProgressLabel : 'Verify library' }}
+        </button>
+      </div>
+
+      <div class="maintenance-row">
+        <div class="maintenance-copy">
           <div class="maintenance-title">Organize library folders</div>
           <div class="maintenance-help">
             Walk every audiobook and move it under its canonical
@@ -107,9 +131,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { PhWrench } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
+import { signalRService } from '@/services/signalr'
 import { useToast } from '@/services/toastService'
 import DuplicatesReviewModal from '@/components/domain/maintenance/DuplicatesReviewModal.vue'
 import OrganizeLibraryModal from '@/components/domain/maintenance/OrganizeLibraryModal.vue'
@@ -122,6 +147,68 @@ const showDuplicatesModal = ref(false)
 const lastDuplicatesMessage = ref<string | null>(null)
 const showOrganizeModal = ref(false)
 const lastOrganizeMessage = ref<string | null>(null)
+
+// Audio verification (ADR-0001): trigger the batch walk and surface progress
+const isVerifying = ref(false)
+const verificationMessage = ref<string | null>(null)
+const verifyProcessed = ref(0)
+const verifyTotal = ref(0)
+let verifyJobId: string | null = null
+
+const verifyProgressLabel = computed(() =>
+  verifyTotal.value > 0 ? `Verifying ${verifyProcessed.value}/${verifyTotal.value}…` : 'Verifying…',
+)
+
+const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
+  if (verifyJobId && payload.jobId !== verifyJobId) return
+  isVerifying.value = true
+  verifyProcessed.value = payload.processed
+  verifyTotal.value = payload.total
+})
+
+const unsubVerifyComplete = signalRService.onVerificationComplete((payload) => {
+  if (verifyJobId && payload.jobId !== verifyJobId) return
+  isVerifying.value = false
+  verifyJobId = null
+  if (payload.error) {
+    verificationMessage.value = null
+    toast.error('Library verification failed', payload.error)
+    return
+  }
+  const summary =
+    `Checked ${payload.processed} book${payload.processed === 1 ? '' : 's'}: ` +
+    `${payload.verified} verified, ${payload.flagged} flagged for review` +
+    (payload.skipped > 0 ? `, ${payload.skipped} skipped` : '') +
+    (payload.failed > 0 ? `, ${payload.failed} failed` : '') +
+    '.'
+  verificationMessage.value = summary
+  if (payload.flagged > 0) {
+    toast.warning('Library verification complete', `${summary} Use the "Needs review" filter in the library to triage flagged books.`)
+  } else {
+    toast.success('Library verification complete', summary)
+  }
+})
+
+onUnmounted(() => {
+  unsubVerifyProgress()
+  unsubVerifyComplete()
+})
+
+async function runVerification() {
+  if (isVerifying.value) return
+  isVerifying.value = true
+  verifyProcessed.value = 0
+  verifyTotal.value = 0
+  verificationMessage.value = null
+  try {
+    const result = await apiService.startLibraryVerification()
+    verifyJobId = result.jobId
+  } catch (err) {
+    isVerifying.value = false
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not start library verification', message)
+  }
+}
 
 async function runSweep() {
   if (isRunning.value) return

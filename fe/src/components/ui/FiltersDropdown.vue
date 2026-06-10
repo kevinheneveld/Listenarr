@@ -104,6 +104,7 @@ const builtInOptions = [
   { value: 'missing', label: 'Missing' },
   { value: 'recent', label: 'Recently Added' },
   { value: 'recently-imported', label: 'Recently Imported' },
+  { value: 'needs-review', label: 'Needs Review (verification)' },
 ]
 
 const customFilters = computed(() => props.customFilters || [])

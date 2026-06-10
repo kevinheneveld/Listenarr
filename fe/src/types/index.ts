@@ -689,6 +689,33 @@ export interface AudiobookExternalIdentifierInput {
 
 export type AudiobookStatus = 'downloading' | 'no-file' | 'quality-mismatch' | 'quality-match'
 
+// Audio-based identity verification (ADR-0001). Manual states are sticky:
+// agent passes never overwrite manuallyVerified/rejected.
+export type VerificationStatus =
+  | 'unverified'
+  | 'agentVerified'
+  | 'agentFlagged'
+  | 'manuallyVerified'
+  | 'rejected'
+
+export type VerificationOutcome = 'match' | 'mismatch' | 'uncertain'
+
+// Per-field verdict detail persisted by the agent pass (audiobook.verificationDetailJson).
+export interface VerificationFieldMatch {
+  score: number
+  matchedText?: string | null
+}
+
+export interface VerificationDetail {
+  outcome: VerificationOutcome
+  confidence: number
+  method: string
+  titleMatch?: VerificationFieldMatch | null
+  authorMatch?: VerificationFieldMatch | null
+  narratorMatch?: VerificationFieldMatch | null
+  publisherMatch?: VerificationFieldMatch | null
+}
+
 export interface Audiobook {
   id: number
   title: string
@@ -750,6 +777,14 @@ export interface Audiobook {
   // placeholder). Lets filters like "missing cover art" distinguish a real
   // image from the placeholder URL.
   coverArtMissing?: boolean
+  // Audio-based identity verification (ADR-0001)
+  verificationStatus?: VerificationStatus
+  verificationConfidence?: number | null
+  verifiedAt?: string | null
+  verifiedBy?: string | null
+  verificationMethod?: string | null
+  verificationTranscript?: string | null
+  verificationDetailJson?: string | null
 }
 
 export interface History {

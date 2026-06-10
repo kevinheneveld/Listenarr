@@ -854,6 +854,14 @@
                 <component :is="audiobook.monitored ? PhEye : PhEyeSlash" />
                 {{ audiobook.monitored ? 'Monitored' : 'Unmonitored' }}
               </div>
+              <div
+                v-if="audiobook.verificationStatus && audiobook.verificationStatus !== 'unverified'"
+                class="verification-badge"
+                :class="verificationClass(audiobook.verificationStatus)"
+                :title="`Audio verification: ${verificationLabel(audiobook.verificationStatus)}`"
+              >
+                {{ verificationLabel(audiobook.verificationStatus) }}
+              </div>
             </div>
             <div class="list-actions">
               <button
@@ -1050,6 +1058,7 @@ import type { Audiobook, AudiobookStatus, QualityProfile } from '@/types'
 import { evaluateRules } from '@/utils/customFilterEvaluator'
 import type { RuleLike } from '@/utils/customFilterEvaluator'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
+import { verificationClass, verificationLabel } from '@/utils/verificationStatus'
 import { safeText, normalizeCollectionText, isNonPersonNarrator } from '@/utils/textUtils'
 import { formatSeriesMemberships } from '@/utils/seriesUtils'
 import { getPlaceholderUrl } from '@/utils/placeholder'
@@ -1153,6 +1162,7 @@ const BUILTIN_FILTER_IDS = new Set([
   'missing',
   'recent',
   'recently-imported',
+  'needs-review',
 ])
 // True when the current route is a dashboard drill-down (missing/author/narrator/
 // genre). Read straight off route.query so it's correct regardless of watcher
@@ -1465,6 +1475,10 @@ const filteredAndSortedAudiobooks = computed(() => {
         const s = getAudiobookStatus(b)
         return s === 'quality-match' || s === 'quality-mismatch'
       })
+    } else if (sid === 'needs-review') {
+      // Audio verification (ADR-0001): books the agent flagged (mismatch or
+      // uncertain) that a human hasn't ruled on yet.
+      filtered = filtered.filter((b) => b.verificationStatus === 'agentFlagged')
     } else {
       // custom filter (supports grouping/parentheses)
       const cf = customFilters.value.find((x) => x.id === sid)
@@ -4586,6 +4600,41 @@ defineExpose({
   background-color: rgba(46, 204, 113, 0.1);
   border-color: rgba(46, 204, 113, 0.18);
   color: #2ecc71;
+}
+
+/* Audio verification badge (ADR-0001) */
+.verification-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  margin-top: 0.5rem;
+  margin-left: 0.25rem;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #cfcfcf;
+}
+
+.verification-badge.verification-ok {
+  background-color: rgba(46, 204, 113, 0.1);
+  border-color: rgba(46, 204, 113, 0.18);
+  color: #2ecc71;
+}
+
+.verification-badge.verification-flagged {
+  background-color: rgba(243, 156, 18, 0.1);
+  border-color: rgba(243, 156, 18, 0.18);
+  color: #f39c12;
+}
+
+.verification-badge.verification-rejected {
+  background-color: rgba(231, 76, 60, 0.12);
+  border-color: rgba(231, 76, 60, 0.18);
+  color: #e74c3c;
 }
 
 .quality-profile-badge i {

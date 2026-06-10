@@ -149,6 +149,27 @@ type ScanJobCallback = (job: {
   error?: string
 }) => void
 
+// Audio verification (ADR-0001) progress events from the settings hub
+export interface VerificationProgressPayload {
+  jobId: string
+  processed: number
+  total: number
+  audiobookId: number
+  title?: string | null
+  outcome: string
+}
+
+export interface VerificationCompletePayload {
+  jobId: string
+  processed: number
+  total: number
+  verified: number
+  flagged: number
+  skipped: number
+  failed: number
+  error?: string | null
+}
+
 class SignalRService {
   constructor() {
     // Reconnect when browser auth state changes so the hub handshake can pick
@@ -230,6 +251,10 @@ class SignalRService {
   private unmatchedScanCompleteCallbacks: Set<
     (payload: { jobId: string; count: number; error?: string }) => void
   > = new Set()
+  private verificationProgressCallbacks: Set<(payload: VerificationProgressPayload) => void> =
+    new Set()
+  private verificationCompleteCallbacks: Set<(payload: VerificationCompletePayload) => void> =
+    new Set()
   private pingInterval: number | null = null
   private visibilityListener: (() => void) | null = null
   // Connection state listeners (for UI to subscribe to connect/disconnect events)
@@ -508,6 +533,20 @@ class SignalRService {
         if (args && args[0]) {
           const payload = args[0] as { jobId: string; count: number; error?: string }
           this.unmatchedScanCompleteCallbacks.forEach((cb) => cb(payload))
+        }
+        break
+
+      case 'VerificationProgress':
+        if (args && args[0]) {
+          const payload = args[0] as VerificationProgressPayload
+          this.verificationProgressCallbacks.forEach((cb) => cb(payload))
+        }
+        break
+
+      case 'VerificationComplete':
+        if (args && args[0]) {
+          const payload = args[0] as VerificationCompletePayload
+          this.verificationCompleteCallbacks.forEach((cb) => cb(payload))
         }
         break
     }
@@ -816,6 +855,21 @@ class SignalRService {
     this.unmatchedScanCompleteCallbacks.add(callback)
     return () => {
       this.unmatchedScanCompleteCallbacks.delete(callback)
+    }
+  }
+
+  // Subscribe to audio-verification progress (per book) and completion
+  onVerificationProgress(callback: (payload: VerificationProgressPayload) => void): () => void {
+    this.verificationProgressCallbacks.add(callback)
+    return () => {
+      this.verificationProgressCallbacks.delete(callback)
+    }
+  }
+
+  onVerificationComplete(callback: (payload: VerificationCompletePayload) => void): () => void {
+    this.verificationCompleteCallbacks.add(callback)
+    return () => {
+      this.verificationCompleteCallbacks.delete(callback)
     }
   }
 

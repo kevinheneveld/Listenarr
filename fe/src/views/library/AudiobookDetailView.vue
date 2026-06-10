@@ -162,6 +162,14 @@
               <PhTag />
               {{ audiobook.edition }}
             </Pill>
+            <Pill
+              v-if="audiobook.verificationStatus && audiobook.verificationStatus !== 'unverified'"
+              :variant="verificationPillVariant"
+              :title="verificationTooltip"
+            >
+              <component :is="verificationPillIcon" />
+              {{ verificationLabel(audiobook.verificationStatus) }}
+            </Pill>
           </div>
 
           <div class="description" v-if="audiobook.description">
@@ -818,7 +826,12 @@ import {
   PhCircle,
   PhDiscordLogo,
   PhPlay,
+  PhShieldCheck,
+  PhShieldWarning,
+  PhShieldSlash,
+  PhEarSlash,
 } from '@phosphor-icons/vue'
+import { verificationLabel, parseVerificationDetail } from '@/utils/verificationStatus'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 
 const route = useRoute()
@@ -870,6 +883,124 @@ const mobileTabOptions = computed(() => [
   { value: 'files', label: 'Files', icon: PhFile },
   { value: 'history', label: 'History', icon: PhClockCounterClockwise },
 ])
+
+// --- Audio verification (ADR-0001) ---
+const verifyingAudio = ref(false)
+let verifyAudioJobId: string | null = null
+
+const verificationPillVariant = computed(() => {
+  switch (audiobook.value?.verificationStatus) {
+    case 'agentVerified':
+    case 'manuallyVerified':
+      return 'success'
+    case 'agentFlagged':
+      return 'warning'
+    case 'rejected':
+      return 'error'
+    default:
+      return 'default'
+  }
+})
+
+const verificationPillIcon = computed(() => {
+  switch (audiobook.value?.verificationStatus) {
+    case 'agentVerified':
+    case 'manuallyVerified':
+      return PhShieldCheck
+    case 'agentFlagged':
+      return PhShieldWarning
+    case 'rejected':
+      return PhShieldSlash
+    default:
+      return PhEarSlash
+  }
+})
+
+const verificationTooltip = computed(() => {
+  const book = audiobook.value
+  if (!book) return ''
+  const parts: string[] = []
+  if (book.verifiedBy) parts.push(`By ${book.verifiedBy}`)
+  if (book.verifiedAt) parts.push(`on ${new Date(book.verifiedAt).toLocaleString()}`)
+  if (typeof book.verificationConfidence === 'number') {
+    parts.push(`confidence ${(book.verificationConfidence * 100).toFixed(0)}%`)
+  }
+  const detail = parseVerificationDetail(book)
+  if (detail) {
+    parts.push(`outcome: ${detail.outcome}`)
+    const fields: string[] = []
+    if (detail.titleMatch) fields.push(`title ${(detail.titleMatch.score * 100).toFixed(0)}%`)
+    if (detail.authorMatch) fields.push(`author ${(detail.authorMatch.score * 100).toFixed(0)}%`)
+    if (detail.narratorMatch) fields.push(`narrator ${(detail.narratorMatch.score * 100).toFixed(0)}%`)
+    if (fields.length) parts.push(fields.join(', '))
+  }
+  return parts.join(' · ')
+})
+
+async function verifyAudio() {
+  const book = audiobook.value
+  if (!book || verifyingAudio.value) return
+  const toast = useToast()
+  verifyingAudio.value = true
+  try {
+    const result = await apiService.verifyAudiobook(book.id)
+    verifyAudioJobId = result.jobId
+    toast.info('Audio verification started', 'Transcribing the opening and closing of this book…')
+  } catch (err) {
+    verifyingAudio.value = false
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not start audio verification', message)
+  }
+}
+
+async function setManualVerification(action: 'verify' | 'reject' | 'clear') {
+  const book = audiobook.value
+  if (!book) return
+  const toast = useToast()
+  try {
+    const result = await apiService.setManualVerification(book.id, action)
+    audiobook.value = {
+      ...book,
+      verificationStatus: result.verificationStatus,
+      verificationConfidence: result.verificationConfidence,
+      verifiedAt: result.verifiedAt,
+      verifiedBy: result.verifiedBy,
+      verificationMethod: result.verificationMethod,
+    }
+    if (action === 'clear') {
+      toast.success('Verification cleared', 'This book is eligible for the next agent pass again.')
+    } else {
+      toast.success(
+        action === 'verify' ? 'Marked as verified' : 'Marked as rejected',
+        'Manual judgements are sticky — agent passes will never overwrite them.',
+      )
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not update verification', message)
+  }
+}
+
+const verificationCompleteUnsub = signalRService.onVerificationComplete((payload) => {
+  if (!verifyAudioJobId || payload.jobId !== verifyAudioJobId) return
+  verifyAudioJobId = null
+  verifyingAudio.value = false
+  const toast = useToast()
+  void refresh()
+  if (payload.error) {
+    toast.error('Audio verification failed', payload.error)
+  } else if (payload.flagged > 0) {
+    toast.warning('Audio verification complete', 'This book was flagged — check the verification badge for which field diverged.')
+  } else if (payload.verified > 0) {
+    toast.success('Audio verification complete', 'The spoken credits match the stored metadata.')
+  } else {
+    toast.info('Audio verification complete', 'No verdict was recorded (book may have been skipped).')
+  }
+})
+
+onUnmounted(() => {
+  verificationCompleteUnsub()
+})
 
 const topActions = computed<DetailTopAction[]>(() => [
   {
@@ -952,6 +1083,55 @@ const topActions = computed<DetailTopAction[]>(() => [
     },
   },
   {
+    key: 'verify-audio',
+    label: verifyingAudio.value ? 'Verifying Audio...' : 'Verify Audio',
+    title: 'Transcribe the audio and check it matches this metadata',
+    ariaLabel: 'Verify Audio',
+    icon: verifyingAudio.value ? PhSpinner : PhShieldCheck,
+    iconClass: verifyingAudio.value ? 'ph-spin' : undefined,
+    disabled:
+      verifyingAudio.value ||
+      (!audiobook.value?.files?.length && !audiobook.value?.filePath) ||
+      audiobook.value?.verificationStatus === 'manuallyVerified' ||
+      audiobook.value?.verificationStatus === 'rejected',
+    desktopGroup: 'secondary',
+    onClick: () => {
+      void verifyAudio()
+    },
+  },
+  {
+    key: 'manual-verify',
+    label:
+      audiobook.value?.verificationStatus === 'manuallyVerified'
+        ? 'Clear Manual Verification'
+        : 'Mark Audio Verified',
+    title: 'Manually confirm this audio matches the metadata (sticky)',
+    ariaLabel: 'Mark Audio Verified',
+    icon: PhShieldCheck,
+    desktopGroup: 'secondary',
+    onClick: () => {
+      void setManualVerification(
+        audiobook.value?.verificationStatus === 'manuallyVerified' ? 'clear' : 'verify',
+      )
+    },
+  },
+  {
+    key: 'manual-reject',
+    label:
+      audiobook.value?.verificationStatus === 'rejected'
+        ? 'Clear Rejected Mark'
+        : 'Mark Wrong Content',
+    title: 'Manually mark this audio as NOT the listed book (sticky)',
+    ariaLabel: 'Mark Wrong Content',
+    icon: PhShieldSlash,
+    desktopGroup: 'secondary',
+    onClick: () => {
+      void setManualVerification(
+        audiobook.value?.verificationStatus === 'rejected' ? 'clear' : 'reject',
+      )
+    },
+  },
+  {
     key: 'delete',
     label: 'Delete',
     title: 'Delete',
@@ -996,6 +1176,9 @@ type DetailTopAction = {
     | 'edit'
     | 'rescan-metadata'
     | 'organize'
+    | 'verify-audio'
+    | 'manual-verify'
+    | 'manual-reject'
     | 'delete'
   label: string
   title: string
