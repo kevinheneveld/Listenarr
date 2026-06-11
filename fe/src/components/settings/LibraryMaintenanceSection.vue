@@ -205,7 +205,7 @@ const verifyProgressLabel = computed(() =>
 // only reflects jobs the user started here, so background import jobs are
 // ignored (their outcome shows up as the book's verification badge instead).
 const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
-  if (payload.trigger === 'import') return
+  if (payload.trigger && payload.trigger !== 'manual') return
   if (verifyJobId.value && payload.jobId !== verifyJobId.value) return
   isVerifying.value = true
   verifyProcessed.value = payload.processed
@@ -213,7 +213,7 @@ const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
 })
 
 const unsubVerifyComplete = signalRService.onVerificationComplete((payload) => {
-  if (payload.trigger === 'import') return
+  if (payload.trigger && payload.trigger !== 'manual') return
   if (verifyJobId.value && payload.jobId !== verifyJobId.value) return
   isVerifying.value = false
   isStoppingVerification.value = false

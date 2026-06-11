@@ -392,18 +392,29 @@
                   <span class="verification-field-claim">"{{ heardCredits.publisher }}"</span>
                 </div>
               </div>
-              <button
-                v-if="
-                  audiobook.verificationStatus === 'agentFlagged' &&
-                  (heardCredits.title || heardCredits.author)
-                "
-                type="button"
-                class="show-more-btn relabel-btn"
-                title="Search the catalog for the book the audio actually names, and relabel this record to it"
-                @click="showRelabelModal = true"
-              >
-                Find correct match…
-              </button>
+              <div class="verification-remedies">
+                <button
+                  v-if="
+                    audiobook.verificationStatus === 'agentFlagged' &&
+                    (heardCredits.title || heardCredits.author)
+                  "
+                  type="button"
+                  class="show-more-btn relabel-btn"
+                  title="Search the catalog for the book the audio actually names, and relabel this record to it"
+                  @click="showRelabelModal = true"
+                >
+                  Find correct match…
+                </button>
+                <button
+                  v-if="audiobook.verificationStatus === 'agentFlagged' && audiobook.files?.length"
+                  type="button"
+                  class="show-more-btn relabel-btn"
+                  title="Move these files to the existing library record they actually belong to"
+                  @click="showTransferModal = true"
+                >
+                  Move files to another book…
+                </button>
+              </div>
             </div>
             <div class="detail-row detail-row-stacked" v-if="audiobook.verificationTranscript">
               <span class="label">
@@ -842,6 +853,17 @@
     @applied="onRelabelApplied"
   />
 
+  <!-- Verification "move files to the right book" flow: transfer files to an
+       EXISTING library record (often a wanted one), search seeded with what
+       the spoken credits claim. -->
+  <TransferFilesModal
+    :visible="showTransferModal"
+    :audiobook="audiobook"
+    :initialQuery="heardCredits?.title || ''"
+    @close="showTransferModal = false"
+    @done="onTransferDone"
+  />
+
   <RenameFileModal
     :visible="showRenameFileModal"
     :audiobook-id="audiobook?.id ?? null"
@@ -941,6 +963,7 @@ import {
 import { verificationLabel, verificationClass, parseVerificationDetail } from '@/utils/verificationStatus'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
+import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1014,6 +1037,14 @@ const relabelSeed = computed(() =>
 function onRelabelApplied() {
   showRelabelModal.value = false
   // The relabel rewrote metadata (title/ASIN/etc.) — reload the whole record.
+  void loadAudiobook()
+}
+
+const showTransferModal = ref(false)
+
+function onTransferDone() {
+  showTransferModal.value = false
+  // Files left this record (and its verdict may have been reset) — reload.
   void loadAudiobook()
 }
 
@@ -2971,6 +3002,12 @@ function formatDate(dateString?: string): string {
 .relabel-btn {
   margin-top: 0.6rem;
   align-self: flex-start;
+}
+
+.verification-remedies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .transcript-toggle {

@@ -38,6 +38,7 @@ using Listenarr.Application.Metadata;
 using Listenarr.Application.Search;
 using Microsoft.AspNetCore.SignalR;
 using Listenarr.Application.Audiobooks;
+using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Api.Attributes;
 using Listenarr.Api.Dtos;
 using Listenarr.Infrastructure.FileSystem;
@@ -1764,6 +1765,191 @@ namespace Listenarr.Api.Controllers
                 _logger.LogError(ex, "not-audiobook: failed for audiobook {AudiobookId}", id);
                 return StatusCode(500, new { message = "Failed to mark as not an audiobook" });
             }
+        }
+
+        public record TransferFilesRequest(int TargetAudiobookId, List<int>? FileIds);
+
+        /// <summary>
+        /// Move audio files from this audiobook to another library record — the
+        /// remediation for "these files are actually a different book I track"
+        /// (e.g. verification heard Warbreaker on an Arcanum Unbounded record and
+        /// the library already has a wanted Warbreaker entry). DB ownership is
+        /// reassigned always; the physical file is moved into the target's folder
+        /// best-effort (failures leave it in place with a warning — the Organize
+        /// tool can relocate it later). Null/empty <see cref="TransferFilesRequest.FileIds"/>
+        /// transfers every file. The target is re-verified automatically.
+        /// </summary>
+        [HttpPost("{id}/files/transfer")]
+        public async Task<IActionResult> TransferFiles(int id, [FromBody] TransferFilesRequest request)
+        {
+            var ct = HttpContext.RequestAborted;
+            if (request == null) return BadRequest(new { message = "Request body required" });
+            if (request.TargetAudiobookId == id)
+            {
+                return BadRequest(new { message = "Target audiobook must be different from the source" });
+            }
+
+            var source = await _repo.GetByIdAsync(id);
+            if (source == null) return NotFound(new { message = "Source audiobook not found" });
+            var target = await _repo.GetByIdAsync(request.TargetAudiobookId);
+            if (target == null) return NotFound(new { message = "Target audiobook not found" });
+
+            var sourceFiles = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
+            var toMove = request.FileIds is { Count: > 0 }
+                ? sourceFiles.Where(f => request.FileIds.Contains(f.Id)).ToList()
+                : sourceFiles.ToList();
+            if (toMove.Count == 0)
+            {
+                return BadRequest(new { message = "No matching files to transfer" });
+            }
+            if (request.FileIds is { Count: > 0 } && toMove.Count != request.FileIds.Distinct().Count())
+            {
+                return BadRequest(new { message = "One or more file ids do not belong to this audiobook" });
+            }
+
+            var warnings = new List<string>();
+            var physicallyMoved = 0;
+
+            using var scope = _scopeFactory.CreateScope();
+            var fileMover = scope.ServiceProvider.GetRequiredService<IFileMover>();
+
+            foreach (var file in toMove)
+            {
+                // Physical relocation is best-effort: ownership (the DB row) is the
+                // core semantic, and a file left in the old folder is fixable via
+                // the Organize tool. A failed disk move must not abort the transfer.
+                var newPath = file.Path;
+                if (!string.IsNullOrWhiteSpace(target.BasePath) && !string.IsNullOrWhiteSpace(file.Path))
+                {
+                    try
+                    {
+                        var destination = Path.Join(target.BasePath, Path.GetFileName(file.Path));
+                        if (!System.IO.File.Exists(file.Path))
+                        {
+                            warnings.Add($"File missing on disk, reassigned in place: {Path.GetFileName(file.Path)}");
+                        }
+                        else if (string.Equals(Path.GetFullPath(destination), Path.GetFullPath(file.Path), StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Already where it belongs.
+                        }
+                        else if (System.IO.File.Exists(destination))
+                        {
+                            warnings.Add($"Target folder already has {Path.GetFileName(file.Path)} — file left in place");
+                        }
+                        else
+                        {
+                            Directory.CreateDirectory(target.BasePath);
+                            if (await fileMover.PerformActionOn(FileAction.Move, file.Path, destination))
+                            {
+                                newPath = destination;
+                                physicallyMoved++;
+                            }
+                            else
+                            {
+                                warnings.Add($"Could not move {Path.GetFileName(file.Path)} on disk — file left in place");
+                            }
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        warnings.Add($"Could not move {Path.GetFileName(file.Path)} on disk — file left in place");
+                        _logger.LogWarning(ex, "transfer-files: disk move failed for file {FileId} ({Path})", file.Id, file.Path);
+                    }
+                }
+
+                file.AudiobookId = target.Id;
+                file.Path = newPath;
+                await _audioFileRepository.UpdateAsync(file, ct);
+            }
+
+            // Source bookkeeping: when its audio is gone, the legacy single-file
+            // columns and any verification verdict describe content it no longer
+            // owns (same rationale as the not-audiobook reset).
+            if (toMove.Count == sourceFiles.Count)
+            {
+                source.FilePath = null;
+                source.FileSize = null;
+                source.VerificationStatus = VerificationStatus.Unverified;
+                source.VerificationConfidence = null;
+                source.VerifiedAt = null;
+                source.VerifiedBy = null;
+                source.VerificationMethod = null;
+                source.VerificationTranscript = null;
+                source.VerificationDetailJson = null;
+                await _repo.UpdateAsync(source);
+            }
+
+            // Target bookkeeping: its content set changed, so an agent verdict is
+            // stale; manual states stay sticky (a human ruling outranks this).
+            if (target.VerificationStatus.IsAgentWritable())
+            {
+                target.VerificationStatus = VerificationStatus.Unverified;
+                target.VerificationConfidence = null;
+                target.VerifiedAt = null;
+                target.VerifiedBy = null;
+                target.VerificationMethod = null;
+                await _repo.UpdateAsync(target);
+            }
+
+            try
+            {
+                await _historyRepository.AddAsync(new History
+                {
+                    AudiobookId = source.Id,
+                    AudiobookTitle = source.Title ?? "Unknown Title",
+                    EventType = "Files Transferred",
+                    Message = $"Moved {toMove.Count} file(s) to '{target.Title}' (id {target.Id}).",
+                    Source = "transfer-files",
+                    Timestamp = DateTime.UtcNow
+                });
+                await _historyRepository.AddAsync(new History
+                {
+                    AudiobookId = target.Id,
+                    AudiobookTitle = target.Title ?? "Unknown Title",
+                    EventType = "Files Received",
+                    Message = $"Received {toMove.Count} file(s) from '{source.Title}' (id {source.Id}).",
+                    Source = "transfer-files",
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "transfer-files: failed to record history (non-critical)");
+            }
+
+            // Re-verify the target against its new audio (best-effort; skipped when
+            // whisper isn't installed rather than queueing a job that can only fail).
+            string? verificationJobId = null;
+            try
+            {
+                var whisper = scope.ServiceProvider.GetRequiredService<IWhisperService>();
+                if (await whisper.IsAvailableAsync())
+                {
+                    var verificationQueue = scope.ServiceProvider.GetRequiredService<ILibraryVerificationQueueService>();
+                    var jobGuid = await verificationQueue.EnqueueAsync(
+                        new List<int> { target.Id }, VerificationTriggers.Transfer);
+                    verificationJobId = jobGuid.ToString();
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "transfer-files: failed to enqueue verification for audiobook {AudiobookId}", target.Id);
+            }
+
+            _logger.LogInformation(
+                "Transferred {Count} file(s) ({Physical} moved on disk) from audiobook {SourceId} to {TargetId}",
+                toMove.Count, physicallyMoved, source.Id, target.Id);
+
+            return Ok(new
+            {
+                message = $"Transferred {toMove.Count} file(s) to '{target.Title}'",
+                sourceId = source.Id,
+                targetId = target.Id,
+                transferred = toMove.Count,
+                physicallyMoved,
+                verificationJobId,
+                warnings
+            });
         }
 
         private sealed class DeleteFilesystemResult

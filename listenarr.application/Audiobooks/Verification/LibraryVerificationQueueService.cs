@@ -61,6 +61,8 @@ namespace Listenarr.Application.Audiobooks.Verification
     {
         public const string Manual = "manual";
         public const string Import = "import";
+        /// <summary>Auto-enqueued after files were transferred onto the book.</summary>
+        public const string Transfer = "transfer";
     }
 
     public interface ILibraryVerificationQueueService
