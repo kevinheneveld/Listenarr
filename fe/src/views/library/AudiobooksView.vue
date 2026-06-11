@@ -590,20 +590,33 @@
                   @load="markImageLoaded(getBookImageKey(audiobook))"
                   @error="handleLazyImageError(getBookImageKey(audiobook), $event)"
                 />
-                <!-- Persistent verification flag (ADR-0001): flagged/rejected books
-                     must be recognizable at a glance — especially under the
-                     "Needs Review" filter — not only via the hover overlay. -->
+                <!-- Persistent verification marker (ADR-0001): attention states
+                     (flagged/rejected) get a labeled chip; vetted states (agent or
+                     manual) get a compact icon-only shield so "has this been
+                     checked?" is answerable at a glance without hovering. The
+                     hover overlay carries the full label either way. -->
                 <div
-                  v-if="
-                    audiobook.verificationStatus === 'agentFlagged' ||
-                    audiobook.verificationStatus === 'rejected'
-                  "
+                  v-if="audiobook.verificationStatus && audiobook.verificationStatus !== 'unverified'"
                   class="verification-poster-flag"
                   :class="verificationClass(audiobook.verificationStatus)"
                   :title="`Audio verification: ${verificationLabel(audiobook.verificationStatus)}`"
                 >
-                  <PhWarningCircle />
-                  {{ verificationLabel(audiobook.verificationStatus) }}
+                  <component
+                    :is="
+                      audiobook.verificationStatus === 'agentFlagged' ||
+                      audiobook.verificationStatus === 'rejected'
+                        ? PhWarningCircle
+                        : PhShieldCheck
+                    "
+                  />
+                  <template
+                    v-if="
+                      audiobook.verificationStatus === 'agentFlagged' ||
+                      audiobook.verificationStatus === 'rejected'
+                    "
+                  >
+                    {{ verificationLabel(audiobook.verificationStatus) }}
+                  </template>
                 </div>
                 <div class="status-overlay">
                   <div v-if="!showItemDetails" class="audiobook-title">
@@ -1047,6 +1060,7 @@ import {
   PhEye,
   PhEyeSlash,
   PhSpinner,
+  PhShieldCheck,
   PhWarningCircle,
   PhInfo,
   PhCaretDown,
@@ -4689,6 +4703,16 @@ defineExpose({
 .verification-poster-flag.verification-rejected {
   background-color: rgba(231, 76, 60, 0.92);
   color: #fff;
+}
+
+/* Vetted (agent- or manually-verified): compact icon-only shield — present but
+   unobtrusive, since most of a healthy library will eventually carry it. */
+.verification-poster-flag.verification-ok {
+  background-color: rgba(0, 0, 0, 0.55);
+  color: #2ecc71;
+  padding: 0.25rem;
+  font-size: 13px;
+  line-height: 0;
 }
 
 .quality-profile-badge i {
