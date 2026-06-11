@@ -159,6 +159,27 @@ describe('LibraryMaintenanceSection', () => {
     expect((checkbox.element as HTMLInputElement).checked).toBe(true)
   })
 
+  it('emits update:settings when the verify-on-import checkbox is toggled', async () => {
+    const { default: LibraryMaintenanceSection } = await import(
+      '@/components/settings/LibraryMaintenanceSection.vue'
+    )
+    const wrapper = mount(LibraryMaintenanceSection, {
+      props: { settings: { verificationOnImport: true } },
+    })
+
+    // Second checkbox in the verify row: low-CPU-priority first, verify-on-import second.
+    const checkboxes = wrapper.findAll('input[type="checkbox"]')
+    expect(checkboxes.length).toBe(2)
+    const onImport = checkboxes[1]
+    expect((onImport.element as HTMLInputElement).checked).toBe(true)
+
+    await onImport.setValue(false)
+
+    const emitted = wrapper.emitted('update:settings')
+    expect(emitted).toBeTruthy()
+    expect(emitted![emitted!.length - 1][0]).toMatchObject({ verificationOnImport: false })
+  })
+
   it('shows an error toast when verification fails to start', async () => {
     startLibraryVerification.mockRejectedValue(new Error('whisper unavailable'))
     const { default: LibraryMaintenanceSection } = await import(

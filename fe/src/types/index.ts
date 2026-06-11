@@ -391,6 +391,9 @@ export interface ApplicationSettings {
   // Audio verification (ADR-0001): run whisper/ffmpeg verification subprocesses at
   // the lowest OS scheduling priority so library walks yield CPU to other work
   verificationLowCpuPriority?: boolean
+  // Audio verification (ADR-0001): auto-verify a book right after a successful
+  // download import
+  verificationOnImport?: boolean
   // Optional admin credentials used when saving settings to create/update an initial admin user
   adminUsername?: string
   adminPassword?: string

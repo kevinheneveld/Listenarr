@@ -413,7 +413,9 @@ else
 // Register the queue singleton outside the hosted-services guard so controllers
 // (e.g. RootFoldersController) can resolve it even when hosted services are disabled (tests).
 builder.Services.AddSingleton<IUnmatchedScanQueueService, UnmatchedScanQueueService>();
-builder.Services.AddSingleton<Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService, Listenarr.Application.Audiobooks.Verification.LibraryVerificationQueueService>();
+// The verification queue moved into AddListenarrAppServices: the download import
+// processor enqueues verify-on-import jobs, so the queue must exist wherever the
+// app services do (including the test host).
 if (!disableHostedServices)
 {
     builder.Services.AddListenarrHostedServices(builder.Configuration);

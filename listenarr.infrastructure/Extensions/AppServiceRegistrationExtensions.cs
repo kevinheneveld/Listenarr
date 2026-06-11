@@ -79,6 +79,10 @@ namespace Listenarr.Infrastructure.Extensions
             services.AddScoped<IWhisperService, WhisperService>();
             services.AddScoped<IAudioSampleExtractor, AudioSampleExtractor>();
             services.AddScoped<IIdentityVerifier, DeterministicIdentityVerifier>();
+            // Singleton: in-memory channel feeding LibraryVerificationBackgroundService.
+            // Lives here (not Program.cs) so the download import processor can enqueue
+            // verify-on-import jobs in any host, including tests.
+            services.AddSingleton<ILibraryVerificationQueueService, LibraryVerificationQueueService>();
             // Service to accept client-pushed download updates and maintain recent-push cache
             services.AddSingleton<IDownloadPushService, DownloadPushService>();
             services.AddScoped<IAsinLookupService, AsinLookupService>();

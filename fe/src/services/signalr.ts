@@ -149,9 +149,12 @@ type ScanJobCallback = (job: {
   error?: string
 }) => void
 
-// Audio verification (ADR-0001) progress events from the settings hub
+// Audio verification (ADR-0001) progress events from the settings hub.
+// trigger distinguishes user-started jobs ('manual') from auto-enqueued
+// verify-on-import jobs ('import') so UIs can ignore background work.
 export interface VerificationProgressPayload {
   jobId: string
+  trigger?: string
   processed: number
   total: number
   audiobookId: number
@@ -161,6 +164,7 @@ export interface VerificationProgressPayload {
 
 export interface VerificationCompletePayload {
   jobId: string
+  trigger?: string
   processed: number
   total: number
   verified: number

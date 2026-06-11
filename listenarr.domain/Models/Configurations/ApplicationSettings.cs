@@ -119,6 +119,11 @@ namespace Listenarr.Domain.Models.Configurations
         // wants it, instead of competing at normal priority for hours.
         public bool VerificationLowCpuPriority { get; set; } = true;
 
+        // Automatically verify a book's audio right after a successful download
+        // import, so a wrong grab is flagged while it's fresh. Best-effort and
+        // skipped when whisper.cpp isn't installed.
+        public bool VerificationOnImport { get; set; } = true;
+
         // Failed download handling settings
         public bool FailedDownloadHandlingEnabled { get; set; } = true;
         public bool FailedDownloadAutoSearch { get; set; } = false;

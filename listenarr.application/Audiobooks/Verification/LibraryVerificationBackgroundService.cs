@@ -224,6 +224,7 @@ namespace Listenarr.Application.Audiobooks.Verification
             await _hubContext.Clients.All.SendAsync("VerificationProgress", new
             {
                 jobId = job.Id.ToString(),
+                trigger = job.Trigger,
                 processed = job.Processed + 1, // current book counts as done for display
                 total = job.Total,
                 audiobookId = audiobook.Id,
@@ -237,6 +238,7 @@ namespace Listenarr.Application.Audiobooks.Verification
             await _hubContext.Clients.All.SendAsync("VerificationComplete", new
             {
                 jobId = job.Id.ToString(),
+                trigger = job.Trigger,
                 processed = job.Processed,
                 total = job.Total,
                 verified = job.Verified,

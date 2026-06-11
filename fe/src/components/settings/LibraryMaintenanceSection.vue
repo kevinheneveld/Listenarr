@@ -88,6 +88,13 @@
             title="Run at low CPU priority"
             description="Verification subprocesses (speech-to-text, audio clipping) yield CPU to anything else on the host. Full speed when the machine is idle; only disable if verification is the only thing running."
           />
+          <CheckboxCard
+            class="maintenance-option"
+            :modelValue="settings?.verificationOnImport ?? true"
+            @update:modelValue="updateVerifyOnImport"
+            title="Verify new imports automatically"
+            description="Run verification on each book right after its download imports, so a wrong grab is flagged immediately instead of waiting for the next manual library pass."
+          />
         </div>
         <button
           type="button"
@@ -160,6 +167,10 @@ function updateLowCpuPriority(value: boolean) {
   emit('update:settings', { ...(props.settings || {}), verificationLowCpuPriority: value })
 }
 
+function updateVerifyOnImport(value: boolean) {
+  emit('update:settings', { ...(props.settings || {}), verificationOnImport: value })
+}
+
 const toast = useToast()
 const isRunning = ref(false)
 const showDuplicatesModal = ref(false)
@@ -178,7 +189,11 @@ const verifyProgressLabel = computed(() =>
   verifyTotal.value > 0 ? `Verifying ${verifyProcessed.value}/${verifyTotal.value}…` : 'Verifying…',
 )
 
+// Auto-enqueued verify-on-import jobs report over the same hub; this section
+// only reflects jobs the user started here, so background import jobs are
+// ignored (their outcome shows up as the book's verification badge instead).
 const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
+  if (payload.trigger === 'import') return
   if (verifyJobId && payload.jobId !== verifyJobId) return
   isVerifying.value = true
   verifyProcessed.value = payload.processed
@@ -186,6 +201,7 @@ const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
 })
 
 const unsubVerifyComplete = signalRService.onVerificationComplete((payload) => {
+  if (payload.trigger === 'import') return
   if (verifyJobId && payload.jobId !== verifyJobId) return
   isVerifying.value = false
   verifyJobId = null

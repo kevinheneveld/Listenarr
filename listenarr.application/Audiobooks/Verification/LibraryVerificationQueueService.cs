@@ -31,6 +31,13 @@ namespace Listenarr.Application.Audiobooks.Verification
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public List<int>? AudiobookIds { get; set; }
+        /// <summary>
+        /// What started this job: "manual" (user-triggered batch/per-book) or
+        /// "import" (auto-enqueued after a successful download import). Carried
+        /// on the SignalR payloads so the FE can ignore background import jobs
+        /// it didn't start.
+        /// </summary>
+        public string Trigger { get; set; } = VerificationTriggers.Manual;
         public DateTime EnqueuedAt { get; set; } = DateTime.UtcNow;
         public DateTime? CompletedAt { get; set; }
         public string Status { get; set; } = "Queued";
@@ -43,10 +50,17 @@ namespace Listenarr.Application.Audiobooks.Verification
         public int Failed { get; set; }
     }
 
+    /// <summary>Well-known values for <see cref="VerificationJob.Trigger"/>.</summary>
+    public static class VerificationTriggers
+    {
+        public const string Manual = "manual";
+        public const string Import = "import";
+    }
+
     public interface ILibraryVerificationQueueService
     {
         /// <summary>Enqueue a verification pass; null ids = whole library.</summary>
-        Task<Guid> EnqueueAsync(List<int>? audiobookIds);
+        Task<Guid> EnqueueAsync(List<int>? audiobookIds, string trigger = VerificationTriggers.Manual);
         bool TryGetJob(Guid id, out VerificationJob? job);
         ChannelReader<VerificationJob> Reader { get; }
     }
@@ -66,7 +80,7 @@ namespace Listenarr.Application.Audiobooks.Verification
 
         public ChannelReader<VerificationJob> Reader => _channel.Reader;
 
-        public async Task<Guid> EnqueueAsync(List<int>? audiobookIds)
+        public async Task<Guid> EnqueueAsync(List<int>? audiobookIds, string trigger = VerificationTriggers.Manual)
         {
             PurgeExpired();
 
@@ -83,11 +97,11 @@ namespace Listenarr.Application.Audiobooks.Verification
                 }
             }
 
-            var job = new VerificationJob { AudiobookIds = audiobookIds };
+            var job = new VerificationJob { AudiobookIds = audiobookIds, Trigger = trigger };
             _jobs[job.Id] = job;
             _logger.LogInformation(
-                "Enqueueing verification job {JobId} ({Scope})",
-                job.Id, audiobookIds == null ? "whole library" : $"{audiobookIds.Count} book(s)");
+                "Enqueueing verification job {JobId} ({Scope}, trigger {Trigger})",
+                job.Id, audiobookIds == null ? "whole library" : $"{audiobookIds.Count} book(s)", trigger);
             await _channel.Writer.WriteAsync(job);
             return job.Id;
         }

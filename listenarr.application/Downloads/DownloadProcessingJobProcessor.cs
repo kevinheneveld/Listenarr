@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Application.Interfaces;
 using Listenarr.Domain.Models.Exceptions;
 using Microsoft.Extensions.Logging;
@@ -416,6 +417,36 @@ namespace Listenarr.Application.Downloads
             // warnings from AudioFileService.
             var jobId = await scanQueueService.EnqueueScanAsync(audiobook);
             job.AddLogEntry($"Enqueued scan job {jobId} for audiobook {audiobook.Id}");
+
+            // Auto-verify the freshly imported audio (ADR-0001) when enabled, so a
+            // wrong grab gets flagged right away instead of waiting for the next
+            // manual library walk. Best-effort: verification must never disrupt the
+            // import control flow, and it's skipped entirely when whisper.cpp isn't
+            // installed (no point queueing jobs that can only fail).
+            try
+            {
+                var importSettings = await configurationService.GetApplicationSettingsAsync();
+                if (importSettings?.VerificationOnImport ?? true)
+                {
+                    var whisper = scope.ServiceProvider.GetRequiredService<IWhisperService>();
+                    if (await whisper.IsAvailableAsync())
+                    {
+                        var verificationQueue = scope.ServiceProvider.GetRequiredService<ILibraryVerificationQueueService>();
+                        var verificationJobId = await verificationQueue.EnqueueAsync(
+                            new List<int> { audiobook.Id }, VerificationTriggers.Import);
+                        job.AddLogEntry($"Enqueued verification job {verificationJobId} for audiobook {audiobook.Id}");
+                    }
+                    else
+                    {
+                        logger.LogDebug(
+                            "Skipping verify-on-import for audiobook {AudiobookId}: whisper.cpp unavailable", audiobook.Id);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogWarning(ex, "Failed to enqueue verify-on-import for audiobook {AudiobookId}", audiobook.Id);
+            }
 
             await downloadProcessingJobService.UpdateJobAsync(job.MarkAsCompleted());
         }
