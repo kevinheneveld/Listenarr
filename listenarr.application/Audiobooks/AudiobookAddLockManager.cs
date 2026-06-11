@@ -59,13 +59,16 @@ namespace Listenarr.Application.Audiobooks
         /// never call this — long-running entries are bounded by the number of
         /// distinct ASINs the server has ever processed and the
         /// <see cref="SemaphoreSlim"/> footprint is negligible.
+        ///
+        /// Deliberately does NOT dispose the evicted semaphores: this static
+        /// state is shared across parallel xUnit test classes, and disposing a
+        /// semaphore another class's in-flight add still holds made its
+        /// release throw ObjectDisposedException (intermittent suite failures).
+        /// An undisposed SemaphoreSlim holds no unmanaged resources, so letting
+        /// the orphans be garbage-collected is free.
         /// </summary>
         internal static void ResetForTesting()
         {
-            foreach (var kv in _locks)
-            {
-                kv.Value.Dispose();
-            }
             _locks.Clear();
         }
 
@@ -76,7 +79,18 @@ namespace Listenarr.Application.Audiobooks
             public void Dispose()
             {
                 var s = Interlocked.Exchange(ref _sem, null);
-                s?.Release();
+                try
+                {
+                    s?.Release();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // The semaphore was disposed out from under this holder
+                    // (historically by ResetForTesting in a parallel test
+                    // class). A disposed semaphore has no waiters to wake, so
+                    // swallowing is safe — and a release must never throw on
+                    // the add path it guards.
+                }
             }
         }
 
