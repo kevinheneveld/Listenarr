@@ -47,6 +47,17 @@ namespace Listenarr.Domain.Models
     }
 
     /// <summary>
+    /// On-disk audio length versus the catalog runtime (ADR-0001 completeness
+    /// check). Distinguishes "partial content" (right book, most parts missing —
+    /// a mid-book cold open that would otherwise read as a wrong-content
+    /// mismatch) from genuinely wrong audio.
+    /// </summary>
+    /// <param name="ExpectedMinutes">Catalog runtime.</param>
+    /// <param name="ActualMinutes">Sum of tracked files' durations (size-extrapolated for files whose duration probe failed).</param>
+    /// <param name="Coverage">ActualMinutes / ExpectedMinutes.</param>
+    public record VerificationCompleteness(double ExpectedMinutes, double ActualMinutes, double Coverage);
+
+    /// <summary>
     /// Result of an identity-verification pass over one audiobook (ADR-0001).
     /// Per-field results are kept separate (not folded into one confidence blob)
     /// so the triage UI can show which field diverged and thresholds can be
@@ -76,5 +87,11 @@ namespace Listenarr.Domain.Models
         /// the transcript carried no recognizable credit announcement.
         /// </summary>
         public SpokenCredits? HeardCredits { get; init; }
+
+        /// <summary>
+        /// On-disk audio length versus the catalog runtime. Null when the record
+        /// has no catalog runtime or no usable per-file duration data.
+        /// </summary>
+        public VerificationCompleteness? Completeness { get; init; }
     }
 }

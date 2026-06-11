@@ -113,11 +113,42 @@ namespace Listenarr.Application.Audiobooks.Verification
             // match" relabel flow with the actual title/author the audio names.
             verdict = verdict with { HeardCredits = SpokenCreditsExtractor.Extract(openingText ?? closingText) };
 
+            // Completeness: a partial set (e.g. parts 10+20 of 20) samples a
+            // mid-book cold open and would read as a confident wrong-content
+            // mismatch; the runtime comparison reframes it as "right book,
+            // most of it missing" — still flagged, but honestly diagnosed.
+            verdict = ApplyCompleteness(verdict, AudioCompletenessEstimator.Estimate(audiobook));
+
             _logger.LogInformation(
                 "Verified audiobook {Id}: {Outcome} (confidence {Confidence:0.00}, title {Title:0.00}, author {Author:0.00})",
                 audiobook.Id, verdict.Outcome, verdict.Confidence, verdict.TitleMatch?.Score ?? -1, verdict.AuthorMatch?.Score ?? -1);
 
             return verdict;
+        }
+
+        // Below this fraction of the catalog runtime the content set is too
+        // partial to support a confident identity verdict in either direction.
+        public const double IncompleteCoverageThreshold = 0.7;
+
+        /// <summary>
+        /// Attaches the completeness estimate and, when coverage falls below
+        /// <see cref="IncompleteCoverageThreshold"/>, downgrades a confident
+        /// outcome to Uncertain: a mid-book cold open from a partial set can't
+        /// prove wrong content, and matching credits on the one surviving part
+        /// can't vouch for a book that is mostly absent. Public + pure so the
+        /// rule is directly unit-testable.
+        /// </summary>
+        public static VerificationVerdict ApplyCompleteness(VerificationVerdict verdict, VerificationCompleteness? completeness)
+        {
+            if (completeness == null) return verdict;
+
+            var adjusted = verdict with { Completeness = completeness };
+            if (completeness.Coverage < IncompleteCoverageThreshold
+                && adjusted.Outcome != VerificationOutcome.Uncertain)
+            {
+                adjusted = adjusted with { Outcome = VerificationOutcome.Uncertain };
+            }
+            return adjusted;
         }
 
         private string Method => $"deterministic:whisper-{_whisper.ModelName}";

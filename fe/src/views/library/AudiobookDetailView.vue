@@ -372,6 +372,16 @@
                 </div>
               </div>
             </div>
+            <div class="detail-row" v-if="completeness">
+              <span class="label">Content length:</span>
+              <span class="value" :class="{ 'completeness-short': completenessIsShort }">
+                {{ formatRuntimeMinutes(completeness.actualMinutes) }} of
+                {{ formatRuntimeMinutes(completeness.expectedMinutes) }} expected
+                ({{ Math.round(completeness.coverage * 100) }}%)<template v-if="completenessIsShort">
+                  — content appears incomplete</template
+                >
+              </span>
+            </div>
             <div class="detail-row detail-row-stacked" v-if="heardCredits">
               <span class="label">The audio says:</span>
               <div class="value verification-fields">
@@ -1027,6 +1037,19 @@ const verificationDetail = computed(() =>
 // What the spoken credits claim the book is; drives the "find correct match"
 // relabel flow when the agent flagged the book.
 const heardCredits = computed(() => verificationDetail.value?.heardCredits ?? null)
+
+// On-disk audio vs catalog runtime ("right book, most of it missing").
+const completeness = computed(() => verificationDetail.value?.completeness ?? null)
+const completenessIsShort = computed(
+  () => (completeness.value?.coverage ?? 1) < 0.7,
+)
+
+function formatRuntimeMinutes(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)}m`
+  const hours = Math.floor(minutes / 60)
+  const rem = Math.round(minutes % 60)
+  return rem > 0 ? `${hours}h ${rem}m` : `${hours}h`
+}
 const showRelabelModal = ref(false)
 const relabelSeed = computed(() =>
   heardCredits.value
@@ -2997,6 +3020,10 @@ function formatDate(dateString?: string): string {
   color: #d8dee6;
   font-style: italic;
   overflow-wrap: anywhere;
+}
+
+.completeness-short {
+  color: #f39c12;
 }
 
 .relabel-btn {

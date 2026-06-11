@@ -721,6 +721,14 @@ export interface SpokenCredits {
   publisher?: string | null
 }
 
+// On-disk audio length versus catalog runtime — distinguishes "partial content
+// of the right book" from genuinely wrong audio.
+export interface VerificationCompleteness {
+  expectedMinutes: number
+  actualMinutes: number
+  coverage: number
+}
+
 export interface VerificationDetail {
   outcome: VerificationOutcome
   confidence: number
@@ -730,6 +738,7 @@ export interface VerificationDetail {
   narratorMatch?: VerificationFieldMatch | null
   publisherMatch?: VerificationFieldMatch | null
   heardCredits?: SpokenCredits | null
+  completeness?: VerificationCompleteness | null
 }
 
 export interface Audiobook {
