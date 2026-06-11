@@ -42,6 +42,12 @@ namespace Listenarr.Application.Audiobooks.Verification
         public DateTime? CompletedAt { get; set; }
         public string Status { get; set; } = "Queued";
         public string? Error { get; set; }
+        /// <summary>
+        /// Cooperative cancellation for this job. The worker links it with its own
+        /// stopping token, so a cancel takes effect mid-transcription, not just
+        /// between books. Cancelled-while-queued jobs are skipped on dequeue.
+        /// </summary>
+        public CancellationTokenSource CancelSource { get; } = new();
         public int Total { get; set; }
         public int Processed { get; set; }
         public int Verified { get; set; }
@@ -62,6 +68,11 @@ namespace Listenarr.Application.Audiobooks.Verification
         /// <summary>Enqueue a verification pass; null ids = whole library.</summary>
         Task<Guid> EnqueueAsync(List<int>? audiobookIds, string trigger = VerificationTriggers.Manual);
         bool TryGetJob(Guid id, out VerificationJob? job);
+        /// <summary>
+        /// Request cancellation of a queued or running job. Returns false when the
+        /// job is unknown, expired, or already finished.
+        /// </summary>
+        bool TryCancel(Guid id);
         ChannelReader<VerificationJob> Reader { get; }
     }
 
@@ -108,14 +119,27 @@ namespace Listenarr.Application.Audiobooks.Verification
 
         public bool TryGetJob(Guid id, out VerificationJob? job) => _jobs.TryGetValue(id, out job);
 
+        public bool TryCancel(Guid id)
+        {
+            if (!_jobs.TryGetValue(id, out var job)) return false;
+            if (job.Status is not ("Queued" or "Processing")) return false;
+
+            _logger.LogInformation("Cancellation requested for verification job {JobId} ({Status})", id, job.Status);
+            job.CancelSource.Cancel();
+            return true;
+        }
+
         private void PurgeExpired()
         {
             var cutoff = DateTime.UtcNow - JobTtl;
             foreach (var (id, job) in _jobs)
             {
-                if (job.Status is not ("Completed" or "Failed")) continue;
+                if (job.Status is not ("Completed" or "Failed" or "Cancelled")) continue;
                 if ((job.CompletedAt ?? job.EnqueuedAt) >= cutoff) continue;
-                _jobs.TryRemove(id, out _);
+                if (_jobs.TryRemove(id, out var removed))
+                {
+                    removed.CancelSource.Dispose();
+                }
             }
         }
     }

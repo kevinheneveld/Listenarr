@@ -686,6 +686,16 @@ namespace Listenarr.Api.Controllers
                     })
                     .ToList(),
                 tags = updated.Tags,
+                // Audio verification (ADR-0001): status + audit fields, per-field
+                // detail, and the transcript — the detail page's Audio Verification
+                // card renders these (the slim list carries only status+confidence).
+                verificationStatus = updated.VerificationStatus,
+                verificationConfidence = updated.VerificationConfidence,
+                verifiedAt = updated.VerifiedAt,
+                verifiedBy = updated.VerifiedBy,
+                verificationMethod = updated.VerificationMethod,
+                verificationTranscript = updated.VerificationTranscript,
+                verificationDetailJson = updated.VerificationDetailJson,
                 // Sort via the shared AudiobookFileOrdering helper so multi-file books
                 // (e.g. a 14-disc rip) appear in human-natural order — "Disc 01..14"
                 // rather than the essentially-undefined row-insertion order EF returns.

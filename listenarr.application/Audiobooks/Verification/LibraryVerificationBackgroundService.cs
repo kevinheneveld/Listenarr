@@ -71,11 +71,24 @@ namespace Listenarr.Application.Audiobooks.Verification
             {
                 await foreach (var job in _queue.Reader.ReadAllAsync(stoppingToken))
                 {
+                    // Cancelled while still queued: report and move on without work.
+                    if (job.CancelSource.IsCancellationRequested)
+                    {
+                        job.Status = "Cancelled";
+                        job.CompletedAt = DateTime.UtcNow;
+                        await SendCompleteAsync(job, error: null, stoppingToken);
+                        _logger.LogInformation("Verification job {JobId} cancelled before it started", job.Id);
+                        continue;
+                    }
+
+                    // Link host shutdown with the job's own cancel so a Stop takes
+                    // effect mid-transcription, not only between books.
+                    using var jobCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, job.CancelSource.Token);
                     try
                     {
                         _logger.LogInformation("Processing verification job {JobId}", job.Id);
                         job.Status = "Processing";
-                        await RunJobAsync(job, stoppingToken);
+                        await RunJobAsync(job, jobCts.Token);
 
                         job.Status = "Completed";
                         job.CompletedAt = DateTime.UtcNow;
@@ -87,6 +100,15 @@ namespace Listenarr.Application.Audiobooks.Verification
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
                         throw;
+                    }
+                    catch (OperationCanceledException) when (job.CancelSource.IsCancellationRequested)
+                    {
+                        job.Status = "Cancelled";
+                        job.CompletedAt = DateTime.UtcNow;
+                        await SendCompleteAsync(job, error: null, stoppingToken);
+                        _logger.LogInformation(
+                            "Verification job {JobId} cancelled after {Processed}/{Total} books ({Verified} verified, {Flagged} flagged)",
+                            job.Id, job.Processed, job.Total, job.Verified, job.Flagged);
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
                     {
@@ -239,6 +261,7 @@ namespace Listenarr.Application.Audiobooks.Verification
             {
                 jobId = job.Id.ToString(),
                 trigger = job.Trigger,
+                status = job.Status,
                 processed = job.Processed,
                 total = job.Total,
                 verified = job.Verified,

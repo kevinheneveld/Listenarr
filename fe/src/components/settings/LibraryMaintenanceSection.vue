@@ -96,14 +96,25 @@
             description="Run verification on each book right after its download imports, so a wrong grab is flagged immediately instead of waiting for the next manual library pass."
           />
         </div>
-        <button
-          type="button"
-          class="action-button"
-          :disabled="isVerifying"
-          @click="runVerification"
-        >
-          {{ isVerifying ? verifyProgressLabel : 'Verify library' }}
-        </button>
+        <div class="action-stack">
+          <button
+            type="button"
+            class="action-button"
+            :disabled="isVerifying"
+            @click="runVerification"
+          >
+            {{ isVerifying ? verifyProgressLabel : 'Verify library' }}
+          </button>
+          <button
+            v-if="isVerifying && verifyJobId"
+            type="button"
+            class="action-button stop-button"
+            :disabled="isStoppingVerification"
+            @click="stopVerification"
+          >
+            {{ isStoppingVerification ? 'Stopping…' : 'Stop' }}
+          </button>
+        </div>
       </div>
 
       <div class="maintenance-row">
@@ -180,10 +191,11 @@ const lastOrganizeMessage = ref<string | null>(null)
 
 // Audio verification (ADR-0001): trigger the batch walk and surface progress
 const isVerifying = ref(false)
+const isStoppingVerification = ref(false)
 const verificationMessage = ref<string | null>(null)
 const verifyProcessed = ref(0)
 const verifyTotal = ref(0)
-let verifyJobId: string | null = null
+const verifyJobId = ref<string | null>(null)
 
 const verifyProgressLabel = computed(() =>
   verifyTotal.value > 0 ? `Verifying ${verifyProcessed.value}/${verifyTotal.value}…` : 'Verifying…',
@@ -194,7 +206,7 @@ const verifyProgressLabel = computed(() =>
 // ignored (their outcome shows up as the book's verification badge instead).
 const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
   if (payload.trigger === 'import') return
-  if (verifyJobId && payload.jobId !== verifyJobId) return
+  if (verifyJobId.value && payload.jobId !== verifyJobId.value) return
   isVerifying.value = true
   verifyProcessed.value = payload.processed
   verifyTotal.value = payload.total
@@ -202,9 +214,10 @@ const unsubVerifyProgress = signalRService.onVerificationProgress((payload) => {
 
 const unsubVerifyComplete = signalRService.onVerificationComplete((payload) => {
   if (payload.trigger === 'import') return
-  if (verifyJobId && payload.jobId !== verifyJobId) return
+  if (verifyJobId.value && payload.jobId !== verifyJobId.value) return
   isVerifying.value = false
-  verifyJobId = null
+  isStoppingVerification.value = false
+  verifyJobId.value = null
   if (payload.error) {
     verificationMessage.value = null
     toast.error('Library verification failed', payload.error)
@@ -216,6 +229,11 @@ const unsubVerifyComplete = signalRService.onVerificationComplete((payload) => {
     (payload.skipped > 0 ? `, ${payload.skipped} skipped` : '') +
     (payload.failed > 0 ? `, ${payload.failed} failed` : '') +
     '.'
+  if (payload.status === 'Cancelled') {
+    verificationMessage.value = `Stopped. ${summary} Already-checked books keep their verdicts.`
+    toast.info('Library verification stopped', verificationMessage.value)
+    return
+  }
   verificationMessage.value = summary
   if (payload.flagged > 0) {
     toast.warning('Library verification complete', `${summary} Use the "Needs review" filter in the library to triage flagged books.`)
@@ -232,16 +250,31 @@ onUnmounted(() => {
 async function runVerification() {
   if (isVerifying.value) return
   isVerifying.value = true
+  isStoppingVerification.value = false
   verifyProcessed.value = 0
   verifyTotal.value = 0
   verificationMessage.value = null
   try {
     const result = await apiService.startLibraryVerification()
-    verifyJobId = result.jobId
+    verifyJobId.value = result.jobId
   } catch (err) {
     isVerifying.value = false
     const message = err instanceof Error ? err.message : 'Unknown error'
     toast.error('Could not start library verification', message)
+  }
+}
+
+async function stopVerification() {
+  if (!verifyJobId.value || isStoppingVerification.value) return
+  isStoppingVerification.value = true
+  try {
+    await apiService.cancelVerificationJob(verifyJobId.value)
+    // The worker finishes aborting the in-flight book, then sends
+    // VerificationComplete with status Cancelled — that resets the UI state.
+  } catch (err) {
+    isStoppingVerification.value = false
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not stop verification', message)
   }
 }
 
@@ -406,5 +439,25 @@ h3 {
 .action-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.action-stack {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.action-stack .action-button {
+  width: 100%;
+}
+
+.stop-button {
+  border-color: rgba(231, 76, 60, 0.5);
+  color: #e74c3c;
+}
+
+.stop-button:hover:not(:disabled) {
+  background-color: rgba(231, 76, 60, 0.15);
 }
 </style>

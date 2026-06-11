@@ -125,6 +125,23 @@ namespace Listenarr.Api.Controllers
             return Ok(MapVerification(audiobook));
         }
 
+        /// <summary>
+        /// Cancel a queued or running verification job. The current book's
+        /// transcription is aborted; already-persisted verdicts are kept.
+        /// </summary>
+        [HttpPost("jobs/{jobId}/cancel")]
+        public IActionResult CancelJob(Guid jobId)
+        {
+            if (!_queue.TryGetJob(jobId, out var job) || job == null)
+                return NotFound(new { error = "Job not found or expired" });
+
+            if (!_queue.TryCancel(jobId))
+                return Conflict(new { error = $"Job is {job.Status} — only queued or running jobs can be cancelled" });
+
+            _logger.LogInformation("Verification job {JobId} cancellation requested via API", jobId);
+            return Ok(new { jobId = jobId.ToString(), status = "Cancelling" });
+        }
+
         /// <summary>Status of a previously enqueued verification job.</summary>
         [HttpGet("jobs/{jobId}")]
         public IActionResult GetJob(Guid jobId)

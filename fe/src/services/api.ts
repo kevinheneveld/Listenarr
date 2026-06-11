@@ -1043,6 +1043,12 @@ class ApiService {
     return this.request<{ jobId: string }>(`/verification/audiobook/${id}`, { method: 'POST' })
   }
 
+  async cancelVerificationJob(jobId: string): Promise<{ jobId: string; status: string }> {
+    return this.request<{ jobId: string; status: string }>(`/verification/jobs/${jobId}/cancel`, {
+      method: 'POST',
+    })
+  }
+
   async setManualVerification(
     id: number,
     action: 'verify' | 'reject' | 'clear',

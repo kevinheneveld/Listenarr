@@ -165,6 +165,8 @@ export interface VerificationProgressPayload {
 export interface VerificationCompletePayload {
   jobId: string
   trigger?: string
+  // Terminal job status: 'Completed' | 'Cancelled' | 'Failed'
+  status?: string
   processed: number
   total: number
   verified: number
