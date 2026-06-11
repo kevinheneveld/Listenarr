@@ -123,6 +123,73 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void SelectFirstAndLast_BackMatterFile_NeverPicksItAsOpening()
+        {
+            // The live 1984 case: "Appendix" sorts before "Chapter" alphabetically,
+            // so natural order alone samples the Newspeak appendix instead of the
+            // opening credits. Back matter must rank after the content — and since
+            // back matter plays last, it also becomes the closing pick.
+            var book = new Audiobook
+            {
+                Title = "1984",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/books/1984/1984 - Appendix.mp3"),
+                    FileAt("/books/1984/1984 - Chapter 1.mp3"),
+                    FileAt("/books/1984/1984 - Chapter 2.mp3"),
+                }
+            };
+
+            var (first, last) = VerificationFileSelection.SelectFirstAndLast(book);
+
+            Assert.Equal("/books/1984/1984 - Chapter 1.mp3", first);
+            Assert.Equal("/books/1984/1984 - Appendix.mp3", last);
+        }
+
+        [Fact]
+        public void SelectFirstAndLast_FrontMatterFile_BecomesTheOpeningPick()
+        {
+            // "Foreword" sorts after "Chapter" alphabetically, but its audio (and
+            // the spoken credits) open the book.
+            var book = new Audiobook
+            {
+                Title = "1984",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/books/1984/1984 - Chapter 1.mp3"),
+                    FileAt("/books/1984/1984 - Chapter 2.mp3"),
+                    FileAt("/books/1984/1984 - Foreword.mp3"),
+                }
+            };
+
+            var (first, last) = VerificationFileSelection.SelectFirstAndLast(book);
+
+            Assert.Equal("/books/1984/1984 - Foreword.mp3", first);
+            Assert.Equal("/books/1984/1984 - Chapter 2.mp3", last);
+        }
+
+        [Fact]
+        public void SelectFirstAndLast_TitleContainingKeyword_DoesNotPoisonClassification()
+        {
+            // The book's own title is stripped before keyword matching, so a
+            // title like "The Epilogue" can't demote every file to back matter.
+            var book = new Audiobook
+            {
+                Title = "The Epilogue",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/books/e/The Epilogue - Part 1.mp3"),
+                    FileAt("/books/e/The Epilogue - Part 2.mp3"),
+                }
+            };
+
+            var (first, last) = VerificationFileSelection.SelectFirstAndLast(book);
+
+            Assert.Equal("/books/e/The Epilogue - Part 1.mp3", first);
+            Assert.Equal("/books/e/The Epilogue - Part 2.mp3", last);
+        }
+
+        [Fact]
         public void SelectFirstAndLast_SingleFileBook_ReturnsSamePathTwice()
         {
             var book = new Audiobook { Files = new List<AudiobookFile> { FileAt("/books/y/book.m4b") } };
