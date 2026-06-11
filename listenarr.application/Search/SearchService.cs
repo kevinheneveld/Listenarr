@@ -909,10 +909,18 @@ namespace Listenarr.Application.Search
                             var normalizedQueryTitle = NormalizeForExactMatch(titleVal);
                             var normalizedQueryAuthor = NormalizeForExactMatch(authorVal);
 
+                            // "Exact" includes edition variants of the same title —
+                            // "Warbreaker (2 of 3) [Dramatized Adaptation]" IS Warbreaker,
+                            // and dropping it made a search for the plain title return
+                            // FEWER editions than a noisy filename query that dodged the
+                            // collapse entirely. IsEditionVariantTitle stays conservative
+                            // (suffix must be edition vocabulary only), so "1634" still
+                            // doesn't pull in "1634: The Baltic War".
                             var exactMatches = converted
                                 .Where(c =>
                                     !string.IsNullOrEmpty(c.Title)
-                                    && NormalizeForExactMatch(c.Title) == normalizedQueryTitle
+                                    && (NormalizeForExactMatch(c.Title) == normalizedQueryTitle
+                                        || IsEditionVariantTitle(NormalizeForExactMatch(c.Title), normalizedQueryTitle))
                                     && (string.IsNullOrEmpty(normalizedQueryAuthor)
                                         || (!string.IsNullOrEmpty(c.Artist)
                                             && NormalizeForExactMatch(c.Artist).Contains(normalizedQueryAuthor))))
@@ -4344,6 +4352,38 @@ namespace Listenarr.Application.Search
         /// fix doesn't pull in a dependency on the TitleMatcher helper that lives on a
         /// separate PR branch.
         /// </summary>
+        // Tokens that mark a different EDITION of the same book rather than a
+        // different book: packaging ("part 2 of 3", "volume"), production style
+        // ("dramatized adaptation", "full cast"), and release framing
+        // ("tenth anniversary edition"). Bare digits are allowed too (part and
+        // volume numbers). Anything outside this vocabulary in the suffix means
+        // the candidate is a different work that merely shares a title prefix.
+        private static readonly HashSet<string> EditionSuffixTokens = new(StringComparer.Ordinal)
+        {
+            "a", "an", "the", "of", "part", "parts", "volume", "vol", "book",
+            "dramatized", "dramatised", "adaptation", "unabridged", "abridged",
+            "edition", "version", "anniversary", "special", "collectors",
+            "remastered", "expanded", "full", "cast", "graphicaudio",
+            "first", "second", "third", "fourth", "fifth", "tenth", "15th", "20th", "25th", "10th"
+        };
+
+        /// <summary>
+        /// True when <paramref name="normalizedCandidate"/> is the
+        /// <paramref name="normalizedQueryTitle"/> followed only by
+        /// edition-marker tokens (both inputs already passed through
+        /// <see cref="NormalizeForExactMatch"/>).
+        /// </summary>
+        private static bool IsEditionVariantTitle(string normalizedCandidate, string normalizedQueryTitle)
+        {
+            if (string.IsNullOrEmpty(normalizedCandidate) || string.IsNullOrEmpty(normalizedQueryTitle)) return false;
+            if (!normalizedCandidate.StartsWith(normalizedQueryTitle + " ", StringComparison.Ordinal)) return false;
+
+            var suffixTokens = normalizedCandidate[(normalizedQueryTitle.Length + 1)..]
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return suffixTokens.Length > 0
+                && suffixTokens.All(t => EditionSuffixTokens.Contains(t) || t.All(char.IsDigit));
+        }
+
         private static string NormalizeForExactMatch(string? input)
         {
             if (string.IsNullOrWhiteSpace(input)) return string.Empty;

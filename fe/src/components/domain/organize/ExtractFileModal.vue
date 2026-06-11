@@ -81,6 +81,19 @@
               @keydown.enter.prevent="onSearch"
             />
           </div>
+          <div class="extract-search-field extract-region-field">
+            <label class="field-label" for="extract-region-select">Region</label>
+            <select
+              id="extract-region-select"
+              v-model="searchRegion"
+              class="form-control"
+              :disabled="step === 'searching'"
+            >
+              <option v-for="opt in REGION_OPTIONS" :key="opt.code" :value="opt.code">
+                {{ opt.label }}
+              </option>
+            </select>
+          </div>
           <button
             type="button"
             class="btn btn-primary extract-search-btn"
@@ -91,6 +104,31 @@
           </button>
         </div>
 
+        <div class="extract-search-row extract-paste-row">
+          <div class="extract-search-field">
+            <label class="field-label" for="extract-asin-input">Or paste an Audible link / ASIN</label>
+            <input
+              id="extract-asin-input"
+              v-model="pasteAsinInput"
+              type="text"
+              class="form-control"
+              placeholder="B0CSV7NJMB or https://www.audible.com/pd/…/B0CSV7NJMB"
+              spellcheck="false"
+              autocomplete="off"
+              @keydown.enter.prevent="onLoadPastedAsin"
+            />
+          </div>
+          <button
+            type="button"
+            class="btn extract-search-btn"
+            :disabled="!pasteAsinInput.trim() || step === 'searching'"
+            @click="onLoadPastedAsin"
+          >
+            Load
+          </button>
+        </div>
+
+        <p v-if="regionNotice" class="extract-region-notice">{{ regionNotice }}</p>
         <p v-if="searchError" class="extract-error" role="alert">{{ searchError }}</p>
 
         <p v-if="step === 'searching'" class="extract-loading">Searching Audible…</p>
@@ -331,6 +369,30 @@ const loadingEmbedded = ref(false)
 const embedded = ref<EmbeddedFileMetadata | null>(null)
 const searchTitle = ref('')
 const searchAuthor = ref('')
+
+// Region selection — parity with MetadataBackfillModal: 'auto' walks the
+// fallback chain and stops at the first store with matches (regional stores
+// carry editions the US store doesn't, e.g. delisted/older recordings).
+const REGION_OPTIONS = [
+  { code: 'auto', label: 'Auto (US, then UK/CA/AU)' },
+  { code: 'us', label: 'US (audible.com)' },
+  { code: 'uk', label: 'UK (audible.co.uk)' },
+  { code: 'ca', label: 'CA (audible.ca)' },
+  { code: 'au', label: 'AU (audible.com.au)' },
+] as const
+const REGION_FALLBACK_CHAIN: ReadonlyArray<string> = ['us', 'uk', 'ca', 'au']
+const searchRegion = ref<string>('auto')
+const searchedRegion = ref<string | null>(null)
+const regionNotice = computed<string | null>(() => {
+  if (searchRegion.value !== 'auto') return null
+  if (!searchedRegion.value || searchedRegion.value === 'us') return null
+  return `US returned no matches. Showing results from ${searchedRegion.value.toUpperCase()}.`
+})
+
+// Direct ASIN / Audible-URL paste — escape hatch for editions Audible's search
+// never surfaces (same rationale as the backfill modal's paste field).
+const pasteAsinInput = ref('')
+const ASIN_TOKEN_REGEX = /\b([0-9A-Z]{10})\b/i
 const searchError = ref<string | null>(null)
 const searchedOnce = ref(false)
 const candidates = ref<AudibleSearchResult[]>([])
@@ -456,6 +518,8 @@ function reset() {
   searchAuthor.value = ''
   searchError.value = null
   searchedOnce.value = false
+  searchedRegion.value = null
+  pasteAsinInput.value = ''
   candidates.value = []
   selectedCandidate.value = null
   selectedMetadata.value = null
@@ -470,18 +534,43 @@ async function onSearch() {
   step.value = 'searching'
   searchError.value = null
   candidates.value = []
+  searchedRegion.value = null
   try {
-    const resp = await apiService.searchAudibleByTitleAndAuthor(
-      searchTitle.value.trim(),
-      searchAuthor.value.trim(),
-    )
-    candidates.value = resp?.results ?? []
+    const regions =
+      searchRegion.value === 'auto' ? REGION_FALLBACK_CHAIN : [searchRegion.value]
+    for (const region of regions) {
+      const resp = await apiService.searchAudibleByTitleAndAuthor(
+        searchTitle.value.trim(),
+        searchAuthor.value.trim(),
+        1,
+        50,
+        region,
+      )
+      const results = resp?.results ?? []
+      if (results.length > 0) {
+        candidates.value = results
+        searchedRegion.value = region
+        break
+      }
+    }
     searchedOnce.value = true
   } catch (err) {
     searchError.value = err instanceof Error ? err.message : 'Audible search failed.'
   } finally {
     if (step.value === 'searching') step.value = 'picking'
   }
+}
+
+function onLoadPastedAsin() {
+  const match = (pasteAsinInput.value || '').trim().match(ASIN_TOKEN_REGEX)
+  if (!match) {
+    searchError.value = 'Paste an Audible URL or a 10-character ASIN (e.g. B0CSV7NJMB).'
+    return
+  }
+  searchError.value = null
+  // Reuse the candidate-pick path: it fetches the per-ASIN metadata and moves
+  // to the confirm step; the search-side fields just stay empty.
+  void onPickCandidate({ asin: match[1].toUpperCase() } as AudibleSearchResult)
 }
 
 async function onPickCandidate(candidate: AudibleSearchResult) {
@@ -497,7 +586,11 @@ async function onPickCandidate(candidate: AudibleSearchResult) {
     // string, isbn as a single string, etc.) — not AudibleBookMetadata. Unwrap and then
     // build an AudibleBookMetadata-shaped payload by combining the inner response with
     // the picked candidate (search-side data fills in anything the per-ASIN call lacks).
-    const fetched = (await apiService.getAudibleMetadata<unknown>(candidate.asin)) as {
+    // Resolve against the store the candidate came from — a UK/AU candidate's
+    // ASIN is only guaranteed resolvable in its own region.
+    const pickRegion =
+      searchedRegion.value || (searchRegion.value !== 'auto' ? searchRegion.value : 'us')
+    const fetched = (await apiService.getAudibleMetadata<unknown>(candidate.asin, pickRegion)) as {
       metadata?: unknown
     } | null
     const inner = (fetched && typeof fetched === 'object' && 'metadata' in fetched
@@ -738,6 +831,26 @@ function stripSubtitlePart(title: string): string {
   gap: 0.75rem;
   align-items: end;
   margin-bottom: 1rem;
+}
+
+/* Title | Author | Region | Search */
+.extract-search-row:not(.extract-paste-row) {
+  grid-template-columns: 1fr 1fr minmax(150px, auto) auto;
+}
+
+.extract-paste-row {
+  grid-template-columns: 1fr auto;
+  margin-top: -0.25rem;
+}
+
+.extract-region-notice {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: rgba(243, 156, 18, 0.08);
+  border: 1px solid rgba(243, 156, 18, 0.2);
+  color: #f39c12;
+  font-size: 0.85rem;
 }
 
 .extract-search-field {

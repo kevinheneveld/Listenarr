@@ -241,6 +241,71 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
+        public async Task IntelligentSearch_AuthorTitle_CollapseKeepsEditionVariants()
+        {
+            // Live regression: searching the plain title "Warbreaker" returned
+            // FEWER editions than a noisy filename query, because the collapse
+            // kept only the normalize-equal retail edition and dropped the
+            // GraphicAudio "(2 of 3) [Dramatized Adaptation]" and Tenth
+            // Anniversary entries — which are the same book in different
+            // packaging. Edition-suffix variants must survive the collapse.
+            var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
+            var sanderson = new AudibleAuthor { Name = "Brandon Sanderson" };
+            audibleMock
+                .Setup(s => s.SearchByAuthorAsync("Brandon Sanderson", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse
+                {
+                    Results = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B0Warb001", Title = "Warbreaker", Authors = new() { sanderson } },
+                        new() { Asin = "B0Warb2of3", Title = "Warbreaker (2 of 3) [Dramatized Adaptation]", Authors = new() { sanderson } },
+                        new() { Asin = "B0Warb1of3", Title = "Warbreaker (1 of 3) [Dramatized Adaptation]", Authors = new() { sanderson } },
+                        new() { Asin = "B0WarbTAP1", Title = "Warbreaker: Tenth Anniversary Edition (Part 1 of 2) (Dramatized Adaptation)", Authors = new() { sanderson } },
+                        new() { Asin = "B0WarbTAP2", Title = "Warbreaker: Tenth Anniversary Edition (Part 2 of 2) (Dramatized Adaptation)", Authors = new() { sanderson } }
+                    },
+                    TotalResults = 5
+                });
+
+            var service = CreateSearchService(audibleMock.Object);
+            var results = await service.IntelligentSearchAsync("AUTHOR:Brandon Sanderson TITLE:Warbreaker");
+
+            Assert.NotNull(results);
+            Assert.Equal(5, results.Count);
+        }
+
+        [Fact]
+        public async Task IntelligentSearch_AuthorTitle_CollapseStillDropsDifferentBooksSharingThePrefix()
+        {
+            // The widened collapse must stay conservative: "1634: The Baltic
+            // War" shares the title prefix but its suffix is a real subtitle,
+            // not edition packaging — it is a different book and must still be
+            // filtered when an exact "1634" match exists.
+            var audibleMock = new Mock<AudibleService>(new HttpClient(), NullLogger<AudibleService>.Instance);
+            var flint = new AudibleAuthor { Name = "Eric Flint" };
+            audibleMock
+                .Setup(s => s.SearchByAuthorAsync("Eric Flint", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse
+                {
+                    Results = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B01634000", Title = "1634", Authors = new() { flint } },
+                        new() { Asin = "B01634BAL", Title = "1634: The Baltic War", Authors = new() { flint } }
+                    },
+                    TotalResults = 2
+                });
+            audibleMock
+                .Setup(s => s.SearchByTitleAsync("1634", It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleSearchResponse { Results = new List<AudibleSearchResult>(), TotalResults = 0 });
+
+            var service = CreateSearchService(audibleMock.Object);
+            var results = await service.IntelligentSearchAsync("AUTHOR:Eric Flint TITLE:1634");
+
+            Assert.NotNull(results);
+            Assert.Single(results);
+            Assert.Equal("B01634000", results[0].Asin, ignoreCase: true);
+        }
+
+        [Fact]
         public async Task IntelligentSearch_AuthorTitle_KeepsAllExactMatches_WhenMultipleNarratorsExist()
         {
             // Same book, three different narrators / abridgements on Audible

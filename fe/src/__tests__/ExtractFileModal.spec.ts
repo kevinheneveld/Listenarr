@@ -71,6 +71,9 @@ describe('ExtractFileModal', () => {
     expect(apiService.searchAudibleByTitleAndAuthor).toHaveBeenCalledWith(
       'The Eye of the World',
       'Robert Jordan',
+      1,
+      50,
+      'us',
     )
     expect(wrapper.text()).toContain('The Eye of the World')
     expect(wrapper.text()).toContain('Robert Jordan')
@@ -126,7 +129,7 @@ describe('ExtractFileModal', () => {
     await wrapper.find('.extract-candidate').trigger('click')
     await flushPromises()
 
-    expect(apiService.getAudibleMetadata).toHaveBeenCalledWith('B002UZJBA8')
+    expect(apiService.getAudibleMetadata).toHaveBeenCalledWith('B002UZJBA8', 'us')
     expect(wrapper.text()).toContain("File's embedded tags")
     expect(wrapper.text()).toContain('Destination (Audible)')
     expect(wrapper.text()).toContain('ASIN')
