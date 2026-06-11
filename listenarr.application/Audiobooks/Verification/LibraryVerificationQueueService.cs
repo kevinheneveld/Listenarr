@@ -63,6 +63,8 @@ namespace Listenarr.Application.Audiobooks.Verification
         public const string Import = "import";
         /// <summary>Auto-enqueued after files were transferred onto the book.</summary>
         public const string Transfer = "transfer";
+        /// <summary>Auto-enqueued after a metadata edit changed the book's identity.</summary>
+        public const string Metadata = "metadata";
     }
 
     public interface ILibraryVerificationQueueService

@@ -294,13 +294,55 @@ namespace Listenarr.Application.Audiobooks
 
                             if (candidates.Count > 0)
                             {
-                                if (string.IsNullOrEmpty(titleToken) && string.IsNullOrEmpty(authorToken))
+                                // Files under the record's own BasePath belong to it by
+                                // LOCATION — the title/author token filter exists for loose
+                                // or ambiguous folders. Filtering the record's own folder by
+                                // its CURRENT identity broke relabeled books: the folder is
+                                // still named after the old identity, nothing matched, and
+                                // every file was disowned.
+                                var remaining = candidates;
+                                if (!string.IsNullOrWhiteSpace(audiobook.BasePath))
                                 {
-                                    foundFiles.AddRange(candidates.Where(unique.Add));
+                                    string? recordRoot = null;
+                                    try
+                                    {
+                                        recordRoot = Path.GetFullPath(audiobook.BasePath)
+                                            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                                            + Path.DirectorySeparatorChar;
+                                    }
+                                    catch (Exception pathEx) when (pathEx is ArgumentException or NotSupportedException or PathTooLongException)
+                                    {
+                                        // Unusable BasePath — fall through to token matching.
+                                    }
+
+                                    if (recordRoot != null)
+                                    {
+                                        remaining = new List<string>();
+                                        foreach (var candidate in candidates)
+                                        {
+                                            if (candidate.StartsWith(recordRoot, StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                if (unique.Add(candidate)) foundFiles.Add(candidate);
+                                            }
+                                            else
+                                            {
+                                                remaining.Add(candidate);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (remaining.Count == 0)
+                                {
+                                    // all candidates adopted by location
+                                }
+                                else if (string.IsNullOrEmpty(titleToken) && string.IsNullOrEmpty(authorToken))
+                                {
+                                    foundFiles.AddRange(remaining.Where(unique.Add));
                                 }
                                 else
                                 {
-                                    var groups = candidates.GroupBy(f => Path.GetDirectoryName(f) ?? string.Empty);
+                                    var groups = remaining.GroupBy(f => Path.GetDirectoryName(f) ?? string.Empty);
                                     foreach (var group in groups)
                                     {
                                         var dirName = Path.GetFileName(group.Key) ?? string.Empty;
@@ -405,24 +447,32 @@ namespace Listenarr.Application.Audiobooks
                             {
                                 var existingFiles = await fileRepository.GetByAudiobookIdAsync(audiobook.Id);
 
-                                // Create set of found files (absolute paths)
-                                var foundSet = new HashSet<string>(foundFiles, StringComparer.OrdinalIgnoreCase);
-
                                 // Check which existing files still exist
                                 var toRemove = new List<AudiobookFile>();
                                 foreach (var existingFile in existingFiles
                                     .Where(existingFile => !string.IsNullOrEmpty(existingFile.Path))
                                     .Where(existingFile => FileUtils.IsAudioFile(existingFile.Path!)))
                                 {
-                                    // Normalize path: if relative, make it absolute using basePath
+                                    // Normalize path: if relative, make it absolute using the
+                                    // scan-derived basePath, falling back to the record's own
+                                    // BasePath (legacy bare-filename rows predate absolute paths).
                                     var fullPath = existingFile.Path!;
-                                    if (!Path.IsPathRooted(fullPath) && !string.IsNullOrEmpty(basePath))
+                                    if (!Path.IsPathRooted(fullPath))
                                     {
-                                        fullPath = Path.GetFullPath(Path.Join(basePath, fullPath));
+                                        var anchor = !string.IsNullOrEmpty(basePath) ? basePath : audiobook.BasePath;
+                                        if (!string.IsNullOrEmpty(anchor))
+                                        {
+                                            fullPath = Path.GetFullPath(Path.Join(anchor, fullPath));
+                                        }
                                     }
 
-                                    // Check if file still exists on disk
-                                    if (!foundSet.Contains(fullPath))
+                                    // Remove a row only when its file is GENUINELY absent from
+                                    // disk. Membership in the matched-candidate set is not
+                                    // evidence of absence — the token filter can reject files
+                                    // that are right there (post-relabel folder names match the
+                                    // OLD identity), and removing rows for present files
+                                    // shredded a live record's bookkeeping.
+                                    if (!System.IO.File.Exists(fullPath))
                                     {
                                         toRemove.Add(existingFile);
                                     }

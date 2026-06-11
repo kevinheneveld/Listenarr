@@ -1324,6 +1324,16 @@ namespace Listenarr.Api.Controllers
 
             var legacyIdentifierFieldsTouched = false;
 
+            // Snapshot identity fields: when an update changes WHO/WHAT this record
+            // is (relabel to a different book), any agent verification verdict was
+            // computed against metadata that no longer exists and must be redone.
+            var identityBefore = string.Join(
+                "|",
+                existingAudiobook.Title,
+                existingAudiobook.Asin,
+                string.Join(",", existingAudiobook.Authors ?? new List<string>()),
+                string.Join(",", existingAudiobook.Narrators ?? new List<string>()));
+
             // Only update non-null properties to support partial updates
             if (updatedAudiobook.Title != null) existingAudiobook.Title = updatedAudiobook.Title;
             if (updatedAudiobook.Subtitle != null) existingAudiobook.Subtitle = updatedAudiobook.Subtitle;
@@ -1471,6 +1481,47 @@ namespace Listenarr.Api.Controllers
                     _logger.LogInformation("Cached external cover art locally for audiobook {AudiobookId} (key={Key})",
                         existingAudiobook.Id,
                         LogRedaction.SanitizeText(existingAudiobook.Asin ?? "<no-asin>"));
+                }
+            }
+
+            // Identity changed (e.g. the verification relabel flow re-pointed this
+            // record at the book the audio actually is): an agent verdict compared
+            // the audio against the OLD identity — reset it and re-verify against
+            // the new one. Manual states stay sticky as everywhere else.
+            var identityAfter = string.Join(
+                "|",
+                existingAudiobook.Title,
+                existingAudiobook.Asin,
+                string.Join(",", existingAudiobook.Authors ?? new List<string>()),
+                string.Join(",", existingAudiobook.Narrators ?? new List<string>()));
+            var identityChanged = !string.Equals(identityBefore, identityAfter, StringComparison.Ordinal);
+            if (identityChanged && existingAudiobook.VerificationStatus.IsAgentWritable()
+                && existingAudiobook.VerificationStatus != VerificationStatus.Unverified)
+            {
+                existingAudiobook.VerificationStatus = VerificationStatus.Unverified;
+                existingAudiobook.VerificationConfidence = null;
+                existingAudiobook.VerifiedAt = null;
+                existingAudiobook.VerifiedBy = null;
+                existingAudiobook.VerificationMethod = null;
+
+                // Best-effort auto re-verify against the new identity; skipped when
+                // whisper isn't installed or the record has no audio.
+                try
+                {
+                    using var verifyScope = _scopeFactory.CreateScope();
+                    var whisper = verifyScope.ServiceProvider.GetRequiredService<IWhisperService>();
+                    var hasAudio = (await _audioFileRepository.GetByAudiobookIdAsync(id)).Count > 0
+                        || !string.IsNullOrWhiteSpace(existingAudiobook.FilePath);
+                    if (hasAudio && await whisper.IsAvailableAsync())
+                    {
+                        var verificationQueue = verifyScope.ServiceProvider.GetRequiredService<ILibraryVerificationQueueService>();
+                        await verificationQueue.EnqueueAsync(new List<int> { id }, VerificationTriggers.Metadata);
+                        _logger.LogInformation("Audiobook {Id} identity changed — verification reset and re-enqueued", id);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Failed to enqueue re-verification after identity change for audiobook {Id}", id);
                 }
             }
 
