@@ -81,6 +81,13 @@
           <div v-if="verificationMessage" class="maintenance-result">
             {{ verificationMessage }}
           </div>
+          <CheckboxCard
+            class="maintenance-option"
+            :modelValue="settings?.verificationLowCpuPriority ?? true"
+            @update:modelValue="updateLowCpuPriority"
+            title="Run at low CPU priority"
+            description="Verification subprocesses (speech-to-text, audio clipping) yield CPU to anything else on the host. Full speed when the machine is idle; only disable if verification is the only thing running."
+          />
         </div>
         <button
           type="button"
@@ -139,7 +146,19 @@ import { useToast } from '@/services/toastService'
 import DuplicatesReviewModal from '@/components/domain/maintenance/DuplicatesReviewModal.vue'
 import OrganizeLibraryModal from '@/components/domain/maintenance/OrganizeLibraryModal.vue'
 import MoveQueueStatusBanner from '@/components/domain/maintenance/MoveQueueStatusBanner.vue'
-import type { MergeDuplicatesResult, OrganizeLibraryApplyResult } from '@/types'
+import CheckboxCard from '@/components/settings/CheckboxCard.vue'
+import type { ApplicationSettings, MergeDuplicatesResult, OrganizeLibraryApplyResult } from '@/types'
+
+// Settings are optional so the section still renders standalone; without them the
+// verification options show their server-side defaults read-only-in-effect.
+const props = defineProps<{ settings?: Partial<ApplicationSettings> | null }>()
+const emit = defineEmits<{
+  'update:settings': [value: Partial<ApplicationSettings>]
+}>()
+
+function updateLowCpuPriority(value: boolean) {
+  emit('update:settings', { ...(props.settings || {}), verificationLowCpuPriority: value })
+}
 
 const toast = useToast()
 const isRunning = ref(false)
@@ -346,6 +365,10 @@ h3 {
   margin-top: 0.35rem;
   font-size: 0.85rem;
   color: #6fc080;
+}
+
+.maintenance-option {
+  margin-top: 0.75rem;
 }
 
 .action-button {

@@ -57,7 +57,7 @@ namespace Listenarr.Tests.Features.Api.Services
         {
             public ProcessStartInfo? LastStartedProcessStartInfo { get; private set; }
 
-            public Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = 60000, CancellationToken cancellationToken = default)
+            public Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = 60000, CancellationToken cancellationToken = default, ProcessPriorityClass? priorityClass = null)
             {
                 // Simulate node --version preflight success
                 if (startInfo.FileName == "node" || (startInfo.FileName != null && startInfo.FileName.EndsWith("node", StringComparison.OrdinalIgnoreCase)))

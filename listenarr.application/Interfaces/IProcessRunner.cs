@@ -23,7 +23,10 @@ namespace Listenarr.Application.Interfaces
 
     public interface IProcessRunner
     {
-        Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = 60000, CancellationToken cancellationToken = default);
+        // priorityClass lowers (or raises) the child's OS scheduling priority after start;
+        // null leaves the inherited priority untouched. Best-effort: a process that exits
+        // immediately or a platform that refuses must not fail the run.
+        Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = 60000, CancellationToken cancellationToken = default, ProcessPriorityClass? priorityClass = null);
         // Start a long-running process and return the Process instance so callers can interact with it (kill, read streams, etc.).
         // Implementations should not swallow exceptions - callers rely on the returned Process instance.
         Process StartProcess(ProcessStartInfo startInfo);

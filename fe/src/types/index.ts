@@ -388,6 +388,9 @@ export interface ApplicationSettings {
   // Failed download handling
   failedDownloadHandlingEnabled?: boolean
   failedDownloadAutoSearch?: boolean
+  // Audio verification (ADR-0001): run whisper/ffmpeg verification subprocesses at
+  // the lowest OS scheduling priority so library walks yield CPU to other work
+  verificationLowCpuPriority?: boolean
   // Optional admin credentials used when saving settings to create/update an initial admin user
   adminUsername?: string
   adminPassword?: string

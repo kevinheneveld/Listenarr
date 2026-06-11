@@ -56,6 +56,23 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.Contains(secret, result.Stdout);
         }
 
+        [Fact]
+        public async Task RunAsync_WithPriorityClass_IsBestEffortAndStillCompletes()
+        {
+            var logger = new NullLogger<SystemProcessRunner>();
+            var runner = new SystemProcessRunner(logger);
+
+            var psi = CreateEchoProcessStartInfo("priority-run");
+
+            // The contract is best-effort: whether or not the platform honors the
+            // priority change (or the process exits before it lands), the run
+            // itself must succeed normally.
+            var result = await runner.RunAsync(psi, 5000, priorityClass: ProcessPriorityClass.Idle);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("priority-run", result.Stdout);
+        }
+
         private static ProcessStartInfo CreateEchoProcessStartInfo(string text)
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

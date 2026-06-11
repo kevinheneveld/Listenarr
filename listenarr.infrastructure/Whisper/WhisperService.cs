@@ -42,6 +42,7 @@ namespace Listenarr.Infrastructure.Whisper
         private const int TranscribeTimeoutMs = 10 * 60 * 1000;
 
         private readonly IProcessRunner _processRunner;
+        private readonly IConfigurationService _configurationService;
         private readonly ILogger<WhisperService> _logger;
         private readonly string _binaryPath;
         private readonly string _modelPath;
@@ -49,9 +50,11 @@ namespace Listenarr.Infrastructure.Whisper
         public WhisperService(
             IApplicationPathService applicationPathService,
             IProcessRunner processRunner,
+            IConfigurationService configurationService,
             ILogger<WhisperService> logger)
         {
             _processRunner = processRunner;
+            _configurationService = configurationService;
             _logger = logger;
 
             var whisperRoot = Path.Join(applicationPathService.ToolsRootPath, "whisper");
@@ -95,6 +98,14 @@ namespace Listenarr.Infrastructure.Whisper
 
             try
             {
+                // whisper.cpp saturates its threads for the whole transcription, so a
+                // library walk runs it at idle priority (unless disabled in settings)
+                // to yield CPU to anything else on the host.
+                var settings = await _configurationService.GetApplicationSettingsAsync();
+                var priorityClass = (settings?.VerificationLowCpuPriority ?? true)
+                    ? ProcessPriorityClass.Idle
+                    : (ProcessPriorityClass?)null;
+
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = _binaryPath,
@@ -112,7 +123,7 @@ namespace Listenarr.Infrastructure.Whisper
                 startInfo.ArgumentList.Add("--language");
                 startInfo.ArgumentList.Add("en");
 
-                var result = await _processRunner.RunAsync(startInfo, TranscribeTimeoutMs, cancellationToken);
+                var result = await _processRunner.RunAsync(startInfo, TranscribeTimeoutMs, cancellationToken, priorityClass);
                 if (result.TimedOut)
                 {
                     _logger.LogWarning("whisper transcription timed out for {Path}", wavPath);

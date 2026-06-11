@@ -166,7 +166,7 @@ namespace Listenarr.Tests.Features.Api.Services
         {
             public ProcessStartInfo? LastStartInfo { get; private set; }
 
-            public Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = 60000, System.Threading.CancellationToken cancellationToken = default)
+            public Task<ProcessResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = 60000, System.Threading.CancellationToken cancellationToken = default, ProcessPriorityClass? priorityClass = null)
             {
                 LastStartInfo = startInfo;
                 return Task.FromResult(new ProcessResult(1, string.Empty, string.Empty, false));

@@ -129,6 +129,36 @@ describe('LibraryMaintenanceSection', () => {
     expect(errorToast).not.toHaveBeenCalled()
   })
 
+  it('emits update:settings when the low-CPU-priority checkbox is toggled', async () => {
+    const { default: LibraryMaintenanceSection } = await import(
+      '@/components/settings/LibraryMaintenanceSection.vue'
+    )
+    const wrapper = mount(LibraryMaintenanceSection, {
+      props: { settings: { verificationLowCpuPriority: true } },
+    })
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect(checkbox.exists()).toBe(true)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+
+    await checkbox.setValue(false)
+
+    const emitted = wrapper.emitted('update:settings')
+    expect(emitted).toBeTruthy()
+    expect(emitted![emitted!.length - 1][0]).toMatchObject({ verificationLowCpuPriority: false })
+  })
+
+  it('defaults the low-CPU-priority checkbox to checked when settings are absent', async () => {
+    const { default: LibraryMaintenanceSection } = await import(
+      '@/components/settings/LibraryMaintenanceSection.vue'
+    )
+    const wrapper = mount(LibraryMaintenanceSection)
+
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect(checkbox.exists()).toBe(true)
+    expect((checkbox.element as HTMLInputElement).checked).toBe(true)
+  })
+
   it('shows an error toast when verification fails to start', async () => {
     startLibraryVerification.mockRejectedValue(new Error('whisper unavailable'))
     const { default: LibraryMaintenanceSection } = await import(

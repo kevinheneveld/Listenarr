@@ -73,8 +73,10 @@ namespace Listenarr.Infrastructure.Extensions
             services.AddSingleton<MetadataExtractionLimiter>();
             // Ffmpeg installer: provides a bundled ffprobe binary when not present on the system
             services.AddSingleton<IFfmpegService, FfmpegService>();
-            // Audio verification (ADR-0001): local STT + deterministic identity matching
-            services.AddSingleton<IWhisperService, WhisperService>();
+            // Audio verification (ADR-0001): local STT + deterministic identity matching.
+            // Whisper is scoped (not singleton): it reads scoped IConfigurationService
+            // per transcription for the low-CPU-priority setting.
+            services.AddScoped<IWhisperService, WhisperService>();
             services.AddScoped<IAudioSampleExtractor, AudioSampleExtractor>();
             services.AddScoped<IIdentityVerifier, DeterministicIdentityVerifier>();
             // Service to accept client-pushed download updates and maintain recent-push cache

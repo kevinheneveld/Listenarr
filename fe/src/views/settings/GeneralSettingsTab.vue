@@ -57,7 +57,10 @@
           @update:apiKey="(val) => emit('update:apiKey', val)"
         ></AuthenticationSection>
 
-        <LibraryMaintenanceSection />
+        <LibraryMaintenanceSection
+          :settings="localSettings"
+          @update:settings="(val) => Object.assign(localSettings, val)"
+        />
       </div>
       <!-- settings-form -->
     </div>

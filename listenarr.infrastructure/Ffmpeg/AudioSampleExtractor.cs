@@ -32,15 +32,18 @@ namespace Listenarr.Infrastructure.Ffmpeg
 
         private readonly IFfmpegService _ffmpegService;
         private readonly IProcessRunner _processRunner;
+        private readonly IConfigurationService _configurationService;
         private readonly ILogger<AudioSampleExtractor> _logger;
 
         public AudioSampleExtractor(
             IFfmpegService ffmpegService,
             IProcessRunner processRunner,
+            IConfigurationService configurationService,
             ILogger<AudioSampleExtractor> logger)
         {
             _ffmpegService = ffmpegService;
             _processRunner = processRunner;
+            _configurationService = configurationService;
             _logger = logger;
         }
 
@@ -56,23 +59,30 @@ namespace Listenarr.Infrastructure.Ffmpeg
             var tempDir = Path.Join(Path.GetTempPath(), "listenarr-verification");
             Directory.CreateDirectory(tempDir);
 
+            // Same low-priority treatment as the whisper pass: clipping is short,
+            // but a library walk runs it back-to-back for hours.
+            var settings = await _configurationService.GetApplicationSettingsAsync();
+            var priorityClass = (settings?.VerificationLowCpuPriority ?? true)
+                ? ProcessPriorityClass.Idle
+                : (ProcessPriorityClass?)null;
+
             string? opening = null, closing = null;
 
             if (strategy.OpeningSeconds > 0 && File.Exists(firstFilePath))
             {
-                opening = await ClipAsync(ffmpegPath, firstFilePath, tempDir, fromEnd: false, strategy.OpeningSeconds, cancellationToken);
+                opening = await ClipAsync(ffmpegPath, firstFilePath, tempDir, fromEnd: false, strategy.OpeningSeconds, priorityClass, cancellationToken);
             }
 
             var closingSource = lastFilePath ?? firstFilePath;
             if (strategy.ClosingSeconds > 0 && File.Exists(closingSource))
             {
-                closing = await ClipAsync(ffmpegPath, closingSource, tempDir, fromEnd: true, strategy.ClosingSeconds, cancellationToken);
+                closing = await ClipAsync(ffmpegPath, closingSource, tempDir, fromEnd: true, strategy.ClosingSeconds, priorityClass, cancellationToken);
             }
 
             return new AudioSampleSet { OpeningClipPath = opening, ClosingClipPath = closing };
         }
 
-        private async Task<string?> ClipAsync(string ffmpegPath, string sourcePath, string tempDir, bool fromEnd, int seconds, CancellationToken ct)
+        private async Task<string?> ClipAsync(string ffmpegPath, string sourcePath, string tempDir, bool fromEnd, int seconds, ProcessPriorityClass? priorityClass, CancellationToken ct)
         {
             var clipPath = Path.Join(tempDir, $"{Guid.NewGuid():N}.wav");
             try
@@ -113,7 +123,7 @@ namespace Listenarr.Infrastructure.Ffmpeg
                 startInfo.ArgumentList.Add("-y");
                 startInfo.ArgumentList.Add(clipPath);
 
-                var result = await _processRunner.RunAsync(startInfo, ClipTimeoutMs, ct);
+                var result = await _processRunner.RunAsync(startInfo, ClipTimeoutMs, ct, priorityClass);
                 if (result.ExitCode != 0 || result.TimedOut || !File.Exists(clipPath))
                 {
                     _logger.LogWarning(

@@ -113,6 +113,12 @@ namespace Listenarr.Domain.Models.Configurations
         public int VerificationOpeningSeconds { get; set; } = 90;
         public int VerificationClosingSeconds { get; set; } = 30;
 
+        // Run verification subprocesses (whisper.cpp, ffmpeg clipping) at the lowest
+        // OS scheduling priority (nice 19 on Linux). A library walk then keeps full
+        // speed on an idle host but immediately yields CPU to anything else that
+        // wants it, instead of competing at normal priority for hours.
+        public bool VerificationLowCpuPriority { get; set; } = true;
+
         // Failed download handling settings
         public bool FailedDownloadHandlingEnabled { get; set; } = true;
         public bool FailedDownloadAutoSearch { get; set; } = false;
