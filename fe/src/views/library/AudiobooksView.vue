@@ -590,6 +590,21 @@
                   @load="markImageLoaded(getBookImageKey(audiobook))"
                   @error="handleLazyImageError(getBookImageKey(audiobook), $event)"
                 />
+                <!-- Persistent verification flag (ADR-0001): flagged/rejected books
+                     must be recognizable at a glance — especially under the
+                     "Needs Review" filter — not only via the hover overlay. -->
+                <div
+                  v-if="
+                    audiobook.verificationStatus === 'agentFlagged' ||
+                    audiobook.verificationStatus === 'rejected'
+                  "
+                  class="verification-poster-flag"
+                  :class="verificationClass(audiobook.verificationStatus)"
+                  :title="`Audio verification: ${verificationLabel(audiobook.verificationStatus)}`"
+                >
+                  <PhWarningCircle />
+                  {{ verificationLabel(audiobook.verificationStatus) }}
+                </div>
                 <div class="status-overlay">
                   <div v-if="!showItemDetails" class="audiobook-title">
                     {{ safeText(audiobook.title) }}
@@ -610,6 +625,14 @@
                   <div class="monitored-badge" :class="{ unmonitored: !audiobook.monitored }">
                     <component :is="audiobook.monitored ? PhEye : PhEyeSlash" />
                     {{ audiobook.monitored ? 'Monitored' : 'Unmonitored' }}
+                  </div>
+                  <div
+                    v-if="audiobook.verificationStatus && audiobook.verificationStatus !== 'unverified'"
+                    class="verification-badge"
+                    :class="verificationClass(audiobook.verificationStatus)"
+                    :title="`Audio verification: ${verificationLabel(audiobook.verificationStatus)}`"
+                  >
+                    {{ verificationLabel(audiobook.verificationStatus) }}
                   </div>
                 </div>
                 <div class="action-buttons">
@@ -4635,6 +4658,37 @@ defineExpose({
   background-color: rgba(231, 76, 60, 0.12);
   border-color: rgba(231, 76, 60, 0.18);
   color: #e74c3c;
+}
+
+/* Persistent corner flag on grid posters for books needing attention.
+   Solid backgrounds (unlike the translucent badges) so the chip stays
+   legible over arbitrary cover art. */
+.verification-poster-flag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  /* Above the hover status-overlay (101) so the flag never dims; top-left
+     corner, so no spatial overlap with the top-right action buttons. */
+  z-index: 102;
+}
+
+.verification-poster-flag.verification-flagged {
+  background-color: rgba(243, 156, 18, 0.9);
+  color: #1a1a1a;
+}
+
+.verification-poster-flag.verification-rejected {
+  background-color: rgba(231, 76, 60, 0.92);
+  color: #fff;
 }
 
 .quality-profile-badge i {
