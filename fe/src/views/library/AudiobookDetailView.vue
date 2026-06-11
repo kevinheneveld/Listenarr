@@ -890,6 +890,7 @@ import {
   PhDiscordLogo,
   PhPlay,
   PhShieldCheck,
+  PhWaveform,
   PhShieldWarning,
   PhShieldSlash,
   PhEarSlash,
@@ -1170,7 +1171,9 @@ const topActions = computed<DetailTopAction[]>(() => [
     label: verifyingAudio.value ? 'Verifying Audio...' : 'Verify Audio',
     title: 'Transcribe the audio and check it matches this metadata',
     ariaLabel: 'Verify Audio',
-    icon: verifyingAudio.value ? PhSpinner : PhShieldCheck,
+    // Waveform, not a shield: this action *transcribes* — the shields are the
+    // verdict states (Mark Verified button, status pill, grid cover marker).
+    icon: verifyingAudio.value ? PhSpinner : PhWaveform,
     iconClass: verifyingAudio.value ? 'ph-spin' : undefined,
     disabled:
       verifyingAudio.value ||
