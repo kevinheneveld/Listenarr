@@ -106,43 +106,47 @@ namespace Listenarr.Infrastructure.Whisper
                     ? ProcessPriorityClass.Idle
                     : (ProcessPriorityClass?)null;
 
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = _binaryPath,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                startInfo.ArgumentList.Add("-m");
-                startInfo.ArgumentList.Add(_modelPath);
-                startInfo.ArgumentList.Add("-f");
-                startInfo.ArgumentList.Add(wavPath);
-                // Deliberately NOT --no-timestamps: timestamp tokens anchor the
-                // decoder, and without them base.en demonstrably skips
-                // music-overlaid segments — on a live book the no-timestamps
-                // decode dropped the entire spoken credits (0:09–0:30) while the
-                // timestamped decode of the same clip transcribed them verbatim.
-                // The segment timestamps are stripped from the output instead.
-                startInfo.ArgumentList.Add("--no-prints");
-                startInfo.ArgumentList.Add("--language");
-                startInfo.ArgumentList.Add("en");
+                var stdout = await RunWhisperCliAsync(wavPath, offsetMs: null, durationMs: null, priorityClass, cancellationToken);
+                if (stdout == null) return null;
 
-                var result = await _processRunner.RunAsync(startInfo, TranscribeTimeoutMs, cancellationToken, priorityClass);
-                if (result.TimedOut)
+                var segments = ParseSegments(stdout);
+                if (segments.Count == 0)
                 {
-                    _logger.LogWarning("whisper transcription timed out for {Path}", wavPath);
-                    return null;
-                }
-                if (result.ExitCode != 0)
-                {
-                    _logger.LogWarning(
-                        "whisper exited with code {Code} for {Path}: {Stderr}",
-                        result.ExitCode, wavPath, Truncate(result.Stderr, 500));
-                    return null;
+                    // No timestamped lines (unexpected output shape) — fall back to
+                    // the plain collapse.
+                    return NormalizeTranscriptOutput(stdout);
                 }
 
-                return NormalizeTranscriptOutput(result.Stdout);
+                // Gap re-probe: whisper decodes in 30s chunks, and a chunk whose
+                // remainder is music-overlaid speech can be skipped wholesale —
+                // live case: 0:02–0:30 (the entire spoken credits) came back as
+                // dead air while the SAME span transcribed perfectly in isolation.
+                // For every silent hole big enough to hide a credits block, re-run
+                // the decoder on just that span (whisper-cli --offset-t/--duration)
+                // and splice the recovered text in.
+                var clipSeconds = TryGetWavDurationSeconds(wavPath) ?? segments[^1].End;
+                var gaps = FindSilentGaps(segments, clipSeconds);
+                foreach (var gap in gaps.Take(MaxGapProbes))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var probeStdout = await RunWhisperCliAsync(
+                        wavPath,
+                        offsetMs: (int)(gap.Start * 1000),
+                        durationMs: (int)((gap.End - gap.Start) * 1000),
+                        priorityClass,
+                        cancellationToken);
+                    var probeText = NormalizeTranscriptOutput(probeStdout);
+                    if (!string.IsNullOrWhiteSpace(probeText))
+                    {
+                        _logger.LogInformation(
+                            "whisper gap re-probe recovered {Chars} chars from {Start:0.0}s–{End:0.0}s of {Path}",
+                            probeText.Length, gap.Start, gap.End, wavPath);
+                        segments.Add(new TranscriptSegment(gap.Start, gap.End, probeText));
+                    }
+                }
+
+                var transcript = string.Join(" ", segments.OrderBy(s => s.Start).Select(s => s.Text)).Trim();
+                return transcript.Length == 0 ? null : transcript;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -155,10 +159,147 @@ namespace Listenarr.Infrastructure.Whisper
             }
         }
 
+        private async Task<string?> RunWhisperCliAsync(
+            string wavPath, int? offsetMs, int? durationMs, ProcessPriorityClass? priorityClass, CancellationToken cancellationToken)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = _binaryPath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-m");
+            startInfo.ArgumentList.Add(_modelPath);
+            startInfo.ArgumentList.Add("-f");
+            startInfo.ArgumentList.Add(wavPath);
+            // Deliberately NOT --no-timestamps: timestamp tokens anchor the
+            // decoder, and without them base.en demonstrably skips
+            // music-overlaid segments — on a live book the no-timestamps
+            // decode dropped the entire spoken credits (0:09–0:30) while the
+            // timestamped decode of the same clip transcribed them verbatim.
+            // The segment timestamps are also what the gap re-probe needs.
+            startInfo.ArgumentList.Add("--no-prints");
+            startInfo.ArgumentList.Add("--language");
+            startInfo.ArgumentList.Add("en");
+            if (offsetMs is > 0)
+            {
+                startInfo.ArgumentList.Add("--offset-t");
+                startInfo.ArgumentList.Add(offsetMs.Value.ToString());
+            }
+            if (durationMs is > 0)
+            {
+                startInfo.ArgumentList.Add("--duration");
+                startInfo.ArgumentList.Add(durationMs.Value.ToString());
+            }
+
+            var result = await _processRunner.RunAsync(startInfo, TranscribeTimeoutMs, cancellationToken, priorityClass);
+            if (result.TimedOut)
+            {
+                _logger.LogWarning("whisper transcription timed out for {Path}", wavPath);
+                return null;
+            }
+            if (result.ExitCode != 0)
+            {
+                _logger.LogWarning(
+                    "whisper exited with code {Code} for {Path}: {Stderr}",
+                    result.ExitCode, wavPath, Truncate(result.Stderr, 500));
+                return null;
+            }
+            return result.Stdout;
+        }
+
+        /// <summary>
+        /// Duration of a canonical verification clip (16 kHz mono s16le WAV from
+        /// the sample extractor), derived from the file size. Null when the file
+        /// doesn't look like such a WAV.
+        /// </summary>
+        private static double? TryGetWavDurationSeconds(string wavPath)
+        {
+            try
+            {
+                var length = new FileInfo(wavPath).Length;
+                const int headerBytes = 44;
+                const double bytesPerSecond = 16000 * 2; // 16 kHz, mono, 16-bit
+                if (length <= headerBytes) return null;
+                return (length - headerBytes) / bytesPerSecond;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                return null;
+            }
+        }
+
+        // Bound the extra decode work: one probe per gap, few gaps expected.
+        private const int MaxGapProbes = 3;
+
+        // Smaller holes are normal narration pauses / scene breaks; a credits
+        // block needs roughly 10–30s, so 8s catches them without re-probing
+        // every dramatic pause.
+        private const double MinGapSeconds = 8.0;
+
+        public sealed record TranscriptSegment(double Start, double End, string Text);
+
         // "[00:00:09.260 --> 00:00:17.160]   by Sarah J. Mass, ..." → segment text.
         private static readonly Regex SegmentTimestampRegex = new(
             @"^\s*\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*",
             RegexOptions.Compiled);
+
+        private static readonly Regex SegmentLineRegex = new(
+            @"^\s*\[(?<sh>\d{2}):(?<sm>\d{2}):(?<ss>\d{2})\.(?<sms>\d{3})\s*-->\s*(?<eh>\d{2}):(?<em>\d{2}):(?<es>\d{2})\.(?<ems>\d{3})\]\s*(?<text>.*\S)\s*$",
+            RegexOptions.Compiled);
+
+        /// <summary>Parses whisper-cli timestamped lines. Public + pure for unit testing.</summary>
+        public static List<TranscriptSegment> ParseSegments(string? stdout)
+        {
+            var segments = new List<TranscriptSegment>();
+            if (string.IsNullOrWhiteSpace(stdout)) return segments;
+
+            foreach (var line in stdout.Split('\n'))
+            {
+                var match = SegmentLineRegex.Match(line);
+                if (!match.Success) continue;
+                segments.Add(new TranscriptSegment(
+                    ToSeconds(match, "sh", "sm", "ss", "sms"),
+                    ToSeconds(match, "eh", "em", "es", "ems"),
+                    match.Groups["text"].Value.Trim()));
+            }
+            return segments;
+
+            static double ToSeconds(Match m, string h, string min, string s, string ms) =>
+                int.Parse(m.Groups[h].Value) * 3600
+                + int.Parse(m.Groups[min].Value) * 60
+                + int.Parse(m.Groups[s].Value)
+                + int.Parse(m.Groups[ms].Value) / 1000.0;
+        }
+
+        /// <summary>
+        /// Silent holes (leading, internal, trailing) of at least
+        /// <see cref="MinGapSeconds"/> in a transcribed clip — the spans the
+        /// decoder produced nothing for. Public + pure for unit testing.
+        /// </summary>
+        public static List<(double Start, double End)> FindSilentGaps(
+            IReadOnlyList<TranscriptSegment> segments, double clipDurationSeconds)
+        {
+            var gaps = new List<(double Start, double End)>();
+            if (segments.Count == 0) return gaps;
+
+            var cursor = 0.0;
+            foreach (var segment in segments.OrderBy(s => s.Start))
+            {
+                if (segment.Start - cursor >= MinGapSeconds)
+                {
+                    gaps.Add((cursor, segment.Start));
+                }
+                cursor = Math.Max(cursor, segment.End);
+            }
+            if (clipDurationSeconds - cursor >= MinGapSeconds)
+            {
+                gaps.Add((cursor, clipDurationSeconds));
+            }
+            return gaps;
+        }
 
         /// <summary>
         /// Collapses whisper-cli's timestamped segment lines into the plain

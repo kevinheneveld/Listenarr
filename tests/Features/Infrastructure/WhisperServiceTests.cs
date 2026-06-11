@@ -55,5 +55,59 @@ namespace Listenarr.Tests.Features.Infrastructure
         {
             Assert.Null(WhisperService.NormalizeTranscriptOutput(stdout));
         }
+
+        [Fact]
+        public void ParseSegments_ReadsTimestampsAndText()
+        {
+            var stdout =
+                "[00:00:00.000 --> 00:00:02.000]   This is Audible.\n" +
+                "[00:00:30.000 --> 00:00:35.500]   Daniel glanced over his shoulder.\n";
+
+            var segments = WhisperService.ParseSegments(stdout);
+
+            Assert.Equal(2, segments.Count);
+            Assert.Equal(0.0, segments[0].Start);
+            Assert.Equal(2.0, segments[0].End);
+            Assert.Equal("This is Audible.", segments[0].Text);
+            Assert.Equal(30.0, segments[1].Start);
+            Assert.Equal(35.5, segments[1].End);
+        }
+
+        [Fact]
+        public void FindSilentGaps_DetectsTheCreditsHole()
+        {
+            // The live Artifact Enigma shape: ident at 0–2s, then nothing until
+            // the story resumes at the 30s chunk boundary — the 2–30s hole is
+            // exactly where the music-overlaid credits live.
+            var segments = new List<WhisperService.TranscriptSegment>
+            {
+                new(0.0, 2.0, "This is Audible."),
+                new(30.0, 35.0, "Daniel glanced over his shoulder."),
+                new(35.0, 41.0, "A tall leggy blonde gave him a lingering glance."),
+            };
+
+            var gaps = WhisperService.FindSilentGaps(segments, clipDurationSeconds: 90.0);
+
+            Assert.Equal(2, gaps.Count);
+            Assert.Equal((2.0, 30.0), gaps[0]);
+            // Trailing hole (41–90s) also qualifies — closing-window credits sit
+            // at the very end of a clip.
+            Assert.Equal((41.0, 90.0), gaps[1]);
+        }
+
+        [Fact]
+        public void FindSilentGaps_IgnoresOrdinaryNarrationPauses()
+        {
+            var segments = new List<WhisperService.TranscriptSegment>
+            {
+                new(0.0, 10.0, "a"),
+                new(14.0, 25.0, "b"), // 4s pause: scene break, not a credits hole
+                new(27.0, 60.0, "c"),
+            };
+
+            var gaps = WhisperService.FindSilentGaps(segments, clipDurationSeconds: 62.0);
+
+            Assert.Empty(gaps);
+        }
     }
 }
