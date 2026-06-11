@@ -712,6 +712,15 @@ export interface VerificationFieldMatch {
   matchedText?: string | null
 }
 
+// What the spoken credits CLAIM the book is, extracted from the opening
+// transcript — seeds the "find correct match" relabel flow on flagged books.
+export interface SpokenCredits {
+  title?: string | null
+  author?: string | null
+  narrator?: string | null
+  publisher?: string | null
+}
+
 export interface VerificationDetail {
   outcome: VerificationOutcome
   confidence: number
@@ -720,6 +729,7 @@ export interface VerificationDetail {
   authorMatch?: VerificationFieldMatch | null
   narratorMatch?: VerificationFieldMatch | null
   publisherMatch?: VerificationFieldMatch | null
+  heardCredits?: SpokenCredits | null
 }
 
 export interface Audiobook {

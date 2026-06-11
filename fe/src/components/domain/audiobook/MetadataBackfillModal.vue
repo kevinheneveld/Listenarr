@@ -58,6 +58,11 @@ interface Props {
   visible: boolean
   audiobook: Audiobook | null
   region?: string
+  // When set, open directly in title/author candidate search seeded with these
+  // terms instead of comparing against the book's own ASIN. Used by the
+  // verification "find correct match" flow, where the record's current ASIN is
+  // believed to be the WRONG book and the seed is what the audio actually says.
+  initialSearch?: { title?: string | null; author?: string | null } | null
 }
 
 interface Emits {
@@ -278,6 +283,16 @@ async function start() {
   // We don't await it: the narrator hint and ranking become available as
   // soon as the request resolves, but the search shouldn't block on it.
   void loadEmbeddedMetadata()
+
+  // Relabel flow: search by what the audio claims, never by the record's own
+  // ASIN — that ASIN is exactly what's suspected to be wrong.
+  const seed = props.initialSearch
+  if (seed && (seed.title || seed.author)) {
+    overrideTitle.value = (seed.title || '').trim()
+    overrideAuthor.value = (seed.author || '').trim()
+    await searchCandidates()
+    return
+  }
 
   const asin = (props.audiobook.asin || '').trim()
   if (asin) {

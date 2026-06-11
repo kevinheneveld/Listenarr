@@ -372,6 +372,39 @@
                 </div>
               </div>
             </div>
+            <div class="detail-row detail-row-stacked" v-if="heardCredits">
+              <span class="label">The audio says:</span>
+              <div class="value verification-fields">
+                <div v-if="heardCredits.title" class="verification-field-row">
+                  <span class="verification-field-name">Title</span>
+                  <span class="verification-field-claim">"{{ heardCredits.title }}"</span>
+                </div>
+                <div v-if="heardCredits.author" class="verification-field-row">
+                  <span class="verification-field-name">Author</span>
+                  <span class="verification-field-claim">"{{ heardCredits.author }}"</span>
+                </div>
+                <div v-if="heardCredits.narrator" class="verification-field-row">
+                  <span class="verification-field-name">Narrator</span>
+                  <span class="verification-field-claim">"{{ heardCredits.narrator }}"</span>
+                </div>
+                <div v-if="heardCredits.publisher" class="verification-field-row">
+                  <span class="verification-field-name">Publisher</span>
+                  <span class="verification-field-claim">"{{ heardCredits.publisher }}"</span>
+                </div>
+              </div>
+              <button
+                v-if="
+                  audiobook.verificationStatus === 'agentFlagged' &&
+                  (heardCredits.title || heardCredits.author)
+                "
+                type="button"
+                class="show-more-btn relabel-btn"
+                title="Search the catalog for the book the audio actually names, and relabel this record to it"
+                @click="showRelabelModal = true"
+              >
+                Find correct match…
+              </button>
+            </div>
             <div class="detail-row detail-row-stacked" v-if="audiobook.verificationTranscript">
               <span class="label">
                 Transcript
@@ -799,6 +832,16 @@
     @close="closeFilePreview"
   />
 
+  <!-- Verification "find correct match" relabel flow: candidate search seeded
+       with what the spoken credits claim the book is, not the (suspect) record. -->
+  <MetadataBackfillModal
+    :visible="showRelabelModal"
+    :audiobook="audiobook"
+    :initialSearch="relabelSeed"
+    @close="showRelabelModal = false"
+    @applied="onRelabelApplied"
+  />
+
   <RenameFileModal
     :visible="showRenameFileModal"
     :audiobook-id="audiobook?.id ?? null"
@@ -897,6 +940,7 @@ import {
 } from '@phosphor-icons/vue'
 import { verificationLabel, verificationClass, parseVerificationDetail } from '@/utils/verificationStatus'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
+import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -956,6 +1000,22 @@ const showTranscript = ref(false)
 const verificationDetail = computed(() =>
   audiobook.value ? parseVerificationDetail(audiobook.value) : null,
 )
+
+// What the spoken credits claim the book is; drives the "find correct match"
+// relabel flow when the agent flagged the book.
+const heardCredits = computed(() => verificationDetail.value?.heardCredits ?? null)
+const showRelabelModal = ref(false)
+const relabelSeed = computed(() =>
+  heardCredits.value
+    ? { title: heardCredits.value.title, author: heardCredits.value.author }
+    : null,
+)
+
+function onRelabelApplied() {
+  showRelabelModal.value = false
+  // The relabel rewrote metadata (title/ASIN/etc.) — reload the whole record.
+  void loadAudiobook()
+}
 
 // Per-field rows for the Audio Verification card, in matcher-weight order.
 const verificationFieldScores = computed(() => {
@@ -2900,6 +2960,17 @@ function formatDate(dateString?: string): string {
   color: #8a93a0;
   font-style: italic;
   overflow-wrap: anywhere;
+}
+
+.verification-field-claim {
+  color: #d8dee6;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.relabel-btn {
+  margin-top: 0.6rem;
+  align-self: flex-start;
 }
 
 .transcript-toggle {

@@ -29,6 +29,24 @@ namespace Listenarr.Domain.Models
     public record VerificationFieldMatch(double Score, string? MatchedText);
 
     /// <summary>
+    /// What the spoken credits CLAIM the book is — extracted from the opening
+    /// transcript independently of whether it matches the stored metadata
+    /// (ADR-0001). Drives the "relabel to the right book" remediation flow on
+    /// flagged books. Null fields were not confidently extracted; extraction is
+    /// deliberately conservative (a missing suggestion is better than a wrong one).
+    /// </summary>
+    public record SpokenCredits
+    {
+        public string? Title { get; init; }
+        public string? Author { get; init; }
+        public string? Narrator { get; init; }
+        public string? Publisher { get; init; }
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public bool IsEmpty => Title == null && Author == null && Narrator == null && Publisher == null;
+    }
+
+    /// <summary>
     /// Result of an identity-verification pass over one audiobook (ADR-0001).
     /// Per-field results are kept separate (not folded into one confidence blob)
     /// so the triage UI can show which field diverged and thresholds can be
@@ -52,5 +70,11 @@ namespace Listenarr.Domain.Models
 
         /// <summary>What STT heard (sampled windows), persisted for audit.</summary>
         public string? Transcript { get; init; }
+
+        /// <summary>
+        /// What the spoken credits claim the book is, when extractable. Null when
+        /// the transcript carried no recognizable credit announcement.
+        /// </summary>
+        public SpokenCredits? HeardCredits { get; init; }
     }
 }

@@ -108,6 +108,11 @@ namespace Listenarr.Application.Audiobooks.Verification
                 return Inconclusive("transcription failed for every sampled window");
             }
 
+            // Independently of the match verdict, extract what the credits CLAIM
+            // the book is — on a flagged book this seeds the "find the correct
+            // match" relabel flow with the actual title/author the audio names.
+            verdict = verdict with { HeardCredits = SpokenCreditsExtractor.Extract(openingText ?? closingText) };
+
             _logger.LogInformation(
                 "Verified audiobook {Id}: {Outcome} (confidence {Confidence:0.00}, title {Title:0.00}, author {Author:0.00})",
                 audiobook.Id, verdict.Outcome, verdict.Confidence, verdict.TitleMatch?.Score ?? -1, verdict.AuthorMatch?.Score ?? -1);
