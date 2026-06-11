@@ -21,6 +21,7 @@ using Listenarr.Application.Interfaces;
 using Listenarr.Application.Interfaces.Repositories;
 using Listenarr.Application.Search;
 using Listenarr.Domain.Models;
+using Listenarr.Domain.Models.Enumerations;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -73,6 +74,41 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.True(book.Monitored);
             repo.Verify(r => r.UpdateAsync(It.Is<Audiobook>(a => a.Id == 7 && a.Monitored)), Times.Once);
             invoker.Verify(i => i.SearchAudiobookNowAsync(7, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task RejectNotAudiobook_ResetsVerificationState()
+        {
+            // The verdict (and transcript) described the audio this action deletes;
+            // an empty record must not keep wearing a stale "Needs review" badge.
+            var book = new Audiobook
+            {
+                Id = 11,
+                Title = "Aftermath 5",
+                Monitored = true,
+                VerificationStatus = VerificationStatus.AgentFlagged,
+                VerificationConfidence = 0.95,
+                VerifiedAt = DateTime.UtcNow,
+                VerifiedBy = "agent:whisper-base.en",
+                VerificationMethod = "deterministic:whisper-base.en",
+                VerificationTranscript = "[opening] A long time ago, in a galaxy far, far away...",
+                VerificationDetailJson = "{\"outcome\":\"mismatch\"}"
+            };
+            var files = new List<AudiobookFile> { new() { Id = 300, AudiobookId = 11, Path = "/x/wrong.mp3" } };
+
+            var (controller, repo, _, _) = CreateController(audiobookId: 11, audiobook: book, files: files);
+
+            var result = await controller.RejectNotAudiobook(id: 11);
+
+            Assert.IsType<OkObjectResult>(result);
+            Assert.Equal(VerificationStatus.Unverified, book.VerificationStatus);
+            Assert.Null(book.VerificationConfidence);
+            Assert.Null(book.VerifiedAt);
+            Assert.Null(book.VerifiedBy);
+            Assert.Null(book.VerificationMethod);
+            Assert.Null(book.VerificationTranscript);
+            Assert.Null(book.VerificationDetailJson);
+            repo.Verify(r => r.UpdateAsync(It.Is<Audiobook>(a => a.Id == 11)), Times.Once);
         }
 
         [Fact]

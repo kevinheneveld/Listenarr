@@ -20,6 +20,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Listenarr.Domain.Models;
+using Listenarr.Domain.Models.Enumerations;
 using System.Text.Json;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -1695,11 +1696,24 @@ namespace Listenarr.Api.Controllers
                 }
 
                 // Keep the book tracked so the re-search can fill it with the correct release.
-                if (!audiobook.Monitored)
-                {
-                    audiobook.Monitored = true;
-                    await _repo.UpdateAsync(audiobook);
-                }
+                audiobook.Monitored = true;
+
+                // Any verification verdict described the audio that was just deleted —
+                // without this reset the empty record keeps wearing a stale "Needs
+                // review" badge and a transcript of content that no longer exists
+                // (live case: a Star Wars audio drama flagged at 02:09, removed via
+                // this action at 05:42, verdict still displayed). Unconditional:
+                // this action is itself the human ruling that the content was wrong.
+                // The replacement import re-verifies via verify-on-import.
+                audiobook.VerificationStatus = VerificationStatus.Unverified;
+                audiobook.VerificationConfidence = null;
+                audiobook.VerifiedAt = null;
+                audiobook.VerifiedBy = null;
+                audiobook.VerificationMethod = null;
+                audiobook.VerificationTranscript = null;
+                audiobook.VerificationDetailJson = null;
+
+                await _repo.UpdateAsync(audiobook);
 
                 try
                 {
