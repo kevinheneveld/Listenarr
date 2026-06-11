@@ -118,7 +118,12 @@ namespace Listenarr.Infrastructure.Whisper
                 startInfo.ArgumentList.Add(_modelPath);
                 startInfo.ArgumentList.Add("-f");
                 startInfo.ArgumentList.Add(wavPath);
-                startInfo.ArgumentList.Add("--no-timestamps");
+                // Deliberately NOT --no-timestamps: timestamp tokens anchor the
+                // decoder, and without them base.en demonstrably skips
+                // music-overlaid segments — on a live book the no-timestamps
+                // decode dropped the entire spoken credits (0:09–0:30) while the
+                // timestamped decode of the same clip transcribed them verbatim.
+                // The segment timestamps are stripped from the output instead.
                 startInfo.ArgumentList.Add("--no-prints");
                 startInfo.ArgumentList.Add("--language");
                 startInfo.ArgumentList.Add("en");
@@ -137,8 +142,7 @@ namespace Listenarr.Infrastructure.Whisper
                     return null;
                 }
 
-                var transcript = result.Stdout?.Trim();
-                return string.IsNullOrWhiteSpace(transcript) ? null : transcript;
+                return NormalizeTranscriptOutput(result.Stdout);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -149,6 +153,28 @@ namespace Listenarr.Infrastructure.Whisper
                 _logger.LogWarning(ex, "whisper transcription failed for {Path}", wavPath);
                 return null;
             }
+        }
+
+        // "[00:00:09.260 --> 00:00:17.160]   by Sarah J. Mass, ..." → segment text.
+        private static readonly Regex SegmentTimestampRegex = new(
+            @"^\s*\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*",
+            RegexOptions.Compiled);
+
+        /// <summary>
+        /// Collapses whisper-cli's timestamped segment lines into the plain
+        /// transcript the matcher consumes. Public + pure for unit testing.
+        /// </summary>
+        public static string? NormalizeTranscriptOutput(string? stdout)
+        {
+            if (string.IsNullOrWhiteSpace(stdout)) return null;
+
+            var segments = stdout
+                .Split('\n')
+                .Select(line => SegmentTimestampRegex.Replace(line, string.Empty).Trim())
+                .Where(line => line.Length > 0);
+
+            var transcript = string.Join(" ", segments).Trim();
+            return transcript.Length == 0 ? null : transcript;
         }
 
         private static string Truncate(string? text, int max) =>
