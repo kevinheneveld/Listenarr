@@ -1774,7 +1774,7 @@ namespace Listenarr.Api.Controllers
                         AudiobookId = audiobook.Id,
                         AudiobookTitle = audiobook.Title ?? "Unknown Title",
                         EventType = "Rejected",
-                        Message = $"Marked not an audiobook: removed {filesRemoved} file(s) and started a new search.",
+                        Message = $"Marked wrong content: removed {filesRemoved} file(s) and started a new search.",
                         Source = "not-audiobook",
                         Timestamp = DateTime.UtcNow
                     });

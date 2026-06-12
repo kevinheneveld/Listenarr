@@ -160,6 +160,15 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             return true;
         }
 
+        public async Task SetLastSearchTimeAsync(int audiobookId, DateTime lastSearchTimeUtc)
+        {
+            // Targeted single-column write: must not load + re-save the entity,
+            // or a stale snapshot would clobber concurrent changes to the row.
+            await _db.Audiobooks
+                .Where(a => a.Id == audiobookId)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(a => a.LastSearchTime, lastSearchTimeUtc));
+        }
+
         public async Task<bool> DeleteAsync(Audiobook audiobook)
         {
             _db.Audiobooks.Remove(audiobook);

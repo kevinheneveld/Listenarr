@@ -153,9 +153,13 @@ namespace Listenarr.Application.Search
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
 
-                    // Update last search time
+                    // Update last search time — TARGETED write only. This loop walks
+                    // a snapshot loaded at cycle start, sometimes for a long time;
+                    // saving the whole stale entity here clobbered every concurrent
+                    // change to the row (live case: a verification reset reverted
+                    // minutes after the user made it).
                     audiobook.LastSearchTime = DateTime.UtcNow;
-                    await audiobookRepository.UpdateAsync(audiobook);
+                    await audiobookRepository.SetLastSearchTimeAsync(audiobook.Id, audiobook.LastSearchTime.Value);
 
                     _logger.LogInformation("Processed audiobook '{Title}' - queued {QueuedCount} downloads",
                         audiobook.Title, downloadsQueuedForBook);
@@ -216,8 +220,10 @@ namespace Listenarr.Application.Search
                     // only download is ImportBlocked (e.g. a dupe NZBGet rejected).
                     suppressIfImportBlocked: false);
 
+                // Targeted write for the same reason as the cycle loop: never
+                // re-save the whole entity just to bump the timestamp.
                 audiobook.LastSearchTime = DateTime.UtcNow;
-                await audiobookRepository.UpdateAsync(audiobook);
+                await audiobookRepository.SetLastSearchTimeAsync(audiobook.Id, audiobook.LastSearchTime.Value);
 
                 return new AutomaticSearchBookResult
                 {

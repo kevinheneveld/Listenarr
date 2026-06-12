@@ -26,13 +26,13 @@ async function execute() {
       res.searchQueued > 0
         ? `Started a search and queued ${res.searchQueued} download(s).`
         : 'Started a new search — nothing better grabbed yet, so the book is back to wanted.'
-    toast.success('Marked not an audiobook', `Removed ${res.filesRemoved} file(s). ${searchMsg}`)
+    toast.success('Content replaced', `Removed ${res.filesRemoved} file(s). ${searchMsg}`)
     if (res.warnings && res.warnings.length > 0) {
       toast.warning('Some files could not be removed', res.warnings.join(' '))
     }
     emit('done', res.filesRemoved)
   } catch {
-    toast.error('Action failed', 'Could not mark this as not an audiobook.')
+    toast.error('Action failed', 'Could not remove the content for this book.')
   } finally {
     rejecting.value = false
   }
@@ -42,11 +42,11 @@ async function execute() {
 <template>
   <div class="not-audiobook-option">
     <div class="not-audiobook-text">
-      <span class="not-audiobook-title">This isn't an audiobook?</span>
+      <span class="not-audiobook-title">Not the right content?</span>
       <small
-        >Keep the entry but remove the wrong files (e.g. a music or other non-audiobook release
-        that matched the title) and search for a correct version instead of deleting the whole
-        book.</small
+        >Keep the entry but remove these files — wrong book, a non-audiobook release that matched
+        the title, or an incomplete copy — and search for a correct version instead of deleting
+        the whole book.</small
       >
     </div>
     <button
@@ -55,7 +55,7 @@ async function execute() {
       :disabled="rejecting || audiobookId == null"
       @click="execute"
     >
-      {{ rejecting ? 'Working…' : 'Not an audiobook — find a better match' }}
+      {{ rejecting ? 'Working…' : 'Wrong content — find a better copy' }}
     </button>
   </div>
 </template>

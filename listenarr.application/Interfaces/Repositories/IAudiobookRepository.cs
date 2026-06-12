@@ -54,6 +54,15 @@ namespace Listenarr.Application.Interfaces.Repositories
         Task<SeriesCacheEntry> UpsertCachedSeriesForSlugAsync(string slug, SeriesCacheEntry entry);
         Task<Audiobook> AddAsync(Audiobook audiobook);
         Task<bool> UpdateAsync(Audiobook audiobook);
+
+        /// <summary>
+        /// Stamp only <see cref="Audiobook.LastSearchTime"/> without touching any
+        /// other column. The automatic-search cycle iterates a snapshot loaded at
+        /// cycle start, sometimes for a long time — saving the whole stale entity
+        /// to bump the timestamp clobbered every concurrent change to the row
+        /// (live case: a verification reset reverted minutes after it was made).
+        /// </summary>
+        Task SetLastSearchTimeAsync(int audiobookId, DateTime lastSearchTimeUtc);
         Task<bool> DeleteAsync(Audiobook audiobook);
         Task<bool> DeleteByIdAsync(int id);
         Task<int> DeleteBulkAsync(List<int> ids);
