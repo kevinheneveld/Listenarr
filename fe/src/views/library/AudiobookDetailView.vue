@@ -522,6 +522,15 @@
         <div class="files-header">
           <h3>Files</h3>
           <div class="files-actions">
+            <button
+              v-if="(audiobook.files?.length ?? 0) > 1"
+              type="button"
+              class="show-more-btn split-collection-btn"
+              title="This record holds multiple books? Group its files and move each group to the record it belongs to"
+              @click="showSplitModal = true"
+            >
+              Split collection…
+            </button>
             <!-- Scan job status (updated via SignalR) -->
             <div v-if="scanJobId" class="scan-job-status">
               <div class="job-row">
@@ -882,6 +891,14 @@
     @done="onTransferDone"
   />
 
+  <!-- Multi-book record breakout: server-side clustering + per-group transfer. -->
+  <SplitCollectionModal
+    :visible="showSplitModal"
+    :audiobook="audiobook"
+    @close="showSplitModal = false"
+    @done="onSplitDone"
+  />
+
   <RenameFileModal
     :visible="showRenameFileModal"
     :audiobook-id="audiobook?.id ?? null"
@@ -982,6 +999,7 @@ import { verificationLabel, verificationClass, parseVerificationDetail } from '@
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
+import SplitCollectionModal from '@/components/domain/audiobook/SplitCollectionModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1079,6 +1097,13 @@ const showTransferModal = ref(false)
 function onTransferDone() {
   showTransferModal.value = false
   // Files left this record (and its verdict may have been reset) — reload.
+  void loadAudiobook()
+}
+
+const showSplitModal = ref(false)
+
+function onSplitDone() {
+  showSplitModal.value = false
   void loadAudiobook()
 }
 
@@ -3040,6 +3065,10 @@ function formatDate(dateString?: string): string {
 .relabel-btn {
   margin-top: 0.6rem;
   align-self: flex-start;
+}
+
+.split-collection-btn {
+  margin-top: 0;
 }
 
 .verification-remedies {

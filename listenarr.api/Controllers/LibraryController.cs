@@ -1855,6 +1855,60 @@ namespace Listenarr.Api.Controllers
             }
         }
 
+        /// <summary>
+        /// Preview for the "Split collection" workflow: cluster this record's
+        /// files into per-book groups (subdirectory first, then filename stem)
+        /// and suggest an existing library record for each group. Read-only —
+        /// applying is a sequence of file transfers driven by the client.
+        /// </summary>
+        [HttpGet("{id}/split/preview")]
+        public async Task<IActionResult> GetSplitPreview(int id)
+        {
+            var ct = HttpContext.RequestAborted;
+            var audiobook = await _repo.GetByIdAsync(id);
+            if (audiobook == null) return NotFound(new { message = "Audiobook not found" });
+
+            var files = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
+            var clusters = FileClustering.Cluster(files, audiobook.BasePath);
+
+            // Suggestion candidates: same-author records first (a collection
+            // dump is almost always one author's shelf), then the whole library
+            // as fallback. The suggester prefers the longest matching title, so
+            // ordering only matters for the fallback breadth.
+            var all = await _repo.GetAllAsync();
+            var sourceAuthors = new HashSet<string>(
+                audiobook.Authors ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+            var sameAuthor = new List<(int, string)>();
+            var others = new List<(int, string)>();
+            foreach (var candidate in all)
+            {
+                if (candidate.Id == id || string.IsNullOrWhiteSpace(candidate.Title)) continue;
+                var isSameAuthor = (candidate.Authors ?? new List<string>()).Any(sourceAuthors.Contains);
+                (isSameAuthor ? sameAuthor : others).Add((candidate.Id, candidate.Title!));
+            }
+            var titleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Title ?? string.Empty);
+
+            var response = clusters.Select(cluster =>
+            {
+                var suggested = SplitDestinationSuggester.Suggest(cluster.DisplayName, sameAuthor)
+                                ?? SplitDestinationSuggester.Suggest(cluster.DisplayName, others);
+                return new
+                {
+                    key = cluster.Key,
+                    displayName = cluster.DisplayName,
+                    fileIds = cluster.Files.Select(f => f.Id).ToList(),
+                    fileNames = cluster.Files
+                        .Select(f => Path.GetFileName(f.Path ?? string.Empty))
+                        .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                        .ToList(),
+                    suggestedTargetId = suggested,
+                    suggestedTargetTitle = suggested.HasValue && titleById.TryGetValue(suggested.Value, out var t) ? t : null
+                };
+            }).ToList();
+
+            return Ok(new { audiobookId = id, clusters = response });
+        }
+
         public record TransferFilesRequest(int TargetAudiobookId, List<int>? FileIds);
 
         /// <summary>
