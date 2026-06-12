@@ -38,7 +38,10 @@
             <div class="split-cluster-head">
               <span class="split-cluster-name">
                 <strong>{{ c.displayName }}</strong>
-                <small>{{ c.fileIds.length }} file{{ c.fileIds.length === 1 ? '' : 's' }}</small>
+                <small
+                  >{{ c.fileIds.length }} file{{ c.fileIds.length === 1 ? '' : 's' }}
+                  <template v-if="c.fileNames.length">· e.g. {{ c.fileNames[0] }}</template></small
+                >
               </span>
               <div class="split-actions">
                 <label><input type="radio" :name="`act-${c.key}`" value="none" v-model="c.action" /> Leave</label>

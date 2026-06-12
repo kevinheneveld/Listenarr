@@ -77,11 +77,12 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Fact]
-        public void Cluster_ParenthesizedTrackNumbers_FormOneCluster()
+        public void Cluster_TwoCopiesWithDifferentNumberingStyles_FormTwoClusters()
         {
-            // Live case: a record holding two copies of the same book — the
-            // "(N)" copy exploded into singleton groups before "(10)"-style
-            // markers were stripped.
+            // Live case: a record holding two complete copies of the same book.
+            // The "(N)" copy must not explode into singletons, AND must not
+            // merge with the "-NN" copy — the marker style is the identity that
+            // lets the user delete one redundant copy.
             var clusters = FileClustering.Cluster(new[]
             {
                 F(1, "The Rolling Stones (1).mp3"),
@@ -91,11 +92,10 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
                 F(5, "The Rolling Stones-01.mp3"),
             }, Base);
 
-            // Both copies share the same stem — they merge into ONE cluster,
-            // which is correct: same book, and the duplicate-copy decision
-            // belongs to the user (move vs delete), not to name clustering.
-            Assert.Single(clusters);
-            Assert.Equal(5, clusters[0].Files.Count);
+            Assert.Equal(2, clusters.Count);
+            Assert.Equal(3, clusters[0].Files.Count); // the "(N)" copy
+            Assert.Equal(2, clusters[1].Files.Count); // the "-NN" copy
+            Assert.All(clusters, c => Assert.Equal("The Rolling Stones", c.DisplayName));
         }
 
         [Theory]

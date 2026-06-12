@@ -62,8 +62,12 @@ namespace Listenarr.Application.Audiobooks
                 }
                 else
                 {
-                    var stem = CleanStem(Path.GetFileNameWithoutExtension(relative));
-                    key = "stem:" + stem.ToLowerInvariant();
+                    var (stem, signature) = CleanStemWithSignature(Path.GetFileNameWithoutExtension(relative));
+                    // The numbering STYLE is part of the identity: a record
+                    // holding two copies of one book ("Title-NN.mp3" and
+                    // "Title (N).mp3") must yield two groups, or the
+                    // delete-the-duplicate-copy workflow can't target one.
+                    key = "stem:" + stem.ToLowerInvariant() + "|" + signature;
                     display = stem;
                 }
 
@@ -86,23 +90,47 @@ namespace Listenarr.Application.Audiobooks
         /// stem: "(heinlein_robert)-friday-01_77" → "(heinlein_robert)-friday".
         /// Applied repeatedly because markers stack ("Part 01 of 26" + "_77").
         /// </summary>
-        public static string CleanStem(string fileName)
+        public static string CleanStem(string fileName) => CleanStemWithSignature(fileName).Stem;
+
+        /// <summary>
+        /// As <see cref="CleanStem"/>, plus the digit-normalized template of
+        /// what was stripped ("-#_#", " (#)", " part # of #") — the marker
+        /// STYLE that distinguishes two copies of the same book.
+        /// </summary>
+        public static (string Stem, string Signature) CleanStemWithSignature(string fileName)
         {
             var stem = fileName.Trim();
-            stem = LeadingNumberRegex.Replace(stem, string.Empty);
+            var signatureParts = new List<string>();
+
+            var leading = LeadingNumberRegex.Match(stem);
+            if (leading.Success)
+            {
+                signatureParts.Add(NormalizeDigits(leading.Value));
+                stem = stem[leading.Length..];
+            }
+
             string previous;
             do
             {
                 previous = stem;
-                stem = TrailingNumberingRegex.Replace(stem, string.Empty).Trim();
+                var trailing = TrailingNumberingRegex.Match(stem);
+                if (trailing.Success)
+                {
+                    // Outermost marker first so stacked markers serialize stably.
+                    signatureParts.Insert(leading.Success ? 1 : 0, NormalizeDigits(trailing.Value));
+                    stem = stem[..trailing.Index].Trim();
+                }
             } while (stem != previous && stem.Length > 0);
 
             // A stem that stripped down to nothing or to bare digits carries no
             // grouping signal — keep the original name (conservative: such
             // files stay singleton clusters instead of merging on noise).
-            if (stem.Length == 0 || stem.All(char.IsDigit)) return fileName.Trim();
-            return stem;
+            if (stem.Length == 0 || stem.All(char.IsDigit)) return (fileName.Trim(), string.Empty);
+            return (stem, string.Join("", signatureParts));
         }
+
+        private static string NormalizeDigits(string marker) =>
+            Regex.Replace(marker.Trim().ToLowerInvariant(), @"\d+", "#");
 
         private static string MakeRelative(string path, string? basePath)
         {
