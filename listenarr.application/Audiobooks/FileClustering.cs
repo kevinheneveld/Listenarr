@@ -79,10 +79,72 @@ namespace Listenarr.Application.Audiobooks
                 cluster.Files.Add(file);
             }
 
+            MergeUnnumberedSiblings(groups);
+
             return groups.Values
                 .OrderByDescending(c => c.Files.Count)
                 .ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        /// <summary>
+        /// An unnumbered file alongside a numbered set ("Title.mp3" next to
+        /// "Title (1).mp3"…) is usually that set's FIRST track — numbering
+        /// often starts at the unmarked file (users have resorted to renaming
+        /// it "Title (0).mp3" by hand). Merge it into the same-stem numbered
+        /// group when it plausibly IS one track (duration/size comparable to
+        /// the group's median); a same-stem whole-book file is many times
+        /// larger and stays its own group, as does anything ambiguous
+        /// (multiple same-stem numbered groups to choose from).
+        /// </summary>
+        private static void MergeUnnumberedSiblings(Dictionary<string, FileCluster> groups)
+        {
+            var markerless = groups
+                .Where(kv => kv.Key.StartsWith("stem:", StringComparison.Ordinal)
+                             && kv.Key.EndsWith("|", StringComparison.Ordinal)
+                             && kv.Value.Files.Count == 1)
+                .ToList();
+
+            foreach (var (key, cluster) in markerless)
+            {
+                // The markerless key "stem:<stem>|" is itself the shared prefix
+                // of every same-stem numbered group ("stem:<stem>|<signature>").
+                var candidates = groups
+                    .Where(kv => kv.Key != key
+                                 && kv.Key.StartsWith(key, StringComparison.Ordinal)
+                                 && kv.Value.Files.Count > 0)
+                    .Select(kv => kv.Value)
+                    .ToList();
+                if (candidates.Count != 1) continue; // none, or ambiguous (two copies)
+
+                var target = candidates[0];
+                if (!LooksLikeOneTrackOf(cluster.Files[0], target.Files)) continue;
+
+                target.Files.Insert(0, cluster.Files[0]);
+                groups.Remove(key);
+            }
+        }
+
+        private static bool LooksLikeOneTrackOf(AudiobookFile file, List<AudiobookFile> groupFiles)
+        {
+            const double MaxRatio = 3.0;
+
+            var fileDuration = file.DurationSeconds ?? 0;
+            var durations = groupFiles.Select(f => f.DurationSeconds ?? 0).Where(d => d > 0).OrderBy(d => d).ToList();
+            if (fileDuration > 0 && durations.Count > 0)
+            {
+                return fileDuration <= durations[durations.Count / 2] * MaxRatio;
+            }
+
+            var fileSize = file.Size ?? 0;
+            var sizes = groupFiles.Select(f => f.Size ?? 0).Where(s => s > 0).OrderBy(s => s).ToList();
+            if (fileSize > 0 && sizes.Count > 0)
+            {
+                return fileSize <= sizes[sizes.Count / 2] * MaxRatio;
+            }
+
+            // No comparable signal — stay conservative, keep it separate.
+            return false;
         }
 
         /// <summary>

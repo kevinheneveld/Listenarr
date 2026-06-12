@@ -98,6 +98,39 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.All(clusters, c => Assert.Equal("The Rolling Stones", c.DisplayName));
         }
 
+        [Fact]
+        public void Cluster_UnnumberedFirstTrack_JoinsItsNumberedSiblings()
+        {
+            // Numbering often starts at the unmarked file: "Title.mp3" IS track
+            // one of the "Title (N)" set (users renamed it "Title (0).mp3" by
+            // hand to fix this). Comparable duration → merge, listed first.
+            var clusters = FileClustering.Cluster(new[]
+            {
+                new AudiobookFile { Id = 1, Path = $"{Base}/Example Track.mp3", DurationSeconds = 600 },
+                new AudiobookFile { Id = 2, Path = $"{Base}/Example Track (1).mp3", DurationSeconds = 610 },
+                new AudiobookFile { Id = 3, Path = $"{Base}/Example Track (2).mp3", DurationSeconds = 590 },
+            }, Base);
+
+            Assert.Single(clusters);
+            Assert.Equal(3, clusters[0].Files.Count);
+            Assert.Equal(1, clusters[0].Files[0].Id);
+        }
+
+        [Fact]
+        public void Cluster_SameStemWholeBookFile_StaysItsOwnGroup()
+        {
+            // A complete single-file copy sharing the stem must NOT be swallowed
+            // into the track set — it is ~30× a track's duration.
+            var clusters = FileClustering.Cluster(new[]
+            {
+                new AudiobookFile { Id = 1, Path = $"{Base}/Example Track.mp3", DurationSeconds = 20000 },
+                new AudiobookFile { Id = 2, Path = $"{Base}/Example Track (1).mp3", DurationSeconds = 610 },
+                new AudiobookFile { Id = 3, Path = $"{Base}/Example Track (2).mp3", DurationSeconds = 590 },
+            }, Base);
+
+            Assert.Equal(2, clusters.Count);
+        }
+
         [Theory]
         [InlineData("The Rolling Stones (10)", "The Rolling Stones")]
         [InlineData("Track [07]", "Track")]
