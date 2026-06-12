@@ -16,11 +16,11 @@
   along with this program. If not, see <https://www.gnu.org/licenses/>.
 -->
 <!--
-  Split a multi-book record: server-side clustering (subdirectory / filename
-  stem) with a suggested existing library record per group; applying runs one
-  file transfer per confirmed group, so files move to their canonical folders
-  and each destination re-verifies automatically. Born from a live 773-file,
-  34-book collection dump.
+  Break a multi-book record apart: server-side clustering (subdirectory /
+  filename stem) with a suggested existing library record per group. Each
+  group can be MOVED to a record (files relocate to its folder; destination
+  re-verifies automatically), DELETED (a redundant duplicate copy — files
+  removed from disk), or left alone.
 -->
 <template>
   <Modal :visible="visible" size="lg" title="Split collection" @close="onClose">
@@ -29,19 +29,35 @@
       <div v-else-if="error" class="split-error">{{ error }}</div>
       <template v-else>
         <p class="split-intro">
-          {{ clusters.length }} group{{ clusters.length === 1 ? '' : 's' }} detected. Each
-          confirmed group's files move to the chosen record (and into its folder), and the
-          destination is re-verified automatically. Groups without a destination stay put.
+          {{ clusters.length }} group{{ clusters.length === 1 ? '' : 's' }} detected. Move a
+          group to the record it belongs to (files relocate and the destination re-verifies),
+          delete a redundant copy, or leave it alone.
         </p>
         <div class="split-clusters">
           <div v-for="c in clusters" :key="c.key" class="split-cluster">
-            <label class="split-cluster-head">
-              <input type="checkbox" v-model="c.include" :disabled="!c.targetId" />
+            <div class="split-cluster-head">
               <span class="split-cluster-name">
                 <strong>{{ c.displayName }}</strong>
                 <small>{{ c.fileIds.length }} file{{ c.fileIds.length === 1 ? '' : 's' }}</small>
               </span>
-            </label>
+              <div class="split-actions">
+                <label><input type="radio" :name="`act-${c.key}`" value="none" v-model="c.action" /> Leave</label>
+                <label
+                  ><input
+                    type="radio"
+                    :name="`act-${c.key}`"
+                    value="move"
+                    v-model="c.action"
+                    :disabled="!c.targetId"
+                  />
+                  Move</label
+                >
+                <label class="split-delete-label"
+                  ><input type="radio" :name="`act-${c.key}`" value="delete" v-model="c.action" />
+                  Delete</label
+                >
+              </div>
+            </div>
             <div class="split-cluster-dest">
               <template v-if="c.editing">
                 <input
@@ -89,10 +105,10 @@
       <button
         type="button"
         class="btn btn-primary"
-        :disabled="applying || includedCount === 0"
+        :disabled="applying || (moveCount === 0 && deleteCount === 0)"
         @click="apply"
       >
-        {{ applying ? 'Moving…' : `Move ${includedCount} group${includedCount === 1 ? '' : 's'}` }}
+        {{ applyLabel }}
       </button>
     </div>
   </Modal>
@@ -104,7 +120,10 @@ import { Modal, ModalBody } from '@/components/feedback'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import { useLibraryStore } from '@/stores/library'
+import { showConfirm } from '@/composables/useConfirm'
 import type { Audiobook } from '@/types'
+
+type GroupAction = 'none' | 'move' | 'delete'
 
 interface ClusterRow {
   key: string
@@ -113,7 +132,7 @@ interface ClusterRow {
   fileNames: string[]
   targetId: number | null
   targetTitle: string | null
-  include: boolean
+  action: GroupAction
   editing: boolean
   query: string
 }
@@ -125,7 +144,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'done', result: { groupsMoved: number; filesMoved: number }): void
+  (e: 'done', result: { groupsMoved: number; filesMoved: number; filesDeleted: number }): void
 }>()
 
 const toast = useToast()
@@ -137,9 +156,17 @@ const clusters = ref<ClusterRow[]>([])
 const applying = ref(false)
 const progressText = ref('')
 
-const includedCount = computed(
-  () => clusters.value.filter((c) => c.include && c.targetId).length,
+const moveCount = computed(
+  () => clusters.value.filter((c) => c.action === 'move' && c.targetId).length,
 )
+const deleteCount = computed(() => clusters.value.filter((c) => c.action === 'delete').length)
+const applyLabel = computed(() => {
+  if (applying.value) return 'Working…'
+  const parts: string[] = []
+  if (moveCount.value > 0) parts.push(`move ${moveCount.value}`)
+  if (deleteCount.value > 0) parts.push(`delete ${deleteCount.value}`)
+  return parts.length ? `Apply (${parts.join(', ')})` : 'Apply'
+})
 
 watch(
   () => props.visible,
@@ -162,7 +189,7 @@ watch(
           fileNames: c.fileNames,
           targetId: c.suggestedTargetId ?? null,
           targetTitle: c.suggestedTargetTitle ?? null,
-          include: !!c.suggestedTargetId,
+          action: (c.suggestedTargetId ? 'move' : 'none') as GroupAction,
           editing: false,
           query: c.displayName,
         }),
@@ -175,11 +202,18 @@ watch(
   },
 )
 
+// Common words carry no signal — "The Rolling Stones" must not surface every
+// record containing "the".
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'and', 'or', 'in', 'on', 'to', 'for', 'by', 'at',
+  'is', 'it', 'vol', 'volume', 'book', 'part', 'unabridged', 'abridged',
+])
+
 function tokenize(text: string): string[] {
   return (text || '')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 1)
+    .filter((t) => t.length > 1 && !STOPWORDS.has(t))
 }
 
 function candidatesFor(c: ClusterRow) {
@@ -201,47 +235,72 @@ function candidatesFor(c: ClusterRow) {
 function pickTarget(c: ClusterRow, cand: { id: number; title: string }) {
   c.targetId = cand.id
   c.targetTitle = cand.title
-  c.include = true
+  c.action = 'move'
   c.editing = false
 }
 
 async function apply() {
   const book = props.audiobook
   if (!book || applying.value) return
-  const todo = clusters.value.filter((c) => c.include && c.targetId)
-  if (todo.length === 0) return
+  const moves = clusters.value.filter((c) => c.action === 'move' && c.targetId)
+  const deletes = clusters.value.filter((c) => c.action === 'delete')
+  if (moves.length === 0 && deletes.length === 0) return
+
+  if (deletes.length > 0) {
+    const fileCount = deletes.reduce((n, c) => n + c.fileIds.length, 0)
+    const names = deletes.map((c) => `"${c.displayName}"`).join(', ')
+    const ok = await showConfirm(
+      `Delete ${fileCount} file(s) from disk for group(s) ${names}? This cannot be undone.`,
+      'Confirm deletion',
+      { danger: true, confirmText: 'Delete files', cancelText: 'Cancel' },
+    )
+    if (!ok) return
+  }
 
   applying.value = true
   let groupsMoved = 0
   let filesMoved = 0
+  let filesDeleted = 0
   const failures: string[] = []
-  for (const [index, c] of todo.entries()) {
-    progressText.value = `Moving "${c.displayName}" (${index + 1}/${todo.length})…`
+
+  for (const [index, c] of moves.entries()) {
+    progressText.value = `Moving "${c.displayName}" (${index + 1}/${moves.length})…`
     try {
       const result = await apiService.transferAudiobookFiles(book.id, c.targetId!, c.fileIds)
       groupsMoved++
       filesMoved += result.transferred
-      if (result.warnings?.length) {
-        failures.push(`${c.displayName}: ${result.warnings.join(' ')}`)
-      }
+      if (result.warnings?.length) failures.push(`${c.displayName}: ${result.warnings.join(' ')}`)
     } catch (err) {
-      failures.push(`${c.displayName}: ${err instanceof Error ? err.message : 'failed'}`)
+      failures.push(`${c.displayName}: ${err instanceof Error ? err.message : 'move failed'}`)
+    }
+  }
+
+  for (const c of deletes) {
+    progressText.value = `Deleting "${c.displayName}"…`
+    for (const fileId of c.fileIds) {
+      try {
+        await apiService.deleteAudiobookFile(book.id, fileId, { deleteFromDisk: true })
+        filesDeleted++
+      } catch (err) {
+        failures.push(`${c.displayName}: ${err instanceof Error ? err.message : 'delete failed'}`)
+        break
+      }
     }
   }
   applying.value = false
 
+  const summary = [
+    filesMoved > 0 ? `moved ${filesMoved} file(s) across ${groupsMoved} book(s)` : null,
+    filesDeleted > 0 ? `deleted ${filesDeleted} file(s)` : null,
+  ]
+    .filter(Boolean)
+    .join('; ')
   if (failures.length > 0) {
-    toast.warning(
-      `Moved ${groupsMoved}/${todo.length} groups (${filesMoved} files)`,
-      failures.slice(0, 3).join(' · '),
-    )
+    toast.warning(`Split finished with issues — ${summary}`, failures.slice(0, 3).join(' · '))
   } else {
-    toast.success(
-      'Collection split',
-      `Moved ${filesMoved} file${filesMoved === 1 ? '' : 's'} across ${groupsMoved} book${groupsMoved === 1 ? '' : 's'}. Each destination is re-verifying.`,
-    )
+    toast.success('Split collection complete', `${summary}.`)
   }
-  emit('done', { groupsMoved, filesMoved })
+  emit('done', { groupsMoved, filesMoved, filesDeleted })
 }
 
 function onClose() {
@@ -273,8 +332,9 @@ function onClose() {
 .split-cluster-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.6rem;
-  cursor: pointer;
+  flex-wrap: wrap;
 }
 
 .split-cluster-name {
@@ -287,8 +347,26 @@ function onClose() {
   color: #8a93a0;
 }
 
+.split-actions {
+  display: flex;
+  gap: 0.9rem;
+  font-size: 0.85rem;
+  color: #adb5bd;
+}
+
+.split-actions label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.split-delete-label {
+  color: #e74c3c;
+}
+
 .split-cluster-dest {
-  margin: 0.4rem 0 0 1.6rem;
+  margin: 0.4rem 0 0 0;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -356,7 +434,7 @@ function onClose() {
 }
 
 .split-files {
-  margin: 0.45rem 0 0 1.6rem;
+  margin: 0.45rem 0 0 0;
   font-size: 0.82rem;
   color: #8a93a0;
 }

@@ -32,9 +32,12 @@ namespace Listenarr.Application.Audiobooks
     {
         public sealed record FileCluster(string Key, string DisplayName, List<AudiobookFile> Files);
 
-        // Trailing track/part markers: "-01_77", " Part 03 of 26", "_42", " - 7 - 7", "(2 of 3)".
+        // Trailing track/part markers: "-01_77", " Part 03 of 26", "_42",
+        // " - 7 - 7", "(2 of 3)", and bare parenthesized/bracketed track
+        // numbers "(10)" / "[07]" (live case: "The Rolling Stones (1)" …
+        // "(50)" exploded into 50 singleton groups without it).
         private static readonly Regex TrailingNumberingRegex = new(
-            @"(\s*[-_ ]\s*(part|pt|cd|disc|disk|track|chapter|ch)?\s*\d+(\s*(of|/)\s*\d+)?|\s*\(\d+\s*(of|/)\s*\d+\)|[-_ ]\d+([_-]\d+)*)\s*$",
+            @"(\s*[-_ ]\s*(part|pt|cd|disc|disk|track|chapter|ch)?\s*\d+(\s*(of|/)\s*\d+)?|\s*[(\[]\d+(\s*(of|/)\s*\d+)?[)\]]|[-_ ]\d+([_-]\d+)*)\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         // Leading list numbering: "1 The Year of the Jackpot".

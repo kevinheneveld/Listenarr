@@ -76,7 +76,31 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.All(clusters, c => Assert.Single(c.Files));
         }
 
+        [Fact]
+        public void Cluster_ParenthesizedTrackNumbers_FormOneCluster()
+        {
+            // Live case: a record holding two copies of the same book — the
+            // "(N)" copy exploded into singleton groups before "(10)"-style
+            // markers were stripped.
+            var clusters = FileClustering.Cluster(new[]
+            {
+                F(1, "The Rolling Stones (1).mp3"),
+                F(2, "The Rolling Stones (10).mp3"),
+                F(3, "The Rolling Stones (11).mp3"),
+                F(4, "The Rolling Stones-00.mp3"),
+                F(5, "The Rolling Stones-01.mp3"),
+            }, Base);
+
+            // Both copies share the same stem — they merge into ONE cluster,
+            // which is correct: same book, and the duplicate-copy decision
+            // belongs to the user (move vs delete), not to name clustering.
+            Assert.Single(clusters);
+            Assert.Equal(5, clusters[0].Files.Count);
+        }
+
         [Theory]
+        [InlineData("The Rolling Stones (10)", "The Rolling Stones")]
+        [InlineData("Track [07]", "Track")]
         [InlineData("(heinlein_robert)-friday-01_77", "(heinlein_robert)-friday")]
         [InlineData("Robert A. Heinlein - Expanded Universe Part 01 of 26", "Robert A. Heinlein - Expanded Universe")]
         [InlineData("TunnelintheSkyUnabridged_51", "TunnelintheSkyUnabridged")]
