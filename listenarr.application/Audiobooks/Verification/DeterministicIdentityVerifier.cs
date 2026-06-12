@@ -130,21 +130,28 @@ namespace Listenarr.Application.Audiobooks.Verification
         // partial to support a confident identity verdict in either direction.
         public const double IncompleteCoverageThreshold = 0.7;
 
+        // Above this fraction the content is MORE than the book — the signature
+        // of a collection/mega-pack import (live case: ~300h of audio on a "12h"
+        // record) or a longer different book entirely.
+        public const double OverCoverageThreshold = 1.5;
+
         /// <summary>
-        /// Attaches the completeness estimate and, when coverage falls below
-        /// <see cref="IncompleteCoverageThreshold"/>, downgrades a confident
-        /// outcome to Uncertain: a mid-book cold open from a partial set can't
-        /// prove wrong content, and matching credits on the one surviving part
-        /// can't vouch for a book that is mostly absent. Public + pure so the
-        /// rule is directly unit-testable.
+        /// Attaches the completeness estimate and, when coverage falls outside
+        /// the plausible band, downgrades a confident outcome to Uncertain: a
+        /// mid-book cold open from a partial set can't prove wrong content,
+        /// matching credits on one surviving part can't vouch for a mostly
+        /// absent book — and matching credits on the first file of a collection
+        /// can't vouch for the other 200 hours. Public + pure so the rule is
+        /// directly unit-testable.
         /// </summary>
         public static VerificationVerdict ApplyCompleteness(VerificationVerdict verdict, VerificationCompleteness? completeness)
         {
             if (completeness == null) return verdict;
 
             var adjusted = verdict with { Completeness = completeness };
-            if (completeness.Coverage < IncompleteCoverageThreshold
-                && adjusted.Outcome != VerificationOutcome.Uncertain)
+            var implausible = completeness.Coverage < IncompleteCoverageThreshold
+                || completeness.Coverage > OverCoverageThreshold;
+            if (implausible && adjusted.Outcome != VerificationOutcome.Uncertain)
             {
                 adjusted = adjusted with { Outcome = VerificationOutcome.Uncertain };
             }

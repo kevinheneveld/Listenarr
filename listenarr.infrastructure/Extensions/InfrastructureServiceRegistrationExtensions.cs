@@ -64,6 +64,7 @@ namespace Listenarr.Infrastructure.Extensions
             }
 
             services.AddScoped<IAudiobookRepository, AudiobookRepository>();
+            services.AddScoped<IBlockedReleaseRepository, BlockedReleaseRepository>();
             services.AddScoped<IQualityProfileRepository, QualityProfileRepository>();
 
             services.AddScoped<IIndexerRepository, EfIndexerRepository>();

@@ -146,6 +146,26 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.Same(completeness, adjusted.Completeness);
         }
 
+        [Theory]
+        [InlineData(VerificationOutcome.Mismatch)]
+        [InlineData(VerificationOutcome.Match)]
+        public void ApplyCompleteness_OverCoverage_DowngradesToUncertain(VerificationOutcome original)
+        {
+            // The collection fingerprint: ~300h of audio on a "12h" record.
+            // Matching credits on the first file can't vouch for the other 288h.
+            var verdict = new VerificationVerdict
+            {
+                Outcome = original,
+                Confidence = 0.9,
+                Method = "deterministic:test"
+            };
+            var completeness = new VerificationCompleteness(720, 21793, 30.27);
+
+            var adjusted = DeterministicIdentityVerifier.ApplyCompleteness(verdict, completeness);
+
+            Assert.Equal(VerificationOutcome.Uncertain, adjusted.Outcome);
+        }
+
         [Fact]
         public void ApplyCompleteness_FullCoverage_LeavesOutcomeAlone()
         {

@@ -1784,6 +1784,43 @@ namespace Listenarr.Api.Controllers
                     _logger.LogWarning(ex, "not-audiobook: failed to record history for audiobook {AudiobookId} (non-critical)", id);
                 }
 
+                // Blocklist the releases that delivered the rejected content, or the
+                // re-search below would immediately re-grab the exact same release
+                // (live loops: a 15-book collection re-imported after every cleanup,
+                // and a mislabeled wrong-book release likewise). Best-effort.
+                try
+                {
+                    var blockedReleaseRepository = sp.GetRequiredService<IBlockedReleaseRepository>();
+                    var downloadRepository = sp.GetRequiredService<IDownloadRepository>();
+                    var bookDownloads = await downloadRepository.GetByAudiobookIdAsync(id, ct);
+                    var deliveredReleases = bookDownloads
+                        .Where(d => d.Status is DownloadStatus.Moved or DownloadStatus.Completed)
+                        .Where(d => !string.IsNullOrWhiteSpace(d.Title))
+                        .OrderByDescending(d => d.CompletedAt ?? d.StartedAt)
+                        .Take(5)
+                        .ToList();
+                    foreach (var delivered in deliveredReleases)
+                    {
+                        await blockedReleaseRepository.AddAsync(new BlockedRelease
+                        {
+                            AudiobookId = id,
+                            ReleaseTitle = delivered.Title,
+                            TorrentHash = delivered.GetMetadataString("TorrentHash"),
+                            Reason = "Rejected via 'Wrong content'"
+                        }, ct);
+                    }
+                    if (deliveredReleases.Count > 0)
+                    {
+                        _logger.LogInformation(
+                            "Blocklisted {Count} release(s) for audiobook {AudiobookId} after wrong-content rejection",
+                            deliveredReleases.Count, id);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "not-audiobook: failed to blocklist source releases for audiobook {AudiobookId}", id);
+                }
+
                 // Kick off a fresh search. The invoker is optional (parity with SearchController); if it
                 // is unavailable the files are still removed and the book is left monitored to be picked
                 // up by the next automatic-search cycle.
@@ -6649,7 +6686,7 @@ namespace Listenarr.Api.Controllers
             }
 
             // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile!);
+            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile!, audiobook.Runtime);
 
             // Log all scored results for debugging
             _logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, LogRedaction.SanitizeText(audiobook.Title));

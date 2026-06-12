@@ -374,11 +374,17 @@
             </div>
             <div class="detail-row" v-if="completeness">
               <span class="label">Content length:</span>
-              <span class="value" :class="{ 'completeness-short': completenessIsShort }">
+              <span
+                class="value"
+                :class="{ 'completeness-short': completenessIsShort || completenessIsLong }"
+              >
                 {{ formatRuntimeMinutes(completeness.actualMinutes) }} of
                 {{ formatRuntimeMinutes(completeness.expectedMinutes) }} expected
                 ({{ Math.round(completeness.coverage * 100) }}%)<template v-if="completenessIsShort">
                   — content appears incomplete</template
+                ><template v-else-if="completenessIsLong">
+                  — far more audio than this book (a collection or a different, longer
+                  book?)</template
                 >
               </span>
             </div>
@@ -1044,6 +1050,9 @@ const heardCredits = computed(() => verificationDetail.value?.heardCredits ?? nu
 const completeness = computed(() => verificationDetail.value?.completeness ?? null)
 const completenessIsShort = computed(
   () => (completeness.value?.coverage ?? 1) < 0.7,
+)
+const completenessIsLong = computed(
+  () => (completeness.value?.coverage ?? 1) > 1.5,
 )
 
 function formatRuntimeMinutes(minutes: number): string {

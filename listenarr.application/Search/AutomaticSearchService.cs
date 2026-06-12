@@ -148,7 +148,8 @@ namespace Listenarr.Application.Search
                 {
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
                         audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, filterPipeline, stoppingToken,
-                        suppressIfImportBlocked: true);
+                        suppressIfImportBlocked: true,
+                        blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
 
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
@@ -217,8 +218,10 @@ namespace Listenarr.Application.Search
                     audiobook, searchService, qualityProfileService, downloadService,
                     audiobookRepository, downloadRepository, fileRepository, filterPipeline, ct,
                     // Manual "Search now" is an explicit user override — re-search even a book whose
-                    // only download is ImportBlocked (e.g. a dupe NZBGet rejected).
-                    suppressIfImportBlocked: false);
+                    // only download is ImportBlocked (e.g. a dupe NZBGet rejected). Blocked releases
+                    // still apply: the user rejected that exact release's CONTENT.
+                    suppressIfImportBlocked: false,
+                    blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
 
                 // Targeted write for the same reason as the cycle loop: never
                 // re-save the whole entity just to bump the timestamp.
@@ -259,7 +262,8 @@ namespace Listenarr.Application.Search
             IAudiobookFileRepository fileRepository,
             SearchResultFilterPipeline filterPipeline,
             CancellationToken stoppingToken,
-            bool suppressIfImportBlocked)
+            bool suppressIfImportBlocked,
+            IBlockedReleaseRepository? blockedReleaseRepository = null)
         {
             var qualityProfile = audiobook.QualityProfile;
             if (qualityProfile == null)
@@ -386,8 +390,42 @@ namespace Listenarr.Application.Search
                 return 0;
             }
 
-            // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, qualityProfile);
+            // Drop releases the user explicitly rejected for this book ("Wrong
+            // content") — without this the same wrong-content/collection release
+            // wins the search again immediately after every cleanup.
+            if (blockedReleaseRepository != null)
+            {
+                try
+                {
+                    var blocked = await blockedReleaseRepository.GetByAudiobookIdAsync(audiobook.Id, stoppingToken);
+                    if (blocked.Count > 0)
+                    {
+                        var before = searchResults.Count;
+                        searchResults = searchResults
+                            .Where(r => !BlockedReleaseMatcher.IsBlocked(r.Title, blocked))
+                            .ToList();
+                        if (searchResults.Count < before)
+                        {
+                            _logger.LogInformation(
+                                "Filtered {Removed} blocked release(s) for audiobook '{Title}'",
+                                before - searchResults.Count, audiobook.Title);
+                        }
+                        if (!searchResults.Any())
+                        {
+                            _logger.LogInformation("All remaining results are blocked releases for audiobook '{Title}'", audiobook.Title);
+                            return 0;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Failed to apply blocked-release filter for audiobook {Id}", audiobook.Id);
+                }
+            }
+
+            // Score results against quality profile (runtime enables the
+            // collection-sized-release rejection).
+            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, qualityProfile, audiobook.Runtime);
 
             // Log all scored results for debugging
             _logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, audiobook.Title);
