@@ -382,48 +382,50 @@
                 >
               </span>
             </div>
-            <div class="detail-row detail-row-stacked" v-if="heardCredits">
+            <div class="detail-row verification-says-row" v-if="heardCredits">
               <span class="label">The audio says:</span>
-              <div class="value verification-fields">
-                <div v-if="heardCredits.title" class="verification-field-row">
-                  <span class="verification-field-name">Title</span>
-                  <span class="verification-field-claim">"{{ heardCredits.title }}"</span>
+              <div class="verification-says">
+                <div class="verification-fields verification-claims">
+                  <div v-if="heardCredits.title" class="verification-field-row">
+                    <span class="verification-field-name">Title</span>
+                    <span class="verification-field-claim">"{{ heardCredits.title }}"</span>
+                  </div>
+                  <div v-if="heardCredits.author" class="verification-field-row">
+                    <span class="verification-field-name">Author</span>
+                    <span class="verification-field-claim">"{{ heardCredits.author }}"</span>
+                  </div>
+                  <div v-if="heardCredits.narrator" class="verification-field-row">
+                    <span class="verification-field-name">Narrator</span>
+                    <span class="verification-field-claim">"{{ heardCredits.narrator }}"</span>
+                  </div>
+                  <div v-if="heardCredits.publisher" class="verification-field-row">
+                    <span class="verification-field-name">Publisher</span>
+                    <span class="verification-field-claim">"{{ heardCredits.publisher }}"</span>
+                  </div>
                 </div>
-                <div v-if="heardCredits.author" class="verification-field-row">
-                  <span class="verification-field-name">Author</span>
-                  <span class="verification-field-claim">"{{ heardCredits.author }}"</span>
+                <div class="verification-remedies">
+                  <button
+                    v-if="
+                      audiobook.verificationStatus === 'agentFlagged' &&
+                      (heardCredits.title || heardCredits.author)
+                    "
+                    type="button"
+                    class="show-more-btn relabel-btn"
+                    title="Search the catalog for the book the audio actually names, and relabel this record to it"
+                    @click="showRelabelModal = true"
+                  >
+                    Find correct match…
+                  </button>
+                  <button
+                    v-if="audiobook.verificationStatus === 'agentFlagged' && audiobook.files?.length"
+                    type="button"
+                    class="show-more-btn relabel-btn"
+                    title="Move these files to the existing library record they actually belong to"
+                    @click="showTransferModal = true"
+                  >
+                    Move files to another book…
+                  </button>
                 </div>
-                <div v-if="heardCredits.narrator" class="verification-field-row">
-                  <span class="verification-field-name">Narrator</span>
-                  <span class="verification-field-claim">"{{ heardCredits.narrator }}"</span>
-                </div>
-                <div v-if="heardCredits.publisher" class="verification-field-row">
-                  <span class="verification-field-name">Publisher</span>
-                  <span class="verification-field-claim">"{{ heardCredits.publisher }}"</span>
-                </div>
-              </div>
-              <div class="verification-remedies">
-                <button
-                  v-if="
-                    audiobook.verificationStatus === 'agentFlagged' &&
-                    (heardCredits.title || heardCredits.author)
-                  "
-                  type="button"
-                  class="show-more-btn relabel-btn"
-                  title="Search the catalog for the book the audio actually names, and relabel this record to it"
-                  @click="showRelabelModal = true"
-                >
-                  Find correct match…
-                </button>
-                <button
-                  v-if="audiobook.verificationStatus === 'agentFlagged' && audiobook.files?.length"
-                  type="button"
-                  class="show-more-btn relabel-btn"
-                  title="Move these files to the existing library record they actually belong to"
-                  @click="showTransferModal = true"
-                >
-                  Move files to another book…
-                </button>
               </div>
             </div>
             <div class="detail-row detail-row-stacked" v-if="audiobook.verificationTranscript">
@@ -3035,6 +3037,39 @@ function formatDate(dateString?: string): string {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+/* "The audio says" needs room: stack label, claims, and remedy buttons
+   vertically at full width instead of competing in one space-between row
+   (which squeezed the claims into a sliver that wrapped mid-word). */
+.verification-says-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.verification-says {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.verification-claims {
+  text-align: left;
+}
+
+.verification-claims .verification-field-row {
+  justify-content: flex-start;
+}
+
+.verification-claims .verification-field-name {
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.verification-claims .verification-field-claim {
+  flex: 1;
 }
 
 .transcript-toggle {

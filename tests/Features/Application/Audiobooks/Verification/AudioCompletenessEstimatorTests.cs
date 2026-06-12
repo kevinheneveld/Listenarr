@@ -69,6 +69,35 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Estimate_NullSizeOnKnownDurationFile_DoesNotPoisonTheBitrateAnchor()
+        {
+            // Live regression ("363h of 12h expected, 3027%"): a file with a
+            // known duration but NULL size added seconds without bytes to the
+            // bitrate anchor, shrinking bytes-per-second and inflating every
+            // size-extrapolated file. Anchor must be computed pairwise.
+            var book = new Audiobook
+            {
+                Runtime = 120, // 2h
+                Files = new List<AudiobookFile>
+                {
+                    // 1h, size unknown — must contribute to the total but NOT the anchor.
+                    new() { Path = "/a/p1.mp3", DurationSeconds = 3600, Size = null },
+                    // 30min at ~10 KB/s — the only valid anchor pair.
+                    new() { Path = "/a/p2.mp3", DurationSeconds = 1800, Size = 18_000_000 },
+                    // Unknown duration, same size as p2 → should extrapolate to ~30min.
+                    new() { Path = "/a/p3.mp3", DurationSeconds = null, Size = 18_000_000 },
+                }
+            };
+
+            var completeness = AudioCompletenessEstimator.Estimate(book);
+
+            Assert.NotNull(completeness);
+            // 60 + 30 + ~30 ≈ 120 minutes ≈ full coverage — NOT a wild inflation.
+            Assert.InRange(completeness!.ActualMinutes, 110, 130);
+            Assert.InRange(completeness.Coverage, 0.9, 1.1);
+        }
+
+        [Fact]
         public void Estimate_NoCatalogRuntime_ReturnsNull()
         {
             var book = new Audiobook

@@ -47,24 +47,34 @@ namespace Listenarr.Application.Audiobooks.Verification
             if (audioFiles.Count == 0) return null;
 
             var knownSeconds = 0.0;
-            var knownBytes = 0L;
+            var pairedSeconds = 0.0;
+            var pairedBytes = 0L;
             var unknownBytes = 0L;
             foreach (var file in audioFiles)
             {
                 if (file.DurationSeconds is > 0)
                 {
                     knownSeconds += file.DurationSeconds.Value;
-                    knownBytes += file.Size ?? 0;
+                    // The bitrate anchor must come only from files where duration
+                    // and size are BOTH known. A file with a duration but a null
+                    // size adds seconds without bytes, shrinking the average
+                    // bytes-per-second and inflating every extrapolated file —
+                    // a live record showed "363h of 12h expected (3027%)".
+                    if (file.Size is > 0)
+                    {
+                        pairedSeconds += file.DurationSeconds.Value;
+                        pairedBytes += file.Size.Value;
+                    }
                 }
-                else
+                else if (file.Size is > 0)
                 {
-                    unknownBytes += file.Size ?? 0;
+                    unknownBytes += file.Size.Value;
                 }
             }
             if (knownSeconds <= 0) return null;
 
-            var estimatedUnknownSeconds = knownBytes > 0
-                ? unknownBytes / (knownBytes / knownSeconds)
+            var estimatedUnknownSeconds = pairedSeconds > 0 && pairedBytes > 0
+                ? unknownBytes / (pairedBytes / (double)pairedSeconds)
                 : 0.0;
 
             var actualMinutes = (knownSeconds + estimatedUnknownSeconds) / 60.0;
