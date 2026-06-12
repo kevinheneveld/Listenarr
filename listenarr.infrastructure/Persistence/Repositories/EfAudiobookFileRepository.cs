@@ -68,6 +68,19 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             await _db.SaveChangesAsync(ct);
         }
 
+        public async Task ReassignAsync(int fileId, int newAudiobookId, string? newPath, CancellationToken ct = default)
+        {
+            // Targeted column update: Update(entity) on rows loaded with their
+            // navigation graphs trips EF's identity map on the second file of a
+            // bulk transfer ("instance with the same key is already being
+            // tracked"); ExecuteUpdate touches no tracked entities at all.
+            await _db.AudiobookFiles
+                .Where(f => f.Id == fileId)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(f => f.AudiobookId, newAudiobookId)
+                    .SetProperty(f => f.Path, f => newPath ?? f.Path), ct);
+        }
+
         public async Task DeleteByAudiobookIdAsync(int audiobookId, CancellationToken ct = default)
         {
             var files = await _db.AudiobookFiles.Where(f => f.AudiobookId == audiobookId).ToListAsync(ct);

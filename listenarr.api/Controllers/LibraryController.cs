@@ -1947,7 +1947,7 @@ namespace Listenarr.Api.Controllers
 
                 file.AudiobookId = target.Id;
                 file.Path = newPath;
-                await _audioFileRepository.UpdateAsync(file, ct);
+                await _audioFileRepository.ReassignAsync(file.Id, target.Id, newPath, ct);
             }
 
             // Source bookkeeping: when its audio is gone, the legacy single-file

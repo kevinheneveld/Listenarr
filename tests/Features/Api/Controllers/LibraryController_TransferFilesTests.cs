@@ -67,7 +67,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
 
             // Row reassigned to the target.
             Assert.Equal(2, files[0].AudiobookId);
-            fileRepo.Verify(r => r.UpdateAsync(files[0], It.IsAny<CancellationToken>()), Times.Once);
+            fileRepo.Verify(r => r.ReassignAsync(files[0].Id, 2, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
 
             // Source lost all audio: legacy columns + verdict reset.
             Assert.Null(source.FilePath);
@@ -108,7 +108,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.IsType<OkObjectResult>(result);
             Assert.Equal(2, files[0].AudiobookId);
             Assert.Equal(1, files[1].AudiobookId);
-            fileRepo.Verify(r => r.UpdateAsync(It.IsAny<AudiobookFile>(), It.IsAny<CancellationToken>()), Times.Once);
+            fileRepo.Verify(r => r.ReassignAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
 
             // Source still holds audio — its verdict (for the remaining file) stays.
             Assert.Equal(VerificationStatus.AgentFlagged, source.VerificationStatus);
@@ -161,7 +161,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 1, new LibraryController.TransferFilesRequest(2, new List<int> { 10, 999 }));
 
             Assert.IsType<BadRequestObjectResult>(result);
-            fileRepo.Verify(r => r.UpdateAsync(It.IsAny<AudiobookFile>(), It.IsAny<CancellationToken>()), Times.Never);
+            fileRepo.Verify(r => r.ReassignAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
         private static (
