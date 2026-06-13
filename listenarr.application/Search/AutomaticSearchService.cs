@@ -124,6 +124,8 @@ namespace Listenarr.Application.Search
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
             var filterPipeline = scope.ServiceProvider.GetRequiredService<SearchResultFilterPipeline>();
             var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+            // Optional: drives the live search-activity indicator (sidebar + dashboard).
+            var searchProgressReporter = scope.ServiceProvider.GetService<SearchProgressReporter>();
 
             // Per-book throttle: with a large wanted list, searching every book
             // back-to-back floods the indexers (and the public trackers behind
@@ -143,6 +145,10 @@ namespace Listenarr.Application.Search
             if (!monitoredAudiobooks.Any())
             {
                 _logger.LogInformation("No audiobooks require automatic search at this time");
+                if (searchProgressReporter != null)
+                {
+                    await searchProgressReporter.BroadcastAutomaticAsync("Search idle", "idle", addToFeed: false);
+                }
                 return;
             }
 
@@ -181,6 +187,17 @@ namespace Listenarr.Application.Search
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
 
+                    // Per-book outcome for the live activity feed (dashboard) and
+                    // the sidebar indicator. Best-effort — never let a notification
+                    // failure interrupt the sweep.
+                    if (searchProgressReporter != null)
+                    {
+                        var (outcomeMessage, outcomeStage) = downloadsQueuedForBook > 0
+                            ? ($"Grabbed {downloadsQueuedForBook} release(s) for {audiobook.Title}", "grabbed")
+                            : ($"No results for {audiobook.Title}", "no_results");
+                        await searchProgressReporter.BroadcastAutomaticAsync(outcomeMessage, outcomeStage, audiobook.Id, audiobook.Asin);
+                    }
+
                     // Update last search time — TARGETED write only. This loop walks
                     // a snapshot loaded at cycle start, sometimes for a long time;
                     // saving the whole stale entity here clobbered every concurrent
@@ -208,6 +225,13 @@ namespace Listenarr.Application.Search
 
             _logger.LogInformation("Automatic search cycle completed. Processed {ProcessedCount} audiobooks, queued {DownloadsQueued} total downloads",
                 processedCount, downloadsQueued);
+
+            // Sweep finished — the live indicator returns to idle until the next cycle.
+            if (searchProgressReporter != null)
+            {
+                await searchProgressReporter.BroadcastAutomaticAsync(
+                    $"Search idle — last sweep processed {processedCount} book(s)", "idle", addToFeed: false);
+            }
         }
 
         /// <summary>

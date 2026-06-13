@@ -30,10 +30,12 @@ import {
   PhWaveform,
   PhChartPieSlice,
   PhPulse,
+  PhMagnifyingGlass,
 } from '@phosphor-icons/vue'
 import { LoadingState } from '@/components/base'
 import { useDashboardStore } from '@/stores/dashboard'
 import DashboardSection from '@/components/dashboard/DashboardSection.vue'
+import SearchActivitySection from '@/components/dashboard/SearchActivitySection.vue'
 import OverviewSection from '@/components/dashboard/OverviewSection.vue'
 import MetadataCompletenessSection from '@/components/dashboard/MetadataCompletenessSection.vue'
 import SeriesSection from '@/components/dashboard/SeriesSection.vue'
@@ -84,6 +86,14 @@ onMounted(() => {
     <div v-if="error" class="error-message">
       <PhWarning />
       {{ error }}
+    </div>
+
+    <!-- Live search activity is independent of the (slower) library-metrics
+         load, so it sits above the stats grid and shows immediately. -->
+    <div class="dashboard-sections standalone-section">
+      <DashboardSection title="Search activity" :icon="PhMagnifyingGlass">
+        <SearchActivitySection />
+      </DashboardSection>
     </div>
 
     <LoadingState v-if="loading && !stats" message="Computing library metrics..." />

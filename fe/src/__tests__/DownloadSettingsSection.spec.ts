@@ -40,7 +40,7 @@ describe('DownloadSettingsSection', () => {
     })
 
     const inputs = wrapper.findAll('input[type="number"]')
-    expect(inputs).toHaveLength(6)
+    expect(inputs).toHaveLength(7)
 
     // Max concurrent
     await inputs[0].setValue('4')
@@ -60,20 +60,26 @@ describe('DownloadSettingsSection', () => {
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.pollingIntervalSeconds).toBe(60)
 
+    // Automatic-search book delay
+    await inputs[3].setValue('8')
+    last =
+      wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
+    expect(last.automaticSearchBookDelaySeconds).toBe(8)
+
     // Stability
-    await inputs[3].setValue('10')
+    await inputs[4].setValue('10')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.downloadCompletionStabilitySeconds).toBe(10)
 
     // Missing-source delay
-    await inputs[4].setValue('3')
+    await inputs[5].setValue('3')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.missingSourceRetryInitialDelaySeconds).toBe(3)
 
     // Missing-source retries
-    await inputs[5].setValue('5')
+    await inputs[6].setValue('5')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.missingSourceMaxRetries).toBe(5)

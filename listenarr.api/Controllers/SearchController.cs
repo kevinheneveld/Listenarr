@@ -23,6 +23,7 @@ using Microsoft.AspNetCore.Mvc;
 using Listenarr.Application.Common;
 using Listenarr.Application.Interfaces;
 using Listenarr.Application.Metadata;
+using Listenarr.Application.Notification;
 using Listenarr.Application.Search;
 using Listenarr.Domain.Models;
 using Listenarr.Application.Security;
@@ -41,6 +42,7 @@ namespace Listenarr.Api.Controllers
         private readonly IImageCacheService? _imageCacheService;
         private readonly MetadataConverters _metadataConverters;
         private readonly IAutomaticSearchInvoker? _automaticSearchInvoker;
+        private readonly ISearchActivityTracker? _searchActivityTracker;
 
         public SearchController(
             ISearchService searchService,
@@ -49,7 +51,8 @@ namespace Listenarr.Api.Controllers
             IAudiobookMetadataService metadataService,
             IImageCacheService? imageCacheService = null,
             MetadataConverters? metadataConverters = null,
-            IAutomaticSearchInvoker? automaticSearchInvoker = null)
+            IAutomaticSearchInvoker? automaticSearchInvoker = null,
+            ISearchActivityTracker? searchActivityTracker = null)
         {
             _searchService = searchService;
             _logger = logger;
@@ -58,6 +61,31 @@ namespace Listenarr.Api.Controllers
             _imageCacheService = imageCacheService;
             _metadataConverters = metadataConverters ?? new MetadataConverters(imageCacheService, Microsoft.Extensions.Logging.Abstractions.NullLogger<MetadataConverters>.Instance);
             _automaticSearchInvoker = automaticSearchInvoker;
+            _searchActivityTracker = searchActivityTracker;
+        }
+
+        /// <summary>
+        /// Current background automatic-search activity plus a short rolling history
+        /// of recent outcomes. Lets the live UI indicator (sidebar + dashboard)
+        /// hydrate immediately on load instead of waiting for the next SignalR
+        /// event — which during an idle window could be hours away. Volatile,
+        /// process-local ambient status; not an audit log (History persists grabs).
+        /// </summary>
+        [HttpGet("activity")]
+        [ProducesResponseType(typeof(SearchActivityResponse), StatusCodes.Status200OK)]
+        public ActionResult<SearchActivityResponse> GetSearchActivity()
+        {
+            if (_searchActivityTracker == null)
+            {
+                return Ok(new SearchActivityResponse { Current = null, Recent = new List<SearchActivityEventDto>() });
+            }
+
+            var (current, recent) = _searchActivityTracker.Snapshot();
+            return Ok(new SearchActivityResponse
+            {
+                Current = current == null ? null : SearchActivityEventDto.From(current),
+                Recent = recent.Select(SearchActivityEventDto.From).ToList(),
+            });
         }
 
         /// <summary>
@@ -114,6 +142,30 @@ namespace Listenarr.Api.Controllers
             public int Skipped { get; set; }
             public int Failed { get; set; }
             public List<AutomaticSearchBookResult> Results { get; set; } = new();
+        }
+
+        public sealed class SearchActivityResponse
+        {
+            public SearchActivityEventDto? Current { get; set; }
+            public List<SearchActivityEventDto> Recent { get; set; } = new();
+        }
+
+        public sealed class SearchActivityEventDto
+        {
+            public string Message { get; set; } = string.Empty;
+            public string Stage { get; set; } = string.Empty;
+            public int? AudiobookId { get; set; }
+            public string? Asin { get; set; }
+            public DateTime Timestamp { get; set; }
+
+            public static SearchActivityEventDto From(SearchActivityEvent e) => new()
+            {
+                Message = e.Message,
+                Stage = e.Stage,
+                AudiobookId = e.AudiobookId,
+                Asin = e.Asin,
+                Timestamp = e.Timestamp,
+            };
         }
 
         private string BuildApiImagePath(string identifier, string? sourceUrl = null)

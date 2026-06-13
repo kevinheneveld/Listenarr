@@ -378,6 +378,16 @@ namespace Listenarr.Application.Search
 
             _logger.LogInformation("Searching {Count} enabled indexers for query: {Query}", indexers.Count, query);
 
+            // Surface the background sweep's per-book activity to the live UI
+            // indicator (sidebar + dashboard). Transient stage — not added to the
+            // recent-outcomes feed; the per-book outcome from AutomaticSearchService
+            // is. Best-effort: a notification hiccup must never affect the search.
+            if (isAutomaticSearch)
+            {
+                await _searchProgressReporter.BroadcastAutomaticAsync(
+                    $"Searching {indexers.Count} indexers for {query}", "searching", addToFeed: false);
+            }
+
             // If no indexers are configured, return mock data for development
             if (!indexers.Any())
             {

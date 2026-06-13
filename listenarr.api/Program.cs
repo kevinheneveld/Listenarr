@@ -318,6 +318,7 @@ builder.Services.AddHttpClient<IAudnexusService, AudnexusService>()
 // Add metadata converters helper
 builder.Services.AddScoped<MetadataConverters>();
 builder.Services.AddScoped<MetadataMerger>();
+builder.Services.AddSingleton<ISearchActivityTracker, SearchActivityTracker>();
 builder.Services.AddScoped<SearchProgressReporter>();
 
 // Add search result filters
