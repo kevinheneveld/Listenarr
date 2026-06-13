@@ -1569,7 +1569,7 @@ class ApiService {
     message: string
     id: number
     filesRemoved: number
-    searchQueued: number
+    searchStarted: boolean
     warnings: string[]
   }> {
     return this.request(`/library/${id}/not-audiobook`, { method: 'POST' })

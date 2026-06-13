@@ -1821,30 +1821,29 @@ namespace Listenarr.Api.Controllers
                     _logger.LogWarning(ex, "not-audiobook: failed to blocklist source releases for audiobook {AudiobookId}", id);
                 }
 
-                // Kick off a fresh search. The invoker is optional (parity with SearchController); if it
-                // is unavailable the files are still removed and the book is left monitored to be picked
-                // up by the next automatic-search cycle.
-                var searchQueued = 0;
+                // Kick off a fresh search in the BACKGROUND. Awaiting it walked 13
+                // indexers inside the request and could outlive proxy/client
+                // timeouts — the UI then reported "Action failed" on an action that
+                // had fully succeeded. The invoker creates its own scope, so it
+                // safely outlives this request; failures only mean the next
+                // automatic cycle picks the book up instead.
+                var searchStarted = false;
                 var searchInvoker = sp.GetService<IAutomaticSearchInvoker>();
                 if (searchInvoker != null)
                 {
-                    try
-                    {
-                        var search = await searchInvoker.SearchAudiobookNowAsync(id, ct);
-                        searchQueued = search.DownloadsQueued;
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                    {
-                        _logger.LogWarning(ex, "not-audiobook: search-now failed for audiobook {AudiobookId} (will retry on next cycle)", id);
-                    }
+                    searchStarted = true;
+                    var searchTask = searchInvoker.SearchAudiobookNowAsync(id, CancellationToken.None);
+                    _ = searchTask.ContinueWith(
+                        t => _logger.LogWarning(t.Exception, "not-audiobook: background search failed for audiobook {AudiobookId} (will retry on next cycle)", id),
+                        TaskContinuationOptions.OnlyOnFaulted);
                 }
 
                 return Ok(new
                 {
-                    message = "Removed non-audiobook files and started a new search",
+                    message = "Removed the rejected content and started a background search",
                     id,
                     filesRemoved,
-                    searchQueued,
+                    searchStarted,
                     warnings
                 });
             }

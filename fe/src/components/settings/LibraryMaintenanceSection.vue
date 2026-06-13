@@ -95,6 +95,45 @@
             title="Verify new imports automatically"
             description="Run verification on each book right after its download imports, so a wrong grab is flagged immediately instead of waiting for the next manual library pass."
           />
+          <div class="maintenance-windows">
+            <label class="maintenance-window">
+              <span>Opening sample (seconds)</span>
+              <input
+                type="number"
+                min="0"
+                max="600"
+                :value="settings?.verificationOpeningSeconds ?? 90"
+                @input="
+                  (e) =>
+                    updateWindow(
+                      'verificationOpeningSeconds',
+                      Number((e.target as HTMLInputElement).value || 90),
+                    )
+                "
+              />
+            </label>
+            <label class="maintenance-window">
+              <span>Closing sample (seconds)</span>
+              <input
+                type="number"
+                min="0"
+                max="600"
+                :value="settings?.verificationClosingSeconds ?? 30"
+                @input="
+                  (e) =>
+                    updateWindow(
+                      'verificationClosingSeconds',
+                      Number((e.target as HTMLInputElement).value || 30),
+                    )
+                "
+              />
+            </label>
+            <small class="maintenance-window-help">
+              How much of each book's opening and closing audio is transcribed when looking for
+              spoken credits. Slow intros and full closing-credit blocks may need larger windows
+              (e.g. 150 / 90).
+            </small>
+          </div>
         </div>
         <div class="action-stack">
           <button
@@ -180,6 +219,13 @@ function updateLowCpuPriority(value: boolean) {
 
 function updateVerifyOnImport(value: boolean) {
   emit('update:settings', { ...(props.settings || {}), verificationOnImport: value })
+}
+
+function updateWindow(
+  field: 'verificationOpeningSeconds' | 'verificationClosingSeconds',
+  value: number,
+) {
+  emit('update:settings', { ...(props.settings || {}), [field]: value })
 }
 
 const toast = useToast()
@@ -418,6 +464,37 @@ h3 {
 
 .maintenance-option {
   margin-top: 0.75rem;
+}
+
+.maintenance-windows {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+.maintenance-window {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: #adb5bd;
+}
+
+.maintenance-window input {
+  width: 110px;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #444;
+  border-radius: 6px;
+  background-color: #1a1a1a;
+  color: #fff;
+}
+
+.maintenance-window-help {
+  flex-basis: 100%;
+  color: #8a93a0;
+  font-size: 0.8rem;
 }
 
 .action-button {

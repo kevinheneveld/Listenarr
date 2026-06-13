@@ -22,10 +22,9 @@ async function execute() {
   const toast = useToast()
   try {
     const res = await apiService.rejectNotAudiobook(props.audiobookId)
-    const searchMsg =
-      res.searchQueued > 0
-        ? `Started a search and queued ${res.searchQueued} download(s).`
-        : 'Started a new search — nothing better grabbed yet, so the book is back to wanted.'
+    const searchMsg = res.searchStarted
+      ? 'A background search for a replacement is running; the rejected release is blocklisted.'
+      : 'The book is back to wanted; the next automatic search cycle will look for a replacement.'
     toast.success('Content replaced', `Removed ${res.filesRemoved} file(s). ${searchMsg}`)
     if (res.warnings && res.warnings.length > 0) {
       toast.warning('Some files could not be removed', res.warnings.join(' '))

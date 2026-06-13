@@ -394,6 +394,10 @@ export interface ApplicationSettings {
   // Audio verification (ADR-0001): auto-verify a book right after a successful
   // download import
   verificationOnImport?: boolean
+  // Audio verification (ADR-0001): how many seconds of the book's opening
+  // (first file) and closing (last file) are transcribed looking for credits
+  verificationOpeningSeconds?: number
+  verificationClosingSeconds?: number
   // Optional admin credentials used when saving settings to create/update an initial admin user
   adminUsername?: string
   adminPassword?: string
