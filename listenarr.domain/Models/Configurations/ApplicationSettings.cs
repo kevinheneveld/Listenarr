@@ -72,6 +72,14 @@ namespace Listenarr.Domain.Models.Configurations
         public string AudnexusApiUrl { get; set; } = "https://api.audnex.us";
         public int MaxConcurrentDownloads { get; set; } = 3;
         public int PollingIntervalSeconds { get; set; } = 30;
+
+        // Delay inserted between consecutive books during an automatic-search sweep.
+        // The sweep walks every monitored-but-unmet book and queries all enabled
+        // indexers per book; with a large wanted list this fires a sustained flood
+        // at the indexers (and the public trackers behind Prowlarr) for hours.
+        // Spacing each book out keeps the background sweep from hammering them while
+        // leaving manual "Search now" untouched. 0 disables the throttle.
+        public int AutomaticSearchBookDelaySeconds { get; set; } = 5;
         public bool EnableNotifications { get; set; } = false;
         public List<string> AllowedFileExtensions
         {

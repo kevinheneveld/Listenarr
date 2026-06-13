@@ -373,6 +373,8 @@ export interface ApplicationSettings {
   maxConcurrentDownloads: number
   unmatchedScanConcurrency?: number
   pollingIntervalSeconds?: number
+  // Delay between books during the automatic-search sweep (0 = back-to-back, no throttle)
+  automaticSearchBookDelaySeconds?: number
   // How many seconds a download must be observed as complete by the client before finalization begins
   downloadCompletionStabilitySeconds?: number
   // Retry/backoff settings used by the server when a finalized download's source file is not yet present

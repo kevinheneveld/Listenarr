@@ -77,6 +77,25 @@
       </FormRow>
 
       <FormRow
+        label="Automatic Search: delay between books (seconds)"
+        help="The 6-hourly automatic search walks every monitored-but-missing book and queries all indexers per book. This delay spaces those books out so a large wanted list doesn't flood your indexers and trackers. 0 disables the throttle (back-to-back). Manual 'Search now' is never throttled."
+      >
+        <input
+          :value="settings.automaticSearchBookDelaySeconds ?? 5"
+          @input="
+            (e) =>
+              updateField(
+                'automaticSearchBookDelaySeconds',
+                Number((e.target as HTMLInputElement).value || 0),
+              )
+          "
+          type="number"
+          min="0"
+          max="300"
+        />
+      </FormRow>
+
+      <FormRow
         label="Download Completion Stability (seconds)"
         help="How long (seconds) a download must be seen as complete on the client before finalization begins. Increase for clients that post-process/extract after completion."
       >

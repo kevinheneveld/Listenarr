@@ -123,6 +123,16 @@ namespace Listenarr.Application.Search
             var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
             var filterPipeline = scope.ServiceProvider.GetRequiredService<SearchResultFilterPipeline>();
+            var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+
+            // Per-book throttle: with a large wanted list, searching every book
+            // back-to-back floods the indexers (and the public trackers behind
+            // Prowlarr) for hours. Spacing each book out keeps the background
+            // sweep neighbourly. Read once per cycle so a settings change takes
+            // effect on the next sweep without a restart. Clamped to a sane
+            // ceiling so a fat-fingered value can't stall the sweep indefinitely.
+            var appSettings = await configurationService.GetApplicationSettingsAsync();
+            var bookDelay = TimeSpan.FromSeconds(Math.Clamp(appSettings.AutomaticSearchBookDelaySeconds, 0, 300));
 
             // Get all monitored audiobooks that haven't been searched in the last 6 hours
             var cutoffTime = DateTime.UtcNow.AddHours(-6);
@@ -138,11 +148,28 @@ namespace Listenarr.Application.Search
 
             var processedCount = 0;
             var downloadsQueued = 0;
+            var isFirstBook = true;
 
             foreach (var audiobook in monitoredAudiobooks)
             {
                 if (stoppingToken.IsCancellationRequested)
                     break;
+
+                // Space books out (not before the first one) so the sweep
+                // trickles indexer queries instead of bursting them. Cancellable
+                // so a shutdown or a manual "Search now" isn't blocked by it.
+                if (!isFirstBook && bookDelay > TimeSpan.Zero)
+                {
+                    try
+                    {
+                        await Task.Delay(bookDelay, stoppingToken);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                }
+                isFirstBook = false;
 
                 try
                 {
