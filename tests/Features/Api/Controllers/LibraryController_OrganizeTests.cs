@@ -391,14 +391,15 @@ namespace Listenarr.Tests.Features.Api.Controllers
 
             // Audiobook's current path is /<tmp>/Misplaced; target computes to
             // /<tmp>/Author X/Occupied. Pre-populate the target with a foreign
-            // file so it exists and is non-empty — apply would refuse, so the
-            // preview must surface this row as invalid_target rather than
-            // will_move.
+            // AUDIO file so it exists and holds protected content — apply would
+            // refuse, so the preview must surface this row as invalid_target
+            // rather than will_move. (A non-audio occupant is the replaceable-
+            // stub case, covered separately below.)
             var currentPath = Path.Combine(root, "Misplaced");
             Directory.CreateDirectory(currentPath);
             var targetPath = Path.Combine(root, "Author X", "Occupied");
             Directory.CreateDirectory(targetPath);
-            await File.WriteAllTextAsync(Path.Combine(targetPath, "foreign.txt"), "stranger danger");
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "foreign.m4b"), "stranger danger");
 
             var ab = await _audiobookRepository.AddAsync(new Audiobook
             {
@@ -418,6 +419,135 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.Contains("Occupied", row.TargetPath ?? string.Empty);
             Assert.Equal(0, preview.WillMoveCount);
             Assert.Equal(1, preview.InvalidTargetCount);
+        }
+
+        [Fact(DisplayName = "Preview: target occupied by metadata-only leftovers nothing references → will_move with replace flag")]
+        public async Task Preview_TargetOccupiedByUnreferencedStub_IsWillMoveWithReplaceFlag()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var currentPath = Path.Combine(root, "Misplaced");
+            Directory.CreateDirectory(currentPath);
+            var targetPath = Path.Combine(root, "Author X", "Occupied");
+            Directory.CreateDirectory(targetPath);
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "Occupied - Author X.opf"), "stale metadata");
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "cover.jpg"), "stale cover");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Occupied",
+                Authors = new List<string> { "Author X" },
+                BasePath = currentPath,
+            });
+            await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.WillMove, row.Status);
+            Assert.True(row.ReplacesStubTarget);
+            Assert.Equal(1, preview.WillMoveCount);
+            Assert.Equal(0, preview.InvalidTargetCount);
+        }
+
+        [Fact(DisplayName = "Preview: stub target referenced by another record's BasePath → stays invalid_target")]
+        public async Task Preview_StubTargetReferencedByOtherBasePath_IsInvalidTarget()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var currentPath = Path.Combine(root, "Misplaced");
+            Directory.CreateDirectory(currentPath);
+            var targetPath = Path.Combine(root, "Author X", "Occupied");
+            Directory.CreateDirectory(targetPath);
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "cover.jpg"), "stale cover");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Occupied",
+                Authors = new List<string> { "Author X" },
+                BasePath = currentPath,
+            });
+            await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
+
+            // Another record claims the target folder as its BasePath — even
+            // though the folder holds no audio, replacing it would orphan that
+            // record's anchor, so the row must stay invalid.
+            var other = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Claimant",
+                Authors = new List<string> { "Author Y" },
+                BasePath = targetPath,
+            });
+            await AttachFileAsync(other, $"{targetPath}/claimant.m4b");
+            // The claimant's tracked file is DB-only (not on disk) so the
+            // target still LOOKS like a stub on disk — the DB check is what
+            // must catch it.
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows, r => r.Id == ab.Id);
+            Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
+            Assert.Equal(OrganizeInvalidReasonCode.TargetExists, row.ReasonCode);
+        }
+
+        [Fact(DisplayName = "Apply: replaceable stub target queues the move (not skipped)")]
+        public async Task Apply_StubOccupiedTarget_QueuesMove()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var currentPath = Path.Combine(root, "Misplaced");
+            Directory.CreateDirectory(currentPath);
+            var targetPath = Path.Combine(root, "Author X", "Occupied");
+            Directory.CreateDirectory(targetPath);
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "leftover.opf"), "stale");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Occupied",
+                Authors = new List<string> { "Author X" },
+                BasePath = currentPath,
+            });
+            await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
+
+            var result = await ApplyAsync(new[] { ab.Id });
+            Assert.Equal(1, result.Queued);
+            Assert.Equal(0, result.Skipped);
+
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
+            var job = Assert.Single(jobs, j => j.AudiobookId == ab.Id);
+            Assert.True(job.ReplaceStubTarget);
+        }
+
+        [Fact(DisplayName = "Apply: target occupied by audio is skipped with a reason instead of queuing a doomed job")]
+        public async Task Apply_AudioOccupiedTarget_SkipsWithReason()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var currentPath = Path.Combine(root, "Misplaced");
+            Directory.CreateDirectory(currentPath);
+            var targetPath = Path.Combine(root, "Author X", "Occupied");
+            Directory.CreateDirectory(targetPath);
+            await File.WriteAllTextAsync(Path.Combine(targetPath, "protected.m4b"), "real audio");
+
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Occupied",
+                Authors = new List<string> { "Author X" },
+                BasePath = currentPath,
+            });
+            await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
+
+            var result = await ApplyAsync(new[] { ab.Id });
+            Assert.Equal(0, result.Queued);
+            Assert.Equal(1, result.Skipped);
+            Assert.Contains(result.SkippedDetails, d => d.AudiobookId == ab.Id
+                && (d.Reason ?? string.Empty).Contains("already exists", StringComparison.OrdinalIgnoreCase));
         }
 
         /// <summary>
@@ -585,6 +715,17 @@ namespace Listenarr.Tests.Features.Api.Controllers
             var actionResult = await controller.GetOrganizePreview() as OkObjectResult;
             Assert.NotNull(actionResult);
             return Assert.IsType<OrganizeLibraryPreviewDto>(actionResult!.Value);
+        }
+
+        private async Task<OrganizeLibraryApplyResultDto> ApplyAsync(IEnumerable<int> ids)
+        {
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var actionResult = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
+            {
+                AudiobookIds = ids.ToList(),
+            }) as OkObjectResult;
+            Assert.NotNull(actionResult);
+            return Assert.IsType<OrganizeLibraryApplyResultDto>(actionResult!.Value);
         }
 
         private sealed class TempDirectory : IDisposable

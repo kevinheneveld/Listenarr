@@ -3684,12 +3684,25 @@ namespace Listenarr.Api.Controllers
                     }
                     if (TargetExistsWithContent(target))
                     {
-                        row.Status = OrganizePreviewStatus.InvalidTarget;
-                        row.ReasonCode = OrganizeInvalidReasonCode.TargetExists;
-                        row.Reason = "Target directory already exists on disk and contains files. Resolve the existing content (move or delete) before organizing this row.";
-                        row.TargetPath = target;
-                        rows.Add(row);
-                        continue;
+                        // A populated target is only a hard conflict when it
+                        // holds something worth protecting. A metadata-only husk
+                        // (covers, .opf, playlists — leftovers from a removed
+                        // release) that nothing in the DB references can be
+                        // replaced by the move; surface it as will_move with a
+                        // flag instead of making the operator delete it by hand.
+                        if (IsReplaceableStubTarget(target, audiobook.Id, allAudiobooks, allFiles))
+                        {
+                            row.ReplacesStubTarget = true;
+                        }
+                        else
+                        {
+                            row.Status = OrganizePreviewStatus.InvalidTarget;
+                            row.ReasonCode = OrganizeInvalidReasonCode.TargetExists;
+                            row.Reason = "Target directory already exists on disk and contains files. Resolve the existing content (move or delete) before organizing this row.";
+                            row.TargetPath = target;
+                            rows.Add(row);
+                            continue;
+                        }
                     }
                 }
 
@@ -3789,6 +3802,13 @@ namespace Listenarr.Api.Controllers
             var result = new OrganizeLibraryApplyResultDto();
             var byKey = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
 
+            // Full library state for the stub-target reference checks below —
+            // a target counts as a replaceable stub only if NOTHING in the DB
+            // points at it, which requires looking beyond the requested ids.
+            var allAudiobooksForStubCheck = await _repo.GetAllAsync();
+            var allFilesForStubCheck = await _audioFileRepository.GetAllAsync();
+            var replaceStubIds = new HashSet<int>();
+
             foreach (var audiobook in audiobooks)
             {
                 // Defense in depth: even if the preview gate missed this or
@@ -3828,6 +3848,29 @@ namespace Listenarr.Api.Controllers
                     continue;
                 }
 
+                // Mirror the preview's populated-target handling: replaceable
+                // metadata stubs get queued with the replace flag; anything
+                // else occupying the target is skipped here instead of failing
+                // one by one in the move queue.
+                if (!IsTargetAncestorOfSource(NormalizeOrganizePath(audiobook.BasePath), target)
+                    && TargetExistsWithContent(target))
+                {
+                    if (IsReplaceableStubTarget(target, audiobook.Id, allAudiobooksForStubCheck, allFilesForStubCheck))
+                    {
+                        replaceStubIds.Add(audiobook.Id);
+                    }
+                    else
+                    {
+                        result.Skipped++;
+                        result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                        {
+                            AudiobookId = audiobook.Id,
+                            Reason = "Target directory already exists on disk and contains files",
+                        });
+                        continue;
+                    }
+                }
+
                 targets[audiobook.Id] = target;
                 if (!byKey.TryGetValue(targetKey, out var ids))
                 {
@@ -3860,7 +3903,9 @@ namespace Listenarr.Api.Controllers
                 try
                 {
                     var sourcePath = NormalizeOrganizePath(audiobook.BasePath);
-                    var jobId = await _moveQueueService.EnqueueMoveAsync(audiobook.Id, target, sourcePath);
+                    var jobId = await _moveQueueService.EnqueueMoveAsync(
+                        audiobook.Id, target, sourcePath,
+                        replaceStubTarget: replaceStubIds.Contains(audiobook.Id));
                     result.Queued++;
                     result.QueuedJobs.Add(new OrganizeQueuedJobDto
                     {
@@ -4220,6 +4265,39 @@ namespace Listenarr.Api.Controllers
                 // time guard surface the real problem rather than guessing.
                 return false;
             }
+        }
+
+        /// <summary>
+        /// True when an existing, populated organize target can be safely
+        /// replaced by the move: it holds no audio on disk (see
+        /// <see cref="MoveExecutor.IsMetadataStubDirectory"/>), no tracked file
+        /// row lives at or under it, and no other audiobook's BasePath points
+        /// at or under it. The executor re-checks the on-disk half at move
+        /// time; the DB half is checked here because the executor is pure
+        /// file-system code.
+        /// </summary>
+        private static bool IsReplaceableStubTarget(
+            string target,
+            int audiobookId,
+            IReadOnlyCollection<Audiobook> allAudiobooks,
+            IReadOnlyCollection<AudiobookFile> allFiles)
+        {
+            if (!MoveExecutor.IsMetadataStubDirectory(target)) return false;
+
+            var key = NormalizeOrganizeKey(NormalizeOrganizePath(target));
+            if (string.IsNullOrEmpty(key)) return false;
+            var prefix = key + "/";
+
+            bool AtOrUnderTarget(string? path)
+            {
+                if (string.IsNullOrWhiteSpace(path)) return false;
+                var k = NormalizeOrganizeKey(NormalizeOrganizePath(path));
+                return k == key || k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            }
+
+            if (allFiles.Any(f => AtOrUnderTarget(f.Path))) return false;
+            if (allAudiobooks.Any(a => a.Id != audiobookId && AtOrUnderTarget(a.BasePath))) return false;
+            return true;
         }
 
         /// <summary>

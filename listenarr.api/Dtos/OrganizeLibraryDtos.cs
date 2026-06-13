@@ -103,6 +103,14 @@ namespace Listenarr.Api.Dtos
         /// true, so it never offers a flatten the executor would refuse.
         /// </summary>
         public bool CanFlatten { get; set; }
+        /// <summary>
+        /// True for <c>will_move</c> rows whose target directory exists on disk
+        /// but holds only leftover metadata (no audio files, nothing referenced
+        /// by the DB). The move will delete and replace the stub instead of
+        /// refusing; the UI labels these so the operator knows the target isn't
+        /// pristine.
+        /// </summary>
+        public bool ReplacesStubTarget { get; set; }
     }
 
     public class OrganizeLibraryPreviewDto

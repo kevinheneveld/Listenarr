@@ -91,6 +91,12 @@
                     </div>
                     <div class="row-meta">
                       {{ row.fileCount }} file{{ row.fileCount === 1 ? '' : 's' }} · {{ formatBytes(row.totalSize) }}
+                      <span
+                        v-if="row.replacesStubTarget"
+                        class="stub-replace-tag"
+                        title="The target folder exists but only holds leftover metadata (covers, .opf, playlists) that nothing references. The move will replace it."
+                        >replaces leftover metadata</span
+                      >
                     </div>
                   </div>
                 </label>
@@ -908,6 +914,15 @@ watch(
   margin-top: 3px;
   font-size: 11px;
   color: #777;
+}
+.stub-replace-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(230, 175, 46, 0.45);
+  background: rgba(230, 175, 46, 0.12);
+  color: #e6af2e;
+  cursor: help;
 }
 .collision-group {
   padding: 10px 14px;

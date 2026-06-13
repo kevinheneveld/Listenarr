@@ -129,6 +129,93 @@ namespace Listenarr.Tests.Features.Infrastructure.FileSystem
             Assert.True(File.Exists(Path.Combine(target, "preexisting.txt")));
         }
 
+        [Fact(DisplayName = "Stub target (metadata only) + replace flag → replaced; stub files gone, moved files present")]
+        public async Task StubTarget_ReplacedWhenFlagSet()
+        {
+            var source = MakeDir("Author", "Title", "Old Narrator");
+            WriteFile(source, "book.m4b", "audio-data");
+            var target = MakeDir("Author", "Title", "New Narrator");
+            WriteFile(target, "Title - Author.opf", "stale-metadata");
+            WriteFile(target, "Title - Author.jpg", "stale-cover");
+
+            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, Guid.NewGuid(), logger: null, replaceStubTarget: true);
+
+            Assert.True(outcome.Success, $"Move should succeed. Error: {outcome.ErrorMessage}");
+            Assert.True(File.Exists(Path.Combine(target, "book.m4b")));
+            Assert.False(File.Exists(Path.Combine(target, "Title - Author.opf")));
+            Assert.False(File.Exists(Path.Combine(target, "Title - Author.jpg")));
+            Assert.False(Directory.Exists(source));
+        }
+
+        [Fact(DisplayName = "Stub target without the replace flag → refused (default behavior unchanged)")]
+        public async Task StubTarget_RefusedWithoutFlag()
+        {
+            var source = MakeDir("Author", "Title", "Old Narrator");
+            WriteFile(source, "book.m4b", "audio-data");
+            var target = MakeDir("Author", "Title", "New Narrator");
+            WriteFile(target, "Title - Author.opf", "stale-metadata");
+
+            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, Guid.NewGuid(), logger: null);
+
+            Assert.False(outcome.Success);
+            Assert.True(File.Exists(Path.Combine(source, "book.m4b")));
+            Assert.True(File.Exists(Path.Combine(target, "Title - Author.opf")));
+        }
+
+        [Fact(DisplayName = "Target holds audio (even nested) → refused despite the replace flag")]
+        public async Task AudioInTarget_RefusedDespiteFlag()
+        {
+            var source = MakeDir("Author", "Title", "Old Narrator");
+            WriteFile(source, "book.m4b", "fresh-audio");
+            var target = MakeDir("Author", "Title", "New Narrator");
+            var nested = MakeDir("Author", "Title", "New Narrator", "Sub");
+            WriteFile(target, "cover.jpg", "cover");
+            WriteFile(nested, "real-book.mp3", "protected-audio");
+
+            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, Guid.NewGuid(), logger: null, replaceStubTarget: true);
+
+            Assert.False(outcome.Success);
+            Assert.True(File.Exists(Path.Combine(source, "book.m4b")));
+            Assert.True(File.Exists(Path.Combine(nested, "real-book.mp3")));
+        }
+
+        [Fact(DisplayName = "Stub target inside source ({Narrator} pattern) → stub not resurrected inside the new target")]
+        public async Task StubTargetInsideSource_NotResurrected()
+        {
+            // /root/Author/Title/{book.m4b, Narrator/{stale.opf}} → /root/Author/Title/Narrator
+            // The stub's contents are part of source's enumeration; without the
+            // skip they'd be copied to target/Narrator/stale.opf — one level
+            // deeper than where they started.
+            var source = MakeDir("Author", "Title");
+            WriteFile(source, "book.m4b", "audio-data");
+            var target = MakeDir("Author", "Title", "Narrator");
+            WriteFile(target, "stale.opf", "stale-metadata");
+
+            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, Guid.NewGuid(), logger: null, replaceStubTarget: true);
+
+            Assert.True(outcome.Success, $"Move should succeed. Error: {outcome.ErrorMessage}");
+            Assert.True(File.Exists(Path.Combine(target, "book.m4b")));
+            Assert.False(File.Exists(Path.Combine(target, "stale.opf")));
+            Assert.False(File.Exists(Path.Combine(target, "Narrator", "stale.opf")));
+        }
+
+        [Fact(DisplayName = "IsMetadataStubDirectory: metadata-only true, audio false, missing false, empty true")]
+        public void IsMetadataStubDirectory_Classification()
+        {
+            var stub = MakeDir("stub");
+            WriteFile(stub, "cover.jpg", "img");
+            WriteFile(MakeDir("stub", "nested"), "book.opf", "meta");
+            Assert.True(MoveExecutor.IsMetadataStubDirectory(stub));
+
+            var withAudio = MakeDir("with-audio");
+            WriteFile(withAudio, "cover.jpg", "img");
+            WriteFile(MakeDir("with-audio", "nested"), "book.M4B", "audio");
+            Assert.False(MoveExecutor.IsMetadataStubDirectory(withAudio));
+
+            Assert.False(MoveExecutor.IsMetadataStubDirectory(Path.Combine(_root, "does-not-exist")));
+            Assert.True(MoveExecutor.IsMetadataStubDirectory(MakeDir("empty")));
+        }
+
         [Fact(DisplayName = "Source at filesystem root with target inside it → refused with library-root message")]
         public async Task SourceAtFilesystemRoot_Refused()
         {

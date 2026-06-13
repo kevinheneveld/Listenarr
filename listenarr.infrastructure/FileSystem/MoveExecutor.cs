@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Domain.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Infrastructure.FileSystem
@@ -66,17 +67,49 @@ namespace Listenarr.Infrastructure.FileSystem
         public const int MaxErrorMessageLength = 500;
 
         /// <summary>
+        /// True when <paramref name="path"/> is an existing directory holding
+        /// no audio files at any depth — only metadata leftovers (covers,
+        /// .opf/.nfo, playlists, rip logs) or nothing at all. These husks are
+        /// what a removed or reorganized release leaves behind, and they're
+        /// safe to replace because every file in them is regenerable. Unreadable
+        /// directories report <c>false</c>: if we can't prove there's no audio,
+        /// we don't treat it as a stub.
+        /// </summary>
+        public static bool IsMetadataStubDirectory(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return false;
+            try
+            {
+                if (!Directory.Exists(path)) return false;
+                return !Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                    .Any(FileUtils.IsAudioFile);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Copy everything under <paramref name="source"/> into
         /// <paramref name="target"/> via a sibling temp directory, then delete
         /// the source. Caller is responsible for DB / metadata updates after
         /// success.
         /// </summary>
+        /// <param name="replaceStubTarget">
+        /// When true, a target directory that exists but contains no audio
+        /// (see <see cref="IsMetadataStubDirectory"/>) is deleted and replaced
+        /// instead of refusing the move. Callers must verify no DB rows
+        /// (file paths, BasePaths) reference the target before enabling this —
+        /// this method only re-checks the on-disk no-audio invariant.
+        /// </param>
         public static async Task<MoveOutcome> ExecuteMoveAsync(
             string source,
             string target,
             Guid jobId,
             ILogger? logger,
-            CancellationToken ct = default)
+            CancellationToken ct = default,
+            bool replaceStubTarget = false)
         {
             if (string.IsNullOrWhiteSpace(source))
             {
@@ -180,17 +213,28 @@ namespace Listenarr.Infrastructure.FileSystem
 
             // Target's existence: only a non-empty target is a hard error.
             // An empty target (e.g. left behind by a previous failed attempt)
-            // can be reclaimed by removing it before Directory.Move.
+            // can be reclaimed by removing it before Directory.Move. With
+            // replaceStubTarget, a populated target is also reclaimable when
+            // it holds no audio — just metadata leftovers from a prior
+            // release that the organize flow has verified are unreferenced.
+            var replacingStub = false;
             if (Directory.Exists(targetFull))
             {
                 var hasContent = Directory.EnumerateFileSystemEntries(targetFull).Any();
                 if (hasContent)
                 {
-                    return new MoveOutcome
+                    if (replaceStubTarget && IsMetadataStubDirectory(targetFull))
                     {
-                        Success = false,
-                        ErrorMessage = "Target directory already exists and contains files",
-                    };
+                        replacingStub = true;
+                    }
+                    else
+                    {
+                        return new MoveOutcome
+                        {
+                            Success = false,
+                            ErrorMessage = "Target directory already exists and contains files",
+                        };
+                    }
                 }
             }
 
@@ -212,6 +256,18 @@ namespace Listenarr.Infrastructure.FileSystem
                     var entryFull = TrimTrailingSeparator(Path.GetFullPath(entry));
                     if (string.Equals(entryFull, tempName, StringComparison.OrdinalIgnoreCase)
                         || entryFull.StartsWith(tempName + sep, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    // When the stub target lives inside source (narrator-level
+                    // pattern), its leftovers are part of source's enumeration.
+                    // They're being replaced, not preserved — copying them would
+                    // resurrect the stale metadata one level deeper inside the
+                    // new target.
+                    if (replacingStub && sourceContainsTarget
+                        && (string.Equals(entryFull, targetFull, StringComparison.OrdinalIgnoreCase)
+                            || entryFull.StartsWith(targetWithSep, StringComparison.OrdinalIgnoreCase)))
                     {
                         continue;
                     }
@@ -245,9 +301,23 @@ namespace Listenarr.Infrastructure.FileSystem
 
                 if (Directory.Exists(targetFull))
                 {
-                    // Target existed but was empty when we checked above; remove
-                    // the empty shell so Directory.Move doesn't refuse.
-                    Directory.Delete(targetFull, false);
+                    if (replacingStub)
+                    {
+                        // Re-verify the no-audio invariant right before the
+                        // recursive delete: if audio landed in the target while
+                        // we were copying, refuse rather than destroy it.
+                        if (!IsMetadataStubDirectory(targetFull))
+                        {
+                            throw new IOException("Target gained audio files during the move; refusing to replace it");
+                        }
+                        Directory.Delete(targetFull, true);
+                    }
+                    else
+                    {
+                        // Target existed but was empty when we checked above; remove
+                        // the empty shell so Directory.Move doesn't refuse.
+                        Directory.Delete(targetFull, false);
+                    }
                 }
 
                 var finalParent = Path.GetDirectoryName(targetFull);

@@ -44,7 +44,7 @@ namespace Listenarr.Application.Audiobooks
 
         public ChannelReader<MoveJob> Reader => _channel.Reader;
 
-        public async Task<Guid> EnqueueMoveAsync(int audiobookId, string requestedPath, string? sourcePath = null)
+        public async Task<Guid> EnqueueMoveAsync(int audiobookId, string requestedPath, string? sourcePath = null, bool replaceStubTarget = false)
         {
             try
             {
@@ -69,7 +69,7 @@ namespace Listenarr.Application.Audiobooks
                 _logger.LogWarning(ex, "Failed during dedupe check for move job; will enqueue new job");
             }
 
-            var job = new MoveJob { AudiobookId = audiobookId, RequestedPath = requestedPath, EnqueuedAt = DateTime.UtcNow, Status = "Queued", SourcePath = sourcePath };
+            var job = new MoveJob { AudiobookId = audiobookId, RequestedPath = requestedPath, EnqueuedAt = DateTime.UtcNow, Status = "Queued", SourcePath = sourcePath, ReplaceStubTarget = replaceStubTarget };
 
             try
             {
@@ -195,7 +195,7 @@ namespace Listenarr.Application.Audiobooks
                 return null;
             }
 
-            var newJob = new MoveJob { AudiobookId = job.AudiobookId, RequestedPath = job.RequestedPath, EnqueuedAt = DateTime.UtcNow, Status = "Queued", SourcePath = job.SourcePath };
+            var newJob = new MoveJob { AudiobookId = job.AudiobookId, RequestedPath = job.RequestedPath, EnqueuedAt = DateTime.UtcNow, Status = "Queued", SourcePath = job.SourcePath, ReplaceStubTarget = job.ReplaceStubTarget };
             try
             {
                 using var scope = _scopeFactory.CreateScope();

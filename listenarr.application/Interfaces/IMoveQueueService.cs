@@ -21,7 +21,7 @@ namespace Listenarr.Application.Interfaces
 {
     public interface IMoveQueueService
     {
-        Task<Guid> EnqueueMoveAsync(int audiobookId, string requestedPath, string? sourcePath = null);
+        Task<Guid> EnqueueMoveAsync(int audiobookId, string requestedPath, string? sourcePath = null, bool replaceStubTarget = false);
         Task<Guid?> RequeueMoveAsync(Guid jobId);
         bool TryGetJob(Guid id, out MoveJob? job);
         void UpdateJobStatus(Guid id, string status, string? error = null);

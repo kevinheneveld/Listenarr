@@ -150,7 +150,7 @@ namespace Listenarr.Infrastructure.FileSystem
                         string? attemptedTempPath = null;
                         try
                         {
-                            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, job.Id, logger, stoppingToken);
+                            var outcome = await MoveExecutor.ExecuteMoveAsync(source, target, job.Id, logger, stoppingToken, job.ReplaceStubTarget);
                             attemptedTempPath = outcome.TempPathUsed;
 
                             if (!outcome.Success)

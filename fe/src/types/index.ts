@@ -1625,6 +1625,12 @@ export interface OrganizePreviewRow {
    * when this is true.
    */
   canFlatten: boolean
+  /**
+   * True for `will_move` rows whose target folder exists on disk but holds only
+   * leftover metadata (no audio, nothing referenced by the DB). The move will
+   * replace the stub.
+   */
+  replacesStubTarget: boolean
 }
 
 /**
