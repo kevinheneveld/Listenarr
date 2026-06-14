@@ -55,7 +55,17 @@
               {{ isCurrentAuthorMonitored ? 'Monitoring Author' : 'Not Monitored' }}
             </Pill>
             <Pill variant="success"> {{ authorLibraryCount }} in library </Pill>
-            <Pill v-if="authorNotAddedCount > 0" variant="warning">
+            <Pill
+              v-if="authorNotAddedCount > 0"
+              variant="warning"
+              class="clickable-pill"
+              role="button"
+              tabindex="0"
+              title="Add all of these to your library"
+              @click="showAddMissingModal = true"
+              @keydown.enter="showAddMissingModal = true"
+              @keydown.space.prevent="showAddMissingModal = true"
+            >
               {{ authorNotAddedCount }} ready to add
             </Pill>
             <Pill variant="info">
@@ -177,7 +187,17 @@
             <Pill v-if="seriesMissingCount > 0" variant="warning">
               {{ seriesMissingCount }} missing
             </Pill>
-            <Pill v-if="seriesNotAddedCount > 0" variant="default">
+            <Pill
+              v-if="seriesNotAddedCount > 0"
+              variant="default"
+              class="clickable-pill"
+              role="button"
+              tabindex="0"
+              title="Add all of these to your library"
+              @click="showAddMissingModal = true"
+              @keydown.enter="showAddMissingModal = true"
+              @keydown.space.prevent="showAddMissingModal = true"
+            >
               {{ seriesNotAddedCount }} ready to add
             </Pill>
             <Pill variant="primary"> {{ seriesCatalogTotalCount }} total books </Pill>
@@ -288,6 +308,15 @@
               <PhArrowClockwise v-if="authorMonitoringBusy" class="spin-icon" />
               <component v-else :is="isCurrentAuthorMonitored ? PhEye : PhPlus" />
               {{ isCurrentAuthorMonitored ? 'Monitoring Author' : 'Monitor Author' }}
+            </button>
+            <button
+              v-if="missingWorks.length > 0"
+              class="toolbar-btn author-addmissing-btn"
+              @click="showAddMissingModal = true"
+              :title="`Add the ${missingWorks.length} book(s) by this author not yet in your library`"
+            >
+              <PhPlus />
+              Add missing ({{ missingWorks.length }})
             </button>
           </div>
         </div>
@@ -2971,6 +3000,21 @@ defineExpose({
   gap: 8px;
   margin-bottom: 16px;
   flex-wrap: wrap;
+}
+
+/* The "ready to add" pill doubles as a shortcut to the bulk-add modal. */
+.clickable-pill {
+  cursor: pointer;
+  transition:
+    filter 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.clickable-pill:hover {
+  filter: brightness(1.15);
+}
+.clickable-pill:focus-visible {
+  outline: 2px solid var(--brand, #5aa9e6);
+  outline-offset: 2px;
 }
 
 .description {
