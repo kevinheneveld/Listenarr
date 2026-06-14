@@ -77,8 +77,27 @@
       </FormRow>
 
       <FormRow
+        label="Automatic Search: interval (hours)"
+        help="How often the background search sweeps your monitored-but-missing books. Most of that list is books not yet available as audiobooks, so a longer interval is gentler on your indexers (and the shared Prowlarr) with little practical loss. Default 24. Range 1–168 (7 days)."
+      >
+        <input
+          :value="settings.automaticSearchIntervalHours ?? 24"
+          @input="
+            (e) =>
+              updateField(
+                'automaticSearchIntervalHours',
+                Number((e.target as HTMLInputElement).value || 24),
+              )
+          "
+          type="number"
+          min="1"
+          max="168"
+        />
+      </FormRow>
+
+      <FormRow
         label="Automatic Search: delay between books (seconds)"
-        help="The 6-hourly automatic search walks every monitored-but-missing book and queries all indexers per book. This delay spaces those books out so a large wanted list doesn't flood your indexers and trackers. 0 disables the throttle (back-to-back). Manual 'Search now' is never throttled."
+        help="The automatic search walks every monitored-but-missing book and queries all indexers per book. This delay spaces those books out so a large wanted list doesn't flood your indexers and trackers. 0 disables the throttle (back-to-back). Manual 'Search now' is never throttled."
       >
         <input
           :value="settings.automaticSearchBookDelaySeconds ?? 5"
@@ -93,6 +112,26 @@
           min="0"
           max="300"
         />
+      </FormRow>
+
+      <FormRow
+        label="Automatic Search: title-only fallback"
+        help="When the '<title> <author>' search finds nothing, retry once with a title-only query (catches releases whose author name differs from yours). This doubles indexer queries for every unfound book — turn it off to roughly halve background search volume, at some cost to how many books get found. Manual 'Search now' always uses the fallback."
+      >
+        <label class="checkbox-inline">
+          <input
+            type="checkbox"
+            :checked="settings.automaticSearchTitleOnlyFallback ?? true"
+            @change="
+              (e) =>
+                updateField(
+                  'automaticSearchTitleOnlyFallback',
+                  (e.target as HTMLInputElement).checked,
+                )
+            "
+          />
+          <span>Retry with a relaxed title-only query when the primary search finds nothing</span>
+        </label>
       </FormRow>
 
       <FormRow
@@ -196,6 +235,18 @@ function updateFailedDownloadAutoSearch(value: boolean) {
 </script>
 
 <style scoped>
+.checkbox-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  color: #c8cfd9;
+  font-size: 0.9rem;
+}
+.checkbox-inline input {
+  flex: 0 0 auto;
+}
+
 h3 {
   margin: 0 0 1.5rem 0;
   padding: 0;

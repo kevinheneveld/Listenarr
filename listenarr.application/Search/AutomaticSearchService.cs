@@ -52,7 +52,10 @@ namespace Listenarr.Application.Search
     {
         private readonly ILogger<AutomaticSearchService> _logger;
         private readonly IServiceScopeFactory _serviceScopeFactory;
-        private readonly TimeSpan _searchInterval = TimeSpan.FromHours(6); // Search every 6 hours
+        // Interval between background sweeps. Default 24h; overridden each cycle from
+        // ApplicationSettings.AutomaticSearchIntervalHours so a change takes effect on
+        // the next wait without a restart.
+        private TimeSpan _searchInterval = TimeSpan.FromHours(24);
 
         public AutomaticSearchService(
             ILogger<AutomaticSearchService> logger,
@@ -135,6 +138,10 @@ namespace Listenarr.Application.Search
             // ceiling so a fat-fingered value can't stall the sweep indefinitely.
             var appSettings = await configurationService.GetApplicationSettingsAsync();
             var bookDelay = TimeSpan.FromSeconds(Math.Clamp(appSettings.AutomaticSearchBookDelaySeconds, 0, 300));
+            // Refresh the sweep interval for the next wait (loop in ExecuteAsync reads
+            // _searchInterval after this method returns).
+            _searchInterval = TimeSpan.FromHours(Math.Clamp(appSettings.AutomaticSearchIntervalHours, 1, 168));
+            var enableTitleOnlyFallback = appSettings.AutomaticSearchTitleOnlyFallback;
 
             // Get all monitored audiobooks that haven't been searched in the last 6 hours
             var cutoffTime = DateTime.UtcNow.AddHours(-6);
@@ -182,7 +189,8 @@ namespace Listenarr.Application.Search
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
                         audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, filterPipeline, stoppingToken,
                         suppressIfImportBlocked: true,
-                        blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
+                        blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
+                        enableTitleOnlyFallback: enableTitleOnlyFallback);
 
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
@@ -314,7 +322,8 @@ namespace Listenarr.Application.Search
             SearchResultFilterPipeline filterPipeline,
             CancellationToken stoppingToken,
             bool suppressIfImportBlocked,
-            IBlockedReleaseRepository? blockedReleaseRepository = null)
+            IBlockedReleaseRepository? blockedReleaseRepository = null,
+            bool enableTitleOnlyFallback = true)
         {
             var qualityProfile = audiobook.QualityProfile;
             if (qualityProfile == null)
@@ -379,8 +388,10 @@ namespace Listenarr.Application.Search
             var searchResults = await searchService.SearchAsync(searchQuery, category: "3030", isAutomaticSearch: true);
 
             // Recall fallback: if the "<title> <author>" query found nothing (e.g. the author name
-            // on the release differs from ours), retry once with a relaxed title-only query.
-            if (searchResults.Count == 0)
+            // on the release differs from ours), retry once with a relaxed title-only query. This
+            // doubles indexer queries for every unfound book, so the background sweep can disable it
+            // via settings to halve its search volume; manual "Search now" always keeps it on.
+            if (searchResults.Count == 0 && enableTitleOnlyFallback)
             {
                 var fallbackQuery = SearchQueryBuilder.BuildTitleOnly(audiobook);
                 if (!string.IsNullOrWhiteSpace(fallbackQuery) &&

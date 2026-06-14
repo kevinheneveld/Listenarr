@@ -80,6 +80,19 @@ namespace Listenarr.Domain.Models.Configurations
         // Spacing each book out keeps the background sweep from hammering them while
         // leaving manual "Search now" untouched. 0 disables the throttle.
         public int AutomaticSearchBookDelaySeconds { get; set; } = 5;
+
+        // How often the background automatic-search sweep runs. The wanted list is
+        // largely books not yet available as audiobooks, so a frequent sweep mostly
+        // re-queries the unfindable. A longer interval is gentler on the indexers
+        // (and the shared Prowlarr) with no practical loss. Clamped to [1, 168].
+        public int AutomaticSearchIntervalHours { get; set; } = 24;
+
+        // When the primary "<title> <author>" automatic search finds nothing, retry
+        // once with a relaxed title-only query (catches releases whose author string
+        // differs from ours). Doubles indexer queries for every unfound book, so it
+        // can be turned off to roughly halve background search volume at some cost to
+        // recall. Manual "Search now" always uses the fallback regardless.
+        public bool AutomaticSearchTitleOnlyFallback { get; set; } = true;
         public bool EnableNotifications { get; set; } = false;
         public List<string> AllowedFileExtensions
         {

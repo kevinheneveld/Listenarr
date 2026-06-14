@@ -375,6 +375,10 @@ export interface ApplicationSettings {
   pollingIntervalSeconds?: number
   // Delay between books during the automatic-search sweep (0 = back-to-back, no throttle)
   automaticSearchBookDelaySeconds?: number
+  // How often the background automatic-search sweep runs (hours)
+  automaticSearchIntervalHours?: number
+  // Retry a title-only query when the "<title> <author>" search finds nothing
+  automaticSearchTitleOnlyFallback?: boolean
   // How many seconds a download must be observed as complete by the client before finalization begins
   downloadCompletionStabilitySeconds?: number
   // Retry/backoff settings used by the server when a finalized download's source file is not yet present

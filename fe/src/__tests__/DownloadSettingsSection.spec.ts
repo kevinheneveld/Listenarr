@@ -40,7 +40,7 @@ describe('DownloadSettingsSection', () => {
     })
 
     const inputs = wrapper.findAll('input[type="number"]')
-    expect(inputs).toHaveLength(7)
+    expect(inputs).toHaveLength(8)
 
     // Max concurrent
     await inputs[0].setValue('4')
@@ -60,28 +60,48 @@ describe('DownloadSettingsSection', () => {
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.pollingIntervalSeconds).toBe(60)
 
+    // Automatic-search interval (hours)
+    await inputs[3].setValue('24')
+    last =
+      wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
+    expect(last.automaticSearchIntervalHours).toBe(24)
+
     // Automatic-search book delay
-    await inputs[3].setValue('8')
+    await inputs[4].setValue('8')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.automaticSearchBookDelaySeconds).toBe(8)
 
     // Stability
-    await inputs[4].setValue('10')
+    await inputs[5].setValue('10')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.downloadCompletionStabilitySeconds).toBe(10)
 
     // Missing-source delay
-    await inputs[5].setValue('3')
+    await inputs[6].setValue('3')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.missingSourceRetryInitialDelaySeconds).toBe(3)
 
     // Missing-source retries
-    await inputs[6].setValue('5')
+    await inputs[7].setValue('5')
     last =
       wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
     expect(last.missingSourceMaxRetries).toBe(5)
+  })
+
+  it('toggles the title-only fallback checkbox', async () => {
+    const { default: DownloadSettingsSection } =
+      await import('@/components/settings/DownloadSettingsSection.vue')
+    const wrapper = mount(DownloadSettingsSection, {
+      props: { settings: { automaticSearchTitleOnlyFallback: true } },
+    })
+    const checkbox = wrapper.find('input[type="checkbox"]')
+    expect(checkbox.exists()).toBe(true)
+    await checkbox.setValue(false)
+    const last =
+      wrapper.emitted()['update:settings']![wrapper.emitted()['update:settings']!.length - 1][0]
+    expect(last.automaticSearchTitleOnlyFallback).toBe(false)
   })
 })
