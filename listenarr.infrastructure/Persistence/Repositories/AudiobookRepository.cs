@@ -224,6 +224,19 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .AsNoTracking()
                 .ToListAsync();
 
+            // AuthorAsins is NOT a guaranteed position-parallel mirror of Authors: for a
+            // multi-author anthology it is typically a compacted subset (only the
+            // contributors that have an Audible author page). Blindly returning
+            // AuthorAsins[0] therefore hands back a CO-AUTHOR's ASIN for any other name
+            // credited on that book — e.g. resolving "Jeremiah Adelson" to Isaac Asimov's
+            // ASIN because Adelson's only book also credits Asimov, which then loads
+            // Asimov's whole author page. Only trust the array when it can be aligned to
+            // the requested author: a single-author book (the ASIN is unambiguously
+            // theirs) or an array whose length matches the author list 1:1 (so the matched
+            // index maps to the right ASIN). Otherwise skip rather than guess — the caller
+            // falls back to a name-based metadata lookup.
+            string? singleAuthorAsin = null;
+
             foreach (var b in candidates)
             {
                 if (b.AuthorAsins == null || b.AuthorAsins.Count == 0 || b.Authors == null || b.Authors.Count == 0)
@@ -231,14 +244,28 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                     continue;
                 }
 
-                if (b.Authors.Any(a => NormalizeAuthorName(a) == target))
+                var index = b.Authors.FindIndex(a => NormalizeAuthorName(a) == target);
+                if (index < 0)
                 {
-                    var asin = b.AuthorAsins.FirstOrDefault();
+                    continue;
+                }
+
+                if (b.Authors.Count == b.AuthorAsins.Count)
+                {
+                    // Counts line up → the matched author's slot holds their ASIN.
+                    var asin = b.AuthorAsins[index];
                     if (!string.IsNullOrWhiteSpace(asin)) return asin;
                 }
+                else if (b.Authors.Count == 1)
+                {
+                    // Sole author of the book → the lone ASIN is unambiguously theirs.
+                    var asin = b.AuthorAsins.FirstOrDefault();
+                    if (!string.IsNullOrWhiteSpace(asin)) singleAuthorAsin ??= asin;
+                }
+                // Multi-author with a mismatched ASIN count → cannot safely map name→ASIN; skip.
             }
 
-            return null;
+            return singleAuthorAsin;
         }
 
         public async Task<AuthorCacheEntry?> GetCachedAuthorByNameAsync(string name, string region)
