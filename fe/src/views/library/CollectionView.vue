@@ -171,8 +171,13 @@
               <component :is="isCurrentSeriesMonitored ? PhEye : PhEyeSlash" />
               {{ isCurrentSeriesMonitored ? 'Monitoring Series' : 'Not Monitored' }}
             </Pill>
-            <Pill variant="success"> {{ seriesLibraryCount }} in library </Pill>
-            <Pill v-if="seriesNotAddedCount > 0" variant="warning">
+            <Pill v-if="seriesOwnedCount > 0" variant="success">
+              {{ seriesOwnedCount }} in library
+            </Pill>
+            <Pill v-if="seriesMissingCount > 0" variant="warning">
+              {{ seriesMissingCount }} missing
+            </Pill>
+            <Pill v-if="seriesNotAddedCount > 0" variant="default">
               {{ seriesNotAddedCount }} ready to add
             </Pill>
             <Pill variant="primary"> {{ seriesCatalogTotalCount }} total books </Pill>
@@ -920,6 +925,7 @@ import {
   formatSeriesDisplay,
   formatAllSeriesTooltip,
   getSeriesSortKey,
+  buildWorkKey,
 } from '@/utils/seriesDisplay'
 import { useProtectedImages } from '@/composables/useProtectedImages'
 import {
@@ -1074,32 +1080,6 @@ function normalizeAuthorKey(authors: string[] | undefined): string {
 
 function buildTitleAuthorKey(title: string | undefined, authors: string[] | undefined): string {
   return `${normalizeCollectionText(title)}::${normalizeAuthorKey(authors)}`
-}
-
-// A "work" key collapses the many Audible *editions* of the same book (regional/publisher
-// re-releases, narrators) into one logical book. Audible catalogs for a series routinely list
-// the same title several times; the user thinks in terms of books, not editions, and the
-// download search is title-based anyway. This is a good-enough default — it cleanly merges the
-// common identical-title and author/brand-prefixed cases; genuinely ambiguous stragglers are
-// left for the user to curate in the selection UI rather than chasing a perfect key.
-function buildWorkKey(title: string | undefined, authors: string[] | undefined): string {
-  let key = title || ''
-  const colon = key.indexOf(':')
-  if (colon > 0) key = key.slice(0, colon) // drop subtitle (usually series/edition info)
-  key = normalizeCollectionText(key)
-  for (const author of authors || []) {
-    const an = normalizeCollectionText(author)
-    if (an && (key === an || key.startsWith(an + ' '))) {
-      key = key.slice(an.length).trim()
-      key = key.replace(/^s\s+/, '') // orphaned possessive from "Author's Title"
-    }
-  }
-  key = key
-    .replace(/\bbook\s+\d+\b/g, ' ')
-    .replace(/\s+\d+$/, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return key || normalizeCollectionText(title)
 }
 
 // Audible series catalogs sometimes include the sub-series / bundle itself as a "book"
@@ -1386,7 +1366,7 @@ const audiobooks = computed<CollectionDisplayItem[]>(() => {
     const editionsByWork = new Map<string, RemoteCatalogBook[]>()
     for (const book of remoteCatalogBooks.value) {
       if (isSeriesBundleEntry(book)) continue
-      const workKey = buildWorkKey(book.title, book.authors)
+      const workKey = buildWorkKey(book.title, book.authors, book.seriesNumber)
       const existing = editionsByWork.get(workKey)
       if (existing) {
         existing.push(book)
@@ -1430,7 +1410,14 @@ const audiobooks = computed<CollectionDisplayItem[]>(() => {
     const unmatchedLibraryItems = localItems
       .filter((book) => !matchedLibraryIds.has(book.id))
       .filter((book) => {
-        const workKey = buildWorkKey(book.title, book.authors)
+        // Use this book's position within the CURRENT series (a non-primary
+        // membership may differ from the book's primary seriesNumber) so the
+        // key lines up with the catalog keys above.
+        const position =
+          type.value === 'series'
+            ? (resolveSeriesForCollection(book)?.seriesNumber ?? book.seriesNumber)
+            : book.seriesNumber
+        const workKey = buildWorkKey(book.title, book.authors, position)
         if (shownWorkKeys.has(workKey)) return false
         shownWorkKeys.add(workKey)
         return true
@@ -1518,8 +1505,18 @@ const totalAddedAudiobooks = computed(() => audiobooks.value.filter((book) => bo
 const totalNotAddedAudiobooks = computed(() => audiobooks.value.filter((book) => !book.inLibrary))
 const authorLibraryCount = computed(() => totalAddedAudiobooks.value.length)
 const authorNotAddedCount = computed(() => totalNotAddedAudiobooks.value.length)
-const seriesLibraryCount = computed(() => totalAddedAudiobooks.value.length)
 const seriesNotAddedCount = computed(() => totalNotAddedAudiobooks.value.length)
+// "In library" should mean you actually have the audio, not just a tracked
+// record. A monitored-but-missing book has a row but no files — counting it as
+// "in library" reads as ownership it doesn't have. Split the two: owned = has
+// files; missing = tracked record with no files yet (these are the auto-search
+// targets).
+const seriesOwnedCount = computed(
+  () => totalAddedAudiobooks.value.filter((book) => (book.fileCount ?? 0) > 0).length,
+)
+const seriesMissingCount = computed(
+  () => totalAddedAudiobooks.value.filter((book) => (book.fileCount ?? 0) === 0).length,
+)
 const seriesVisibleBookCount = computed(() => audiobooks.value.length)
 // Total = the deduped works we show (have + missing), not the raw edition count from Audible
 // (which double-counts regional/narrator re-releases of the same book).

@@ -5,6 +5,8 @@ import {
   formatAllSeriesTooltip,
   getSeriesSortKey,
   parseSeriesPositionForSort,
+  buildWorkKey,
+  normalizeWorkPosition,
 } from '@/utils/seriesDisplay'
 
 describe('seriesDisplay', () => {
@@ -172,6 +174,58 @@ describe('seriesDisplay', () => {
       const numbered = getSeriesSortKey({ series: 'Foo', seriesNumber: '5' })
       const unnumbered = getSeriesSortKey({ series: 'Foo' })
       expect(numbered < unnumbered).toBe(true)
+    })
+  })
+
+  describe('normalizeWorkPosition', () => {
+    it('canonicalizes numeric positions', () => {
+      expect(normalizeWorkPosition('1')).toBe('1')
+      expect(normalizeWorkPosition('1.0')).toBe('1')
+      expect(normalizeWorkPosition('01')).toBe('1')
+      expect(normalizeWorkPosition('4.5')).toBe('4.5')
+      expect(normalizeWorkPosition(2)).toBe('2')
+    })
+
+    it('returns empty for missing/blank, lowercases non-numeric', () => {
+      expect(normalizeWorkPosition(null)).toBe('')
+      expect(normalizeWorkPosition(undefined)).toBe('')
+      expect(normalizeWorkPosition('  ')).toBe('')
+    })
+  })
+
+  describe('buildWorkKey', () => {
+    const author = ['Lois McMaster Bujold']
+
+    it('keeps distinct series positions separate (regression: The Sharing Knife)', () => {
+      // The bug: titles differing only by volume number collapsed to one work
+      // because the trailing-number strip erased the volume, hiding Volumes 2 & 3.
+      const v1 = buildWorkKey('The Sharing Knife, Volume 1', author, '1')
+      const v2 = buildWorkKey('The Sharing Knife, Volume 2', author, '2')
+      const v3 = buildWorkKey('The Sharing Knife, Volume 3', author, '3')
+      const keys = new Set([v1, v2, v3])
+      expect(keys.size).toBe(3)
+    })
+
+    it('still collapses editions of the same book (same position)', () => {
+      // Audible often lists the same volume with and without its book subtitle;
+      // both share a position and must merge into one work.
+      const withSubtitle = buildWorkKey('The Sharing Knife, Volume 1: Beguilement', author, '1')
+      const withoutSubtitle = buildWorkKey('The Sharing Knife, Volume 1', author, '1')
+      expect(withSubtitle).toBe(withoutSubtitle)
+    })
+
+    it('without a position, falls back to title-based collapse (legacy behavior)', () => {
+      const a = buildWorkKey('The Sharing Knife, Volume 1', author)
+      const b = buildWorkKey('The Sharing Knife, Volume 2', author)
+      // No position to disambiguate → they collapse (the pre-fix behavior, which
+      // is why the catalog now always supplies the position).
+      expect(a).toBe(b)
+    })
+
+    it('distinguishes books whose base titles already differ', () => {
+      const horizon = buildWorkKey('The Sharing Knife, Vol. 4: Horizon', author, '4')
+      const children = buildWorkKey('Knife Children', author, '4.5')
+      expect(horizon).not.toBe(children)
     })
   })
 })
