@@ -46,6 +46,7 @@ import type {
   AuthorCatalogResponse,
   AuthorLookupResponse,
   AuthorMonitoringStatusResponse,
+  AuthorMonitoringExclusion,
   MonitorAuthorResponse,
   MonitorSeriesResponse,
   SeriesMonitoringStatusResponse,
@@ -424,12 +425,13 @@ class ApiService {
     // discarded by treating the array as an object without `.results`.
     const body: Record<string, unknown> = { mode: 'Advanced', title, author, page, limit, region }
     if (language) (body as Record<string, unknown>).language = language
-    const resp = await this.request<
-      AudibleSearchResult[] | AudibleSearchResponse | null
-    >('/search', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
+    const resp = await this.request<AudibleSearchResult[] | AudibleSearchResponse | null>(
+      '/search',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    )
     if (Array.isArray(resp)) {
       return { totalResults: resp.length, results: resp }
     }
@@ -591,6 +593,16 @@ class ApiService {
 
   async unmonitorAuthor(id: number): Promise<{ message: string }> {
     return this.request<{ message: string }>(`/authors/monitoring/${id}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async getAuthorMonitoringExclusions(): Promise<AuthorMonitoringExclusion[]> {
+    return this.request<AuthorMonitoringExclusion[]>('/authors/monitoring/exclusions')
+  }
+
+  async removeAuthorMonitoringExclusion(id: number): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/authors/monitoring/exclusions/${id}`, {
       method: 'DELETE',
     })
   }
@@ -1492,9 +1504,7 @@ class ApiService {
     })
   }
 
-  async mergeDuplicateAudiobooks(
-    merges: DuplicatesMergePair[],
-  ): Promise<MergeDuplicatesResult> {
+  async mergeDuplicateAudiobooks(merges: DuplicatesMergePair[]): Promise<MergeDuplicatesResult> {
     return this.request<MergeDuplicatesResult>(`/library/duplicates/merge`, {
       method: 'POST',
       body: JSON.stringify({ merges }),
@@ -1540,12 +1550,18 @@ class ApiService {
 
   async removeFromLibrary(
     id: number,
-    options?: { deleteFiles?: boolean; deleteFolder?: boolean },
+    options?: {
+      deleteFiles?: boolean
+      deleteFolder?: boolean
+      excludeFromAuthorMonitoring?: boolean
+    },
   ): Promise<{ message: string; id: number }> {
     const params = new URLSearchParams()
     if (options?.deleteFiles !== undefined) params.set('deleteFiles', String(options.deleteFiles))
     if (options?.deleteFolder !== undefined)
       params.set('deleteFolder', String(options.deleteFolder))
+    if (options?.excludeFromAuthorMonitoring !== undefined)
+      params.set('excludeFromAuthorMonitoring', String(options.excludeFromAuthorMonitoring))
     const suffix = params.toString() ? `?${params.toString()}` : ''
     return this.request<{ message: string; id: number }>(`/library/${id}${suffix}`, {
       method: 'DELETE',
@@ -1572,9 +1588,7 @@ class ApiService {
     })
   }
 
-  async rejectNotAudiobook(
-    id: number,
-  ): Promise<{
+  async rejectNotAudiobook(id: number): Promise<{
     message: string
     id: number
     filesRemoved: number
@@ -1637,7 +1651,10 @@ class ApiService {
     })
   }
 
-  async getFileEmbeddedMetadata(audiobookId: number, fileId: number): Promise<EmbeddedFileMetadata> {
+  async getFileEmbeddedMetadata(
+    audiobookId: number,
+    fileId: number,
+  ): Promise<EmbeddedFileMetadata> {
     return this.request<EmbeddedFileMetadata>(
       `/library/${audiobookId}/files/${fileId}/embedded-metadata`,
       { method: 'GET' },
@@ -2431,6 +2448,9 @@ export const createRemotePathMapping = (
 export const updateRemotePathMapping = (id: number, mapping: Partial<RemotePathMapping>) =>
   apiService.updateRemotePathMapping(id, mapping)
 export const deleteRemotePathMapping = (id: number) => apiService.deleteRemotePathMapping(id)
+export const getAuthorMonitoringExclusions = () => apiService.getAuthorMonitoringExclusions()
+export const removeAuthorMonitoringExclusion = (id: number) =>
+  apiService.removeAuthorMonitoringExclusion(id)
 export const translatePath = (request: TranslatePathRequest) => apiService.translatePath(request)
 // Export individual system functions for convenience
 export const getDashboardStats = (

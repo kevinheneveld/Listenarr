@@ -126,6 +126,55 @@ namespace Listenarr.Api.Controllers
             }
         }
 
+        [HttpGet("exclusions")]
+        [ProducesResponseType(typeof(IEnumerable<AuthorMonitoringExclusionResponse>), StatusCodes.Status200OK)]
+        public async Task<ActionResult<IEnumerable<AuthorMonitoringExclusionResponse>>> GetExclusions(
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var exclusions = await _authorMonitoringService.GetExclusionsAsync(cancellationToken);
+                return Ok(exclusions.Select(ToResponse));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to list author-monitoring exclusions");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+        [HttpDelete("exclusions/{id:int}")]
+        public async Task<IActionResult> RemoveExclusion(int id, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var removed = await _authorMonitoringService.RemoveExclusionAsync(id, cancellationToken);
+                if (!removed)
+                {
+                    return NotFound();
+                }
+
+                return Ok(new { message = "Exclusion removed" });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to remove author-monitoring exclusion {ExclusionId}", id);
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+        private static AuthorMonitoringExclusionResponse ToResponse(AuthorMonitoringExclusion exclusion)
+        {
+            return new AuthorMonitoringExclusionResponse
+            {
+                Id = exclusion.Id,
+                Title = exclusion.Title,
+                AuthorName = exclusion.AuthorName,
+                Asin = exclusion.Asin,
+                CreatedAt = exclusion.CreatedAt
+            };
+        }
+
         private static MonitoredAuthorResponse ToResponse(MonitoredAuthor monitoredAuthor)
         {
             return new MonitoredAuthorResponse
@@ -186,6 +235,19 @@ namespace Listenarr.Api.Controllers
             public DateTime? LastSuccessfulSyncAt { get; set; }
 
             public string? LastError { get; set; }
+        }
+
+        public sealed class AuthorMonitoringExclusionResponse
+        {
+            public int Id { get; set; }
+
+            public string Title { get; set; } = string.Empty;
+
+            public string? AuthorName { get; set; }
+
+            public string? Asin { get; set; }
+
+            public DateTime CreatedAt { get; set; }
         }
     }
 }

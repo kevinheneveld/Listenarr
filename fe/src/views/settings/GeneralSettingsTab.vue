@@ -61,6 +61,8 @@
           :settings="localSettings"
           @update:settings="(val) => Object.assign(localSettings, val)"
         />
+
+        <AuthorMonitoringExclusionsSection />
       </div>
       <!-- settings-form -->
     </div>
@@ -80,6 +82,7 @@ import FeaturesSection from '@/components/settings/FeaturesSection.vue'
 import SearchSettingsSection from '@/components/settings/SearchSettingsSection.vue'
 import AuthenticationSection from '@/components/settings/AuthenticationSection.vue'
 import LibraryMaintenanceSection from '@/components/settings/LibraryMaintenanceSection.vue'
+import AuthorMonitoringExclusionsSection from '@/components/settings/AuthorMonitoringExclusionsSection.vue'
 
 interface Props {
   settings: ApplicationSettings | null

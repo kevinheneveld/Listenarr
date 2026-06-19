@@ -107,12 +107,14 @@ namespace Listenarr.Tests.Features.Api.Services
 
             var authorsRepo = new EfMonitoredAuthorRepository(dbContext);
             var audiobooksRepo = new AudiobookRepository(dbContext);
+            var exclusionsRepo = new AuthorMonitoringExclusionRepository(dbContext);
 
             var service = new AuthorMonitoringService(
                 authorsRepo,
                 audiobooksRepo,
                 authorCatalogService.Object,
                 libraryAddService.Object,
+                exclusionsRepo,
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var result = await service.MonitorAuthorAsync(new MonitorAuthorRequest
@@ -141,6 +143,77 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.Equal("Andy Weir", storedAuthor.AuthorName);
             Assert.Equal("andy weir", storedAuthor.AuthorNameNormalized);
             Assert.Equal("AUTHOR123", storedAuthor.AuthorAsin);
+        }
+
+        [Fact]
+        public async Task MonitorAuthorAsync_DoesNotReAddBooksExcludedFromMonitoring()
+        {
+            var dbOptions = new DbContextOptionsBuilder<ListenArrDbContext>()
+                .UseInMemoryDatabase(databaseName: $"author-monitor-excluded-{System.Guid.NewGuid():N}")
+                .Options;
+
+            await using var dbContext = new ListenArrDbContext(dbOptions);
+
+            var authorCatalogService = new Mock<IAuthorCatalogService>();
+            authorCatalogService
+                .Setup(service => service.GetCatalogAsync("Andy Weir", "us", 500, null, false, It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new AuthorCatalogFetchResult
+                {
+                    Author = new AuthorLookupItem { Asin = "AUTHOR123", Name = "Andy Weir" },
+                    Books = new List<AudibleSearchResult>
+                    {
+                        new()
+                        {
+                            Asin = "B000MARTIAN",
+                            Title = "The Martian",
+                            Authors = new List<AudibleAuthor> { new() { Name = "Andy Weir" } },
+                            Language = "english"
+                        }
+                    }
+                });
+
+            var libraryAddService = new Mock<ILibraryAddService>();
+
+            var authorsRepo = new EfMonitoredAuthorRepository(dbContext);
+            var audiobooksRepo = new AudiobookRepository(dbContext);
+            var exclusionsRepo = new AuthorMonitoringExclusionRepository(dbContext);
+
+            var service = new AuthorMonitoringService(
+                authorsRepo,
+                audiobooksRepo,
+                authorCatalogService.Object,
+                libraryAddService.Object,
+                exclusionsRepo,
+                Mock.Of<ILogger<AuthorMonitoringService>>());
+
+            // Simulate the user deleting "The Martian" with the exclusion option.
+            await service.ExcludeAudiobookFromMonitoringAsync(new Audiobook
+            {
+                Id = 5,
+                Title = "The Martian",
+                Authors = new List<string> { "Andy Weir" },
+                Asin = "B000MARTIAN"
+            });
+
+            var result = await service.MonitorAuthorAsync(new MonitorAuthorRequest
+            {
+                Name = "Andy Weir",
+                Region = "us",
+                Language = "english"
+            });
+
+            Assert.True(result.SyncResult.Succeeded);
+            Assert.Equal(0, result.SyncResult.AddedCount);
+            Assert.Equal(1, result.SyncResult.ExcludedCount);
+
+            // The excluded book must never reach the library-add path.
+            libraryAddService.Verify(s => s.AddToLibraryAsync(
+                It.IsAny<LibraryAddOperationRequest>(),
+                It.IsAny<System.Threading.CancellationToken>()),
+                Times.Never);
+
+            var storedExclusion = await dbContext.AuthorMonitoringExclusions.SingleAsync();
+            Assert.Equal("B000MARTIAN", storedExclusion.Asin);
         }
 
         [Fact]
@@ -180,12 +253,14 @@ namespace Listenarr.Tests.Features.Api.Services
 
             var authorsRepo = new EfMonitoredAuthorRepository(dbContext);
             var audiobooksRepo = new AudiobookRepository(dbContext);
+            var exclusionsRepo = new AuthorMonitoringExclusionRepository(dbContext);
 
             var service = new AuthorMonitoringService(
                 authorsRepo,
                 audiobooksRepo,
                 authorCatalogService.Object,
                 Mock.Of<ILibraryAddService>(),
+                exclusionsRepo,
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var syncedCount = await service.SyncDueAuthorsAsync();

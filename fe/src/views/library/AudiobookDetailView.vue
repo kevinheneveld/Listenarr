@@ -776,6 +776,24 @@
               </div>
             </label>
           </div>
+
+          <div class="checkbox-row">
+            <label class="checkbox-wrapper checkbox-label">
+              <input
+                v-model="excludeFromAuthorMonitoring"
+                type="checkbox"
+                class="checkbox-input"
+                aria-label="Don't re-add this book from author monitoring"
+              />
+              <div class="checkbox-content">
+                <span class="checkbox-title">Don't re-add this book from author monitoring</span>
+                <small
+                  >If this author is monitored, the daily catalog sync would otherwise re-add this
+                  book after you delete it. Check this to keep it out for good.</small
+                >
+              </div>
+            </label>
+          </div>
         </div>
 
         <NotAudiobookAction :audiobook-id="audiobook?.id" @done="onNotAudiobookDone" />
@@ -1019,6 +1037,7 @@ const showManualSearchModal = ref(false)
 const deleting = ref(false)
 const deleteFilesOnDisk = ref(false)
 const deleteFolderOnDisk = ref(false)
+const excludeFromAuthorMonitoring = ref(false)
 type AudiobookFile = NonNullable<AudiobookType['files']>[number]
 const showFileDeleteDialog = ref(false)
 const fileToDelete = ref<AudiobookFile | null>(null)
@@ -2117,6 +2136,7 @@ async function executeDelete() {
     const success = await libraryStore.removeFromLibrary(audiobook.value.id, {
       deleteFiles: shouldDeleteFiles,
       deleteFolder: shouldDeleteFolder,
+      excludeFromAuthorMonitoring: excludeFromAuthorMonitoring.value,
     })
     if (success) {
       const toast = useToast()
@@ -2157,6 +2177,7 @@ async function onNotAudiobookDone() {
 function resetDeleteOptions() {
   deleteFilesOnDisk.value = false
   deleteFolderOnDisk.value = false
+  excludeFromAuthorMonitoring.value = false
 }
 
 function confirmDeleteFile(file: AudiobookFile) {

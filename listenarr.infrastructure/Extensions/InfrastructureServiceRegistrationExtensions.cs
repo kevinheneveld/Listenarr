@@ -78,6 +78,7 @@ namespace Listenarr.Infrastructure.Extensions
             services.AddScoped<IAudiobookFileRepository, EfAudiobookFileRepository>();
             services.AddScoped<IMoveJobRepository, EfMoveJobRepository>();
             services.AddScoped<IMonitoredAuthorRepository, EfMonitoredAuthorRepository>();
+            services.AddScoped<IAuthorMonitoringExclusionRepository, AuthorMonitoringExclusionRepository>();
             services.AddScoped<IMonitoredSeriesRepository, EfMonitoredSeriesRepository>();
             services.AddScoped<IProcessExecutionLogRepository, EfProcessExecutionLogRepository>();
             services.AddScoped<IDownloadRepository, EfDownloadRepository>();

@@ -77,7 +77,11 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function removeFromLibrary(
     id: number,
-    options?: { deleteFiles?: boolean; deleteFolder?: boolean },
+    options?: {
+      deleteFiles?: boolean
+      deleteFolder?: boolean
+      excludeFromAuthorMonitoring?: boolean
+    },
   ) {
     try {
       await apiService.removeFromLibrary(id, options)

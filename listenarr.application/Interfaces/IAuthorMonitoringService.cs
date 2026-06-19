@@ -36,6 +36,16 @@ namespace Listenarr.Application.Interfaces
         Task<MonitorAuthorSyncResult> SyncAuthorAsync(int id, CancellationToken cancellationToken = default);
 
         Task<int> SyncDueAuthorsAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Records an audiobook so the author-monitoring sweep never re-adds it.
+        /// Called when a book by a monitored author is deleted from the library.
+        /// </summary>
+        Task ExcludeAudiobookFromMonitoringAsync(Audiobook audiobook, CancellationToken cancellationToken = default);
+
+        Task<List<AuthorMonitoringExclusion>> GetExclusionsAsync(CancellationToken cancellationToken = default);
+
+        Task<bool> RemoveExclusionAsync(int id, CancellationToken cancellationToken = default);
     }
 
     public sealed class MonitorAuthorRequest
@@ -63,6 +73,9 @@ namespace Listenarr.Application.Interfaces
         public int ExistingCount { get; set; }
 
         public int FailedCount { get; set; }
+
+        /// <summary>Books skipped because the user excluded them from author monitoring.</summary>
+        public int ExcludedCount { get; set; }
 
         public bool Succeeded { get; set; }
 

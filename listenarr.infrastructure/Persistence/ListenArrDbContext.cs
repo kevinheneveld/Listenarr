@@ -44,6 +44,7 @@ namespace Listenarr.Infrastructure.Persistence
         public DbSet<ProcessExecutionLog> ProcessExecutionLogs { get; set; } = null!;
         public DbSet<RootFolder> RootFolders { get; set; } = null!;
         public DbSet<MonitoredAuthor> MonitoredAuthors { get; set; } = null!;
+        public DbSet<AuthorMonitoringExclusion> AuthorMonitoringExclusions { get; set; } = null!;
         public DbSet<MonitoredSeries> MonitoredSeries { get; set; } = null!;
         public DbSet<AuthorCacheEntry> AuthorCacheEntries { get; set; } = null!;
         public DbSet<SeriesCacheEntry> SeriesCacheEntries { get; set; } = null!;

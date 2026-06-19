@@ -75,6 +75,7 @@ namespace Listenarr.Api.Controllers
         private readonly IExternalCoverArtSweepService? _externalCoverArtSweepService;
         private readonly IFileExtractionService? _fileExtractionService;
         private readonly ILibraryListService _libraryListService;
+        private readonly IAuthorMonitoringService? _authorMonitoringService;
         private readonly string _contentRootPath;
         /// <summary>Initializes a new instance of <see cref="LibraryController"/>.</summary>
         /// <param name="repo">Repository for audiobook persistence and queries.</param>
@@ -117,7 +118,8 @@ namespace Listenarr.Api.Controllers
             ILibraryAddService? libraryAddService = null,
             IRenameService? renameService = null,
             IExternalCoverArtSweepService? externalCoverArtSweepService = null,
-            IFileExtractionService? fileExtractionService = null)
+            IFileExtractionService? fileExtractionService = null,
+            IAuthorMonitoringService? authorMonitoringService = null)
         {
             _repo = repo;
             _imageCacheService = imageCacheService;
@@ -138,6 +140,7 @@ namespace Listenarr.Api.Controllers
             _externalCoverArtSweepService = externalCoverArtSweepService;
             _fileExtractionService = fileExtractionService;
             _libraryListService = libraryListService;
+            _authorMonitoringService = authorMonitoringService;
             _contentRootPath = applicationPathService.ContentRootPath;
         }
 
@@ -1544,13 +1547,29 @@ namespace Listenarr.Api.Controllers
         /// <param name="id">Audiobook ID.</param>
         /// <param name="deleteFiles">When true, delete all files within the audiobook folder when it can be done safely; otherwise fall back to tracked audiobook files before removing the library record.</param>
         /// <param name="deleteFolder">When true, also delete the audiobook folder when it can be done safely.</param>
+        /// <param name="excludeFromAuthorMonitoring">When true, record this book so a monitored author's catalog sync never re-adds it after deletion.</param>
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteAudiobook(int id, [FromQuery] bool deleteFiles = false, [FromQuery] bool deleteFolder = false)
+        public async Task<IActionResult> DeleteAudiobook(int id, [FromQuery] bool deleteFiles = false, [FromQuery] bool deleteFolder = false, [FromQuery] bool excludeFromAuthorMonitoring = false)
         {
             var audiobook = await _repo.GetByIdAsync(id);
             if (audiobook == null)
             {
                 return NotFound(new { message = "Audiobook not found" });
+            }
+
+            // Record the exclusion before deleting the record, while we still hold
+            // the book's identity (ASIN / title / authors). A failure here must not
+            // block the deletion the user asked for, so it is best-effort.
+            if (excludeFromAuthorMonitoring && _authorMonitoringService != null)
+            {
+                try
+                {
+                    await _authorMonitoringService.ExcludeAudiobookFromMonitoringAsync(audiobook, HttpContext.RequestAborted);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Failed to record author-monitoring exclusion for audiobook id {Id}", id);
+                }
             }
 
             deleteFiles = deleteFiles || deleteFolder;

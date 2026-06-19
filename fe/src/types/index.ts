@@ -631,6 +631,14 @@ export interface AuthorMonitoringStatusResponse {
   monitoredAuthor?: MonitoredAuthor | null
 }
 
+export interface AuthorMonitoringExclusion {
+  id: number
+  title: string
+  authorName?: string | null
+  asin?: string | null
+  createdAt: string
+}
+
 export interface MonitorAuthorResponse {
   message: string
   monitoredAuthor: MonitoredAuthor
