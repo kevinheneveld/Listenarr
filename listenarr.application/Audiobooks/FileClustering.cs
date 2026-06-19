@@ -43,6 +43,17 @@ namespace Listenarr.Application.Audiobooks
         // Leading list numbering: "1 The Year of the Jackpot".
         private static readonly Regex LeadingNumberRegex = new(@"^\d{1,3}[\s.\-_]+", RegexOptions.Compiled);
 
+        // A trailing volume/book designator ("…, Vol. 2", "Book 3") whose own
+        // number must NOT be mistaken for track numbering — otherwise
+        // "Expanded Universe, Vol. 1-001" and "…Vol. 2-001" both reduce to
+        // "…, Vol." with the same signature and collapse into one cluster, so a
+        // multi-volume set dumped onto one record can't be split apart.
+        private static readonly Regex DanglingVolumeRegex = new(
+            @"\b(vol|volume|book|bk)\.?\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // Leading number of a matched trailing run ("  1" of "  1-001").
+        private static readonly Regex LeadingRunNumberRegex = new(@"^\s*\d+", RegexOptions.Compiled);
+
         public static List<FileCluster> Cluster(IEnumerable<AudiobookFile> files, string? basePath)
         {
             var groups = new Dictionary<string, FileCluster>(StringComparer.OrdinalIgnoreCase);
@@ -176,12 +187,30 @@ namespace Listenarr.Application.Audiobooks
             {
                 previous = stem;
                 var trailing = TrailingNumberingRegex.Match(stem);
-                if (trailing.Success)
+                if (!trailing.Success) break;
+
+                var stripIndex = trailing.Index;
+                var markerValue = trailing.Value;
+
+                // Volume/book guard: when "<title>, Vol. N" is followed by a
+                // track marker, the matched run is " N-001"; keep "Vol. N" on
+                // the stem (strip only the track part) so different volumes of
+                // one title don't collapse into a single cluster.
+                var runNumber = LeadingRunNumberRegex.Match(markerValue);
+                if (runNumber.Success && DanglingVolumeRegex.IsMatch(stem[..stripIndex]))
                 {
-                    // Outermost marker first so stacked markers serialize stably.
-                    signatureParts.Insert(leading.Success ? 1 : 0, NormalizeDigits(trailing.Value));
-                    stem = stem[..trailing.Index].Trim();
+                    // The run is only the volume's own number ("…, Vol. 2") —
+                    // keep it whole as part of the identity, strip nothing more.
+                    if (runNumber.Length >= markerValue.Length) break;
+
+                    // Keep "<keyword> N"; the remainder is the real track marker.
+                    stripIndex += runNumber.Length;
+                    markerValue = stem[stripIndex..];
                 }
+
+                // Outermost marker first so stacked markers serialize stably.
+                signatureParts.Insert(leading.Success ? 1 : 0, NormalizeDigits(markerValue));
+                stem = stem[..stripIndex].Trim();
             } while (stem != previous && stem.Length > 0);
 
             // A stem that stripped down to nothing or to bare digits carries no

@@ -59,10 +59,19 @@
                   {{ (c.narrators || []).slice(0, 2).join(', ') || 'Unknown narrator' }}
                   <template v-if="c.publishYear"> · {{ c.publishYear }}</template>
                   · id {{ c.id }}
+                  <template v-if="(c.fileCount ?? 0) > 0">
+                    · <span class="transfer-has-files">{{ c.fileCount }} file(s)</span>
+                  </template>
                 </small>
               </span>
             </label>
           </div>
+        </div>
+
+        <div v-if="chosenTargetFileCount > 0" class="transfer-warning">
+          <strong>{{ chosenTarget?.title }}</strong> already has {{ chosenTargetFileCount }} audio
+          file(s). The moved files will be <strong>added alongside</strong> them — not replace them —
+          which can leave two books' tracks mixed in one record.
         </div>
 
         <div class="transfer-note">
@@ -91,6 +100,7 @@ import { ref, computed, watch } from 'vue'
 import { Modal, ModalBody } from '@/components/feedback'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
+import { showConfirm } from '@/composables/useConfirm'
 import { useLibraryStore } from '@/stores/library'
 import type { Audiobook } from '@/types'
 
@@ -118,6 +128,11 @@ const transferring = ref(false)
 const libraryLoading = ref(false)
 
 const sourceFiles = computed<SourceFile[]>(() => props.audiobook?.files ?? [])
+
+const chosenTarget = computed<Audiobook | null>(
+  () => libraryStore.audiobooks.find((b) => b.id === chosenTargetId.value) ?? null,
+)
+const chosenTargetFileCount = computed(() => chosenTarget.value?.fileCount ?? 0)
 
 watch(
   () => props.visible,
@@ -185,6 +200,20 @@ async function confirmTransfer() {
   const book = props.audiobook
   const targetId = chosenTargetId.value
   if (!book || !targetId || transferring.value) return
+
+  // Moving into a record that already has audio merges the two sets (it never
+  // overwrites) — confirm so a wrong destination doesn't silently end up with
+  // two books' tracks mixed together.
+  if (chosenTargetFileCount.value > 0) {
+    const ok = await showConfirm(
+      `${chosenTarget.value?.title || 'This record'} already has ${chosenTargetFileCount.value} audio ` +
+        `file(s). The ${selectedFileIds.value.size} moved file(s) will be added alongside the ` +
+        `existing ones, not replace them.\n\nMove them anyway?`,
+      'Destination already has files',
+    )
+    if (!ok) return
+  }
+
   transferring.value = true
   try {
     const allSelected = selectedFileIds.value.size === sourceFiles.value.length
@@ -276,6 +305,25 @@ function onClose() {
 
 .transfer-candidate-text small {
   color: #8a93a0;
+}
+
+.transfer-has-files {
+  color: #e0a458;
+}
+
+.transfer-warning {
+  margin-bottom: 0.85rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #f0c674;
+  background-color: rgba(224, 164, 88, 0.1);
+  border: 1px solid rgba(224, 164, 88, 0.3);
+}
+
+.transfer-warning strong {
+  color: #fff;
 }
 
 .transfer-note {

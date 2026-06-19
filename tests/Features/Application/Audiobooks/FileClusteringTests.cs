@@ -99,6 +99,34 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Fact]
+        public void Cluster_DifferentVolumesInOneFolder_FormSeparateClusters()
+        {
+            // Live case (book 1335): a Vol. 2 set was moved into the Vol. 1
+            // record's folder, so both volumes sit side by side distinguished
+            // only by "Vol. 1-NNN" vs "Vol. 2-NNN". The track-numbering stripper
+            // must not also eat the volume number, or both reduce to
+            // "Expanded Universe, Vol." and collapse into a single cluster —
+            // making the record un-splittable.
+            const string volBase = "/audiobooks/Robert A. Heinlein/Expanded Universe, Vol. 1/Bronson Pinchot";
+            AudiobookFile V(int id, string rel) => new() { Id = id, Path = $"{volBase}/{rel}" };
+
+            var clusters = FileClustering.Cluster(new[]
+            {
+                V(1, "Expanded Universe, Vol. 1-001.mp3"),
+                V(2, "Expanded Universe, Vol. 1-002.mp3"),
+                V(3, "Expanded Universe, Vol. 1-031.mp3"),
+                V(4, "Expanded Universe, Vol. 2-001.mp3"),
+                V(5, "Expanded Universe, Vol. 2-002.mp3"),
+                V(6, "Expanded Universe, Vol. 2-031.mp3"),
+            }, volBase);
+
+            Assert.Equal(2, clusters.Count);
+            Assert.All(clusters, c => Assert.Equal(3, c.Files.Count));
+            Assert.Contains(clusters, c => c.DisplayName == "Expanded Universe, Vol. 1");
+            Assert.Contains(clusters, c => c.DisplayName == "Expanded Universe, Vol. 2");
+        }
+
+        [Fact]
         public void Cluster_UnnumberedFirstTrack_JoinsItsNumberedSiblings()
         {
             // Numbering often starts at the unmarked file: "Title.mp3" IS track
@@ -140,6 +168,10 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         [InlineData("1 The Year of the Jackpot", "The Year of the Jackpot")]
         [InlineData("HEINLEIN - Door 12_41", "HEINLEIN - Door")]
         [InlineData("Robert A. Heinlein - Starship Troopers Part 61 of 61", "Robert A. Heinlein - Starship Troopers")]
+        // A volume/book designator keeps its own number; only the track marker goes.
+        [InlineData("Expanded Universe, Vol. 1-001", "Expanded Universe, Vol. 1")]
+        [InlineData("Expanded Universe, Vol. 2-031", "Expanded Universe, Vol. 2")]
+        [InlineData("Wheel of Time Book 3 - 12", "Wheel of Time Book 3")]
         public void CleanStem_StripsNumberingNoise(string input, string expected)
         {
             Assert.Equal(expected, FileClustering.CleanStem(input));
