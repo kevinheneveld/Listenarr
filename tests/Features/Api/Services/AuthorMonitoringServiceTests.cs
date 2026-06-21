@@ -217,6 +217,145 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
+        public async Task UpdateAuthorLanguageAsync_ChangesLanguageAndStopsAddingOffLanguageBooks()
+        {
+            var dbOptions = new DbContextOptionsBuilder<ListenArrDbContext>()
+                .UseInMemoryDatabase(databaseName: $"author-monitor-lang-{System.Guid.NewGuid():N}")
+                .Options;
+
+            await using var dbContext = new ListenArrDbContext(dbOptions);
+            dbContext.MonitoredAuthors.Add(new MonitoredAuthor
+            {
+                Id = 1,
+                AuthorName = "Dean Koontz",
+                AuthorNameNormalized = "dean koontz",
+                Region = "us",
+                Language = "all",
+                CreatedAt = DateTime.UtcNow.AddDays(-30),
+                UpdatedAt = DateTime.UtcNow.AddDays(-30),
+                LastCheckedAt = DateTime.UtcNow.AddDays(-1)
+            });
+            await dbContext.SaveChangesAsync();
+
+            var authorCatalogService = new Mock<IAuthorCatalogService>();
+            authorCatalogService
+                .Setup(service => service.GetCatalogAsync("Dean Koontz", "us", 500, null, true, It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new AuthorCatalogFetchResult
+                {
+                    Author = new AuthorLookupItem { Name = "Dean Koontz" },
+                    Books = new List<AudibleSearchResult>
+                    {
+                        new()
+                        {
+                            Asin = "B000ENGLISH",
+                            Title = "Devoted",
+                            Authors = new List<AudibleAuthor> { new() { Name = "Dean Koontz" } },
+                            Language = "english"
+                        },
+                        new()
+                        {
+                            Asin = "B000GERMAN",
+                            Title = "Devoted - Der Beschützer",
+                            Authors = new List<AudibleAuthor> { new() { Name = "Dean Koontz" } },
+                            Language = "german"
+                        }
+                    }
+                });
+
+            var libraryAddService = new Mock<ILibraryAddService>();
+            libraryAddService
+                .Setup(service => service.AddToLibraryAsync(It.IsAny<LibraryAddOperationRequest>(), It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new LibraryAddOperationResult
+                {
+                    Added = true,
+                    Audiobook = new Audiobook { Id = 99, Title = "Devoted", Asin = "B000ENGLISH" }
+                });
+
+            var service = new AuthorMonitoringService(
+                new EfMonitoredAuthorRepository(dbContext),
+                new AudiobookRepository(dbContext),
+                authorCatalogService.Object,
+                libraryAddService.Object,
+                new AuthorMonitoringExclusionRepository(dbContext),
+                Mock.Of<ILogger<AuthorMonitoringService>>());
+
+            var result = await service.UpdateAuthorLanguageAsync(1, "english");
+
+            Assert.NotNull(result);
+            Assert.Equal("english", result!.MonitoredAuthor!.Language);
+            // Only the english edition is added; the german translation is filtered out.
+            Assert.Equal(1, result.SyncResult.AddedCount);
+            libraryAddService.Verify(s => s.AddToLibraryAsync(
+                It.Is<LibraryAddOperationRequest>(r => r.Metadata.Title == "Devoted"),
+                It.IsAny<System.Threading.CancellationToken>()), Times.Once);
+            libraryAddService.Verify(s => s.AddToLibraryAsync(
+                It.Is<LibraryAddOperationRequest>(r => r.Metadata.Title == "Devoted - Der Beschützer"),
+                It.IsAny<System.Threading.CancellationToken>()), Times.Never);
+
+            var stored = await dbContext.MonitoredAuthors.SingleAsync();
+            Assert.Equal("english", stored.Language);
+        }
+
+        [Fact]
+        public async Task UpdateAuthorLanguageAsync_MergesIntoExistingRow_WhenTargetLanguageAlreadyMonitored()
+        {
+            var dbOptions = new DbContextOptionsBuilder<ListenArrDbContext>()
+                .UseInMemoryDatabase(databaseName: $"author-monitor-merge-{System.Guid.NewGuid():N}")
+                .Options;
+
+            await using var dbContext = new ListenArrDbContext(dbOptions);
+            dbContext.MonitoredAuthors.AddRange(
+                new MonitoredAuthor
+                {
+                    Id = 1,
+                    AuthorName = "Dean Koontz",
+                    AuthorNameNormalized = "dean koontz",
+                    Region = "us",
+                    Language = "all",
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                },
+                new MonitoredAuthor
+                {
+                    Id = 2,
+                    AuthorName = "Dean Koontz",
+                    AuthorNameNormalized = "dean koontz",
+                    Region = "us",
+                    Language = "english",
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                });
+            await dbContext.SaveChangesAsync();
+
+            var authorCatalogService = new Mock<IAuthorCatalogService>();
+            authorCatalogService
+                .Setup(service => service.GetCatalogAsync(It.IsAny<string>(), It.IsAny<string>(), 500, null, true, It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new AuthorCatalogFetchResult
+                {
+                    Author = new AuthorLookupItem { Name = "Dean Koontz" },
+                    Books = new List<AudibleSearchResult>()
+                });
+
+            var service = new AuthorMonitoringService(
+                new EfMonitoredAuthorRepository(dbContext),
+                new AudiobookRepository(dbContext),
+                authorCatalogService.Object,
+                Mock.Of<ILibraryAddService>(),
+                new AuthorMonitoringExclusionRepository(dbContext),
+                Mock.Of<ILogger<AuthorMonitoringService>>());
+
+            // Change the "all" row (id 1) to english — the existing english row
+            // (id 2) is the duplicate and must be removed, leaving one row.
+            var result = await service.UpdateAuthorLanguageAsync(1, "english");
+
+            Assert.NotNull(result);
+            var remaining = await dbContext.MonitoredAuthors.ToListAsync();
+            Assert.Single(remaining);
+            Assert.Equal("english", remaining[0].Language);
+            Assert.Equal(1, remaining[0].Id);
+        }
+
+        [Fact]
         public async Task SyncDueAuthorsAsync_ForceRefreshesPersistedCatalog()
         {
             var dbOptions = new DbContextOptionsBuilder<ListenArrDbContext>()

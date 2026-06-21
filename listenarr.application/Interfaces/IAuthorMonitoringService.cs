@@ -33,6 +33,13 @@ namespace Listenarr.Application.Interfaces
 
         Task<bool> UnmonitorAuthorAsync(int id, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// Changes a monitored author's catalog language in place (e.g. correcting
+        /// a stale "all" to "english" so the sweep stops pulling foreign-language
+        /// translations) and re-syncs. Returns null when the author id is unknown.
+        /// </summary>
+        Task<MonitorAuthorOperationResult?> UpdateAuthorLanguageAsync(int id, string language, CancellationToken cancellationToken = default);
+
         Task<MonitorAuthorSyncResult> SyncAuthorAsync(int id, CancellationToken cancellationToken = default);
 
         Task<int> SyncDueAuthorsAsync(CancellationToken cancellationToken = default);

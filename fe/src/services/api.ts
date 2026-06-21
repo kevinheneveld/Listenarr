@@ -591,6 +591,13 @@ class ApiService {
     })
   }
 
+  async updateAuthorMonitoring(id: number, language: string): Promise<MonitorAuthorResponse> {
+    return this.request<MonitorAuthorResponse>(`/authors/monitoring/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ language }),
+    })
+  }
+
   async unmonitorAuthor(id: number): Promise<{ message: string }> {
     return this.request<{ message: string }>(`/authors/monitoring/${id}`, {
       method: 'DELETE',

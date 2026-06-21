@@ -179,6 +179,51 @@ namespace Listenarr.Application.Audiobooks
             return await _authors.DeleteAsync(id, cancellationToken);
         }
 
+        public async Task<MonitorAuthorOperationResult?> UpdateAuthorLanguageAsync(
+            int id,
+            string language,
+            CancellationToken cancellationToken = default)
+        {
+            var author = await _authors.GetByIdAsync(id, cancellationToken);
+            if (author == null)
+            {
+                return null;
+            }
+
+            var normalizedLanguage = NormalizeLanguage(language, fallbackToEnglish: true);
+
+            if (!string.Equals(author.Language, normalizedLanguage, StringComparison.OrdinalIgnoreCase))
+            {
+                // A monitored author is unique per (name, region, language). Changing
+                // the language could collide with an existing row for the same author
+                // (e.g. correcting a stale "all" to "english" when an "english" row was
+                // also created): drop that duplicate and repurpose this record so we
+                // end up with a single row, rather than failing on the unique index.
+                var duplicate = await _authors.GetByNameRegionLanguageAsync(
+                    author.AuthorNameNormalized, author.Region, normalizedLanguage, cancellationToken);
+                if (duplicate != null && duplicate.Id != author.Id)
+                {
+                    await _authors.DeleteAsync(duplicate.Id, cancellationToken);
+                }
+
+                author.Language = normalizedLanguage;
+                author.UpdatedAt = DateTime.UtcNow;
+                author = await _authors.UpsertAsync(author, cancellationToken);
+            }
+
+            // Re-sync so the change takes effect immediately (a narrowed language
+            // stops adding off-language books on the next sweep; this pass just
+            // backfills any now-in-language books that are missing — like the
+            // initial monitor. Books already added under the old language are not
+            // removed, matching the sweep's add-only contract).
+            var syncResult = await SyncAuthorInternalAsync(author, forceRefresh: true, cancellationToken);
+            return new MonitorAuthorOperationResult
+            {
+                MonitoredAuthor = author,
+                SyncResult = syncResult
+            };
+        }
+
         public async Task ExcludeAudiobookFromMonitoringAsync(
             Audiobook audiobook,
             CancellationToken cancellationToken = default)
