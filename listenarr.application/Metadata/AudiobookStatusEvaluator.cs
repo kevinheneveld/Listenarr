@@ -90,7 +90,12 @@ namespace Listenarr.Application.Metadata
                 return QualityMatch;
             }
 
+            // Full priority map (used to resolve the cutoff threshold, which must resolve even
+            // if the configured cutoff rung happens to be disabled) plus the set of *allowed*
+            // rungs (used to match files). A file at a disabled rung must not satisfy cutoff —
+            // the user disallowed that quality, so it should read as a mismatch (keep searching).
             var qualityPriority = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var allowedQualities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var quality in qualityProfile.Qualities)
             {
                 if (quality == null || string.IsNullOrWhiteSpace(quality.Quality))
@@ -98,7 +103,12 @@ namespace Listenarr.Application.Metadata
                     continue;
                 }
 
-                qualityPriority[Normalize(quality.Quality)] = quality.Priority;
+                var normalized = Normalize(quality.Quality);
+                qualityPriority[normalized] = quality.Priority;
+                if (quality.Allowed)
+                {
+                    allowedQualities.Add(normalized);
+                }
             }
 
             var cutoff = Normalize(qualityProfile.CutoffQuality);
@@ -113,7 +123,8 @@ namespace Listenarr.Application.Metadata
                     continue;
                 }
 
-                var priority = qualityPriority.TryGetValue(derivedQuality, out var foundPriority)
+                var priority = allowedQualities.Contains(derivedQuality)
+                    && qualityPriority.TryGetValue(derivedQuality, out var foundPriority)
                     ? foundPriority
                     : int.MaxValue;
 

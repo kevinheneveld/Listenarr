@@ -112,6 +112,35 @@ namespace Listenarr.Tests.Features.Api.Services
             Assert.Equal(AudiobookStatusEvaluator.QualityMatch, status);
         }
 
+        [Fact]
+        public void ComputeStatus_ReturnsQualityMismatch_WhenMatchingRungIsDisabled()
+        {
+            // A file at a disabled rung's quality must NOT satisfy cutoff — the user disallowed
+            // that quality, so the book reads as a mismatch (keep searching for an allowed one).
+            // Without this, the disabled 256kbps file meets the 256kbps cutoff and the book is
+            // wrongly considered done.
+            var profile = new QualityProfile
+            {
+                Name = "Disabled-rung profile",
+                CutoffQuality = "256kbps",
+                PreferredFormats = new List<string> { "m4b" },
+                Qualities = new List<QualityDefinition>
+                {
+                    new() { Quality = "320kbps", Priority = 0 },
+                    new() { Quality = "256kbps", Priority = 1, Allowed = false },
+                    new() { Quality = "192kbps", Priority = 2 }
+                }
+            };
+            var files = new List<AudiobookFormatSummary>
+            {
+                new() { Format = "m4b", Bitrate = 256000 }
+            };
+
+            var status = AudiobookStatusEvaluator.ComputeStatus(false, true, null, profile, files);
+
+            Assert.Equal(AudiobookStatusEvaluator.QualityMismatch, status);
+        }
+
         private static QualityProfile CreateProfile(string cutoffQuality, List<string> preferredFormats)
         {
             return new QualityProfile

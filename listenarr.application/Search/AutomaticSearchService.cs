@@ -631,8 +631,11 @@ namespace Listenarr.Application.Search
                 if (download.Status == DownloadStatus.Completed && !string.IsNullOrEmpty(download.Metadata?.GetValueOrDefault("Quality")?.ToString()))
                 {
                     var downloadQuality = download.Metadata["Quality"].ToString();
+                    // Disabled rungs (Allowed == false) must not satisfy cutoff: the user
+                    // disallowed that quality, so a file at it should keep searching for an
+                    // allowed one rather than count as "good enough".
                     var downloadQualityDefinition = qualityProfile.Qualities
-                        .FirstOrDefault(q => q.Quality == downloadQuality);
+                        .FirstOrDefault(q => q.Quality == downloadQuality && q.Allowed);
 
                     if (downloadQualityDefinition != null && downloadQualityDefinition.Priority >= cutoffQuality.Priority)
                     {
@@ -655,8 +658,9 @@ namespace Listenarr.Application.Search
                 var fileQuality = DetermineFileQuality(file);
                 if (!string.IsNullOrEmpty(fileQuality))
                 {
+                    // Disabled rungs (Allowed == false) must not satisfy cutoff (see above).
                     var fileQualityDefinition = qualityProfile.Qualities
-                        .FirstOrDefault(q => q.Quality == fileQuality);
+                        .FirstOrDefault(q => q.Quality == fileQuality && q.Allowed);
 
                     if (fileQualityDefinition != null && fileQualityDefinition.Priority >= cutoffQuality.Priority)
                     {
@@ -839,7 +843,8 @@ namespace Listenarr.Application.Search
             if (string.IsNullOrEmpty(existingQuality)) return true;
             if (profile == null) return false;
 
-            var cand = profile.Qualities.FirstOrDefault(q => q.Quality == candidateQuality);
+            // A candidate at a disabled rung (Allowed == false) is never "better" — don't grab it.
+            var cand = profile.Qualities.FirstOrDefault(q => q.Quality == candidateQuality && q.Allowed);
             var exist = profile.Qualities.FirstOrDefault(q => q.Quality == existingQuality);
 
             if (cand == null) return false;
