@@ -102,11 +102,12 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         public void Cluster_EmbeddedBookTitles_SplitACollectionRenamedToTheParentName()
         {
             // Live case (John Scalzi "Old Man's War"): a collection's files were all renamed to
-            // the parent record's name and dropped in one subfolder, so filenames cluster into a
-            // single useless group — but each file's embedded tag names the real book. The
-            // embedded title must win and split them, with track noise stripped.
-            const string omwBase = "/audiobooks/John Scalzi/Old Man's War";
-            AudiobookFile E(int id, string rel) => new() { Id = id, Path = $"{omwBase}/Old Man's War/{rel}" };
+            // the parent record's name and sit flat in the record's own folder, so filenames
+            // cluster into a single useless group — but each file's embedded tag names the real
+            // book. For flat files (no subfolder) the embedded title must win and split them,
+            // with track noise stripped.
+            const string omwBase = "/audiobooks/John Scalzi/Old Man's War/Old Man's War";
+            AudiobookFile E(int id, string rel) => new() { Id = id, Path = $"{omwBase}/{rel}" };
 
             var files = new[]
             {
@@ -129,6 +130,47 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.Contains(clusters, c => c.DisplayName == "The Ghost Brigades" && c.Files.Count == 2);
             Assert.Contains(clusters, c => c.DisplayName == "The Sagan Diary" && c.Files.Count == 1);
             Assert.Contains(clusters, c => c.DisplayName == "Old Man's War" && c.Files.Count == 1);
+        }
+
+        [Fact]
+        public void Cluster_SubfolderWins_OverInconsistentEmbeddedTags()
+        {
+            // Live case (Throne of Glass, 2325): per-book subfolders, but the embedded album tags
+            // are series-based ("Throne of Glass bk 2") and even mis-applied — the Dramatized
+            // Adaptation file is tagged with the novel's title. The subfolder must win so
+            // different books don't merge on a shared/garbage tag, and a book whose files are
+            // inconsistently tagged (one file untagged, one tagged differently) still groups as
+            // one. Flat files with no subfolder still fall back to the embedded tag.
+            const string b = "/audiobooks/Sarah J. Maas/Throne of Glass/Elizabeth Evans";
+            AudiobookFile T(int id, string rel) => new() { Id = id, Path = $"{b}/{rel}" };
+
+            var files = new[]
+            {
+                T(1, "Crown of Midnight-01.mp3"),                              // flat
+                T(2, "Crown of Midnight/Crown of Midnight-001.mp3"),          // subfolder
+                T(3, "Throne of Glass [Dramatized Adaptation]/dram-001.mp3"), // subfolder, mis-tagged
+                T(4, "Queen of Shadows/Queen of Shadows-002.mp3"),            // subfolder, no tag
+                T(5, "Queen of Shadows/Queen of Shadows-003.mp3"),            // subfolder, different tag
+            };
+            var embedded = new Dictionary<int, string>
+            {
+                [1] = "Throne of Glass bk 2",
+                [2] = "Throne of Glass bk 2",
+                [3] = "Crown of Midnight",                     // mis-tag on the Dramatized file
+                [5] = "Throne of Glass 04 - Queen of Shadows", // file 4 has no tag
+            };
+
+            var clusters = FileClustering.Cluster(files, b, embedded);
+
+            Assert.Equal(4, clusters.Count);
+            // Subfolder books each cluster by their folder, regardless of the (bad) tags:
+            Assert.Contains(clusters, c => c.DisplayName == "Crown of Midnight" && c.Files.Count == 1);
+            // NOT merged with Crown of Midnight despite sharing its title tag:
+            Assert.Contains(clusters, c => c.DisplayName == "Throne of Glass [Dramatized Adaptation]" && c.Files.Count == 1);
+            // Both Queen of Shadows files merge by folder despite inconsistent tags:
+            Assert.Contains(clusters, c => c.DisplayName == "Queen of Shadows" && c.Files.Count == 2);
+            // The flat file falls back to its embedded tag:
+            Assert.Contains(clusters, c => c.DisplayName == "Throne of Glass bk 2" && c.Files.Count == 1);
         }
 
         [Fact]

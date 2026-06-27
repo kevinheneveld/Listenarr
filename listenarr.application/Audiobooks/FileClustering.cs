@@ -63,43 +63,44 @@ namespace Listenarr.Application.Audiobooks
 
             foreach (var file in files.Where(f => !string.IsNullOrWhiteSpace(f.Path)))
             {
+                var relative = MakeRelative(file.Path!, basePath);
+                var slash = relative.IndexOf('/');
+
                 string key;
                 string display;
-
-                // Embedded book title wins when present. When a collection is bulk-renamed to
-                // the parent record's name, every filename is identical and useless for
-                // splitting — but each file's embedded Album/Title tag still names the real book
-                // it belongs to (e.g. files all named "Old Man's War-NNN.mp3" whose tags say
-                // "The Ghost Brigades" / "The Sagan Diary"). Track noise is stripped the same way
-                // as filenames; the numbering *style* is intentionally ignored here (a tag is a
-                // book identity, not a duplicate-copy signal).
-                if (embeddedTitles != null
+                if (slash > 0)
+                {
+                    // Subdirectory wins — even over the embedded tag. A per-book subfolder is the
+                    // strongest grouping signal, and trusting the tag over it merged genuinely
+                    // different books that shared a (mis-)tag across folders — e.g. a
+                    // "[Dramatized Adaptation]" subfolder lumped with a novel because both carried
+                    // the series album "Throne of Glass bk 2", and a two-file book split apart
+                    // because its files were tagged inconsistently.
+                    key = "dir:" + relative[..slash];
+                    display = relative[..slash];
+                }
+                else if (embeddedTitles != null
                     && embeddedTitles.TryGetValue(file.Id, out var embeddedTitle)
                     && TryEmbeddedTitleKey(embeddedTitle, out var embedKey, out var embedDisplay))
                 {
+                    // Flat files only: when a collection was bulk-renamed to the parent record's
+                    // name, every filename is identical and useless for splitting — but each
+                    // file's embedded Album/Title tag still names the real book (e.g. files all
+                    // named "Old Man's War-NNN.mp3" whose tags say "The Ghost Brigades" /
+                    // "The Sagan Diary"). Track noise is stripped the same way as filenames; the
+                    // numbering *style* is intentionally ignored (a tag is a book identity).
                     key = embedKey;
                     display = embedDisplay;
                 }
                 else
                 {
-                    var relative = MakeRelative(file.Path!, basePath);
-                    var slash = relative.IndexOf('/');
-                    if (slash > 0)
-                    {
-                        // Subdirectory wins: everything inside it belongs together.
-                        key = "dir:" + relative[..slash];
-                        display = relative[..slash];
-                    }
-                    else
-                    {
-                        var (stem, signature) = CleanStemWithSignature(Path.GetFileNameWithoutExtension(relative));
-                        // The numbering STYLE is part of the identity: a record
-                        // holding two copies of one book ("Title-NN.mp3" and
-                        // "Title (N).mp3") must yield two groups, or the
-                        // delete-the-duplicate-copy workflow can't target one.
-                        key = "stem:" + stem.ToLowerInvariant() + "|" + signature;
-                        display = stem;
-                    }
+                    var (stem, signature) = CleanStemWithSignature(Path.GetFileNameWithoutExtension(relative));
+                    // The numbering STYLE is part of the identity: a record
+                    // holding two copies of one book ("Title-NN.mp3" and
+                    // "Title (N).mp3") must yield two groups, or the
+                    // delete-the-duplicate-copy workflow can't target one.
+                    key = "stem:" + stem.ToLowerInvariant() + "|" + signature;
+                    display = stem;
                 }
 
                 if (!groups.TryGetValue(key, out var cluster))
