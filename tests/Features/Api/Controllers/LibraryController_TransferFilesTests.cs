@@ -164,6 +164,36 @@ namespace Listenarr.Tests.Features.Api.Controllers
             fileRepo.Verify(r => r.ReassignAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         }
 
+        [Fact]
+        public async Task TransferFiles_PathAlreadyExistsUnderTarget_SkipsWithWarning_NoCrash()
+        {
+            // Live shape (split of a messy record): the destination already owns a row at this
+            // path — a duplicate from a prior split attempt or a dual-referenced file. Reassigning
+            // would violate the (AudiobookId, Path) unique key, which used to 500 the whole group.
+            // It must now skip with a warning and return OK so the rest of the split still applies.
+            var source = new Audiobook { Id = 1, Title = "Source" };
+            var target = new Audiobook
+            {
+                Id = 2,
+                Title = "Target",
+                // No BasePath → the file's path is unchanged, and the target already owns a row
+                // at exactly that path, so a reassign would collide.
+                Files = new List<AudiobookFile> { new() { Id = 99, AudiobookId = 2, Path = "/lib/s/a.mp3" } }
+            };
+            var files = new List<AudiobookFile> { new() { Id = 10, AudiobookId = 1, Path = "/lib/s/a.mp3" } };
+
+            var (controller, _, fileRepo, _) = CreateController(source, target, files);
+
+            var result = await controller.TransferFiles(1, new LibraryController.TransferFilesRequest(2, null));
+
+            Assert.IsType<OkObjectResult>(result);
+            // The colliding file is skipped — never reassigned, stays under the source.
+            fileRepo.Verify(r => r.ReassignAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+            Assert.Equal(1, files[0].AudiobookId);
+            // Source still owns audio, so its verdict/columns are NOT reset.
+            Assert.Equal(VerificationStatus.Unverified, source.VerificationStatus);
+        }
+
         private static (
             LibraryController controller,
             Mock<IAudiobookRepository> repo,

@@ -2015,6 +2015,7 @@ namespace Listenarr.Api.Controllers
 
             var warnings = new List<string>();
             var physicallyMoved = 0;
+            var reassigned = 0;
 
             using var scope = _scopeFactory.CreateScope();
             var fileMover = scope.ServiceProvider.GetRequiredService<IFileMover>();
@@ -2063,15 +2064,44 @@ namespace Listenarr.Api.Controllers
                     }
                 }
 
-                file.AudiobookId = target.Id;
-                file.Path = newPath;
-                await _audioFileRepository.ReassignAsync(file.Id, target.Id, newPath, ct);
+                // The target may already own a row at this path — a duplicate from a prior
+                // (partial) split attempt, or the same physical file dual-referenced by both
+                // records. Reassigning would violate the (AudiobookId, Path) unique key and, with
+                // no guard, threw unhandled → 500 for the whole group. Skip with a warning so the
+                // rest of the transfer (and the other split groups) still go through; the user can
+                // delete the redundant copy from the source if it's a true duplicate.
+                var collidesWithTarget = target.Files?.Any(tf =>
+                    tf.Id != file.Id &&
+                    string.Equals(tf.Path, newPath, StringComparison.OrdinalIgnoreCase)) ?? false;
+                if (collidesWithTarget)
+                {
+                    warnings.Add($"{Path.GetFileName(newPath)} already exists under the target — left in place (delete the redundant copy if it's a duplicate)");
+                    continue;
+                }
+
+                try
+                {
+                    await _audioFileRepository.ReassignAsync(file.Id, target.Id, newPath, ct);
+                    // Mutate the in-memory row only after the DB update succeeds, so a caught
+                    // failure can't leave a tracked entity dirtied for a later SaveChanges.
+                    file.AudiobookId = target.Id;
+                    file.Path = newPath;
+                    reassigned++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    // Last-resort guard: any per-file DB failure (e.g. a same-name collision within
+                    // this batch) becomes a warning, never a 500 that aborts the whole transfer.
+                    warnings.Add($"Could not reassign {Path.GetFileName(newPath)} — left in place");
+                    _logger.LogWarning(ex, "transfer-files: DB reassign failed for file {FileId} ({Path})", file.Id, newPath);
+                }
             }
 
             // Source bookkeeping: when its audio is gone, the legacy single-file
             // columns and any verification verdict describe content it no longer
-            // owns (same rationale as the not-audiobook reset).
-            if (toMove.Count == sourceFiles.Count)
+            // owns (same rationale as the not-audiobook reset). Gate on what actually
+            // reassigned — a skipped/collided file means the source still holds audio.
+            if (reassigned > 0 && reassigned == sourceFiles.Count)
             {
                 source.FilePath = null;
                 source.FileSize = null;
@@ -2104,7 +2134,7 @@ namespace Listenarr.Api.Controllers
                     AudiobookId = source.Id,
                     AudiobookTitle = source.Title ?? "Unknown Title",
                     EventType = "Files Transferred",
-                    Message = $"Moved {toMove.Count} file(s) to '{target.Title}' (id {target.Id}).",
+                    Message = $"Moved {reassigned} file(s) to '{target.Title}' (id {target.Id}).",
                     Source = "transfer-files",
                     Timestamp = DateTime.UtcNow
                 });
@@ -2113,7 +2143,7 @@ namespace Listenarr.Api.Controllers
                     AudiobookId = target.Id,
                     AudiobookTitle = target.Title ?? "Unknown Title",
                     EventType = "Files Received",
-                    Message = $"Received {toMove.Count} file(s) from '{source.Title}' (id {source.Id}).",
+                    Message = $"Received {reassigned} file(s) from '{source.Title}' (id {source.Id}).",
                     Source = "transfer-files",
                     Timestamp = DateTime.UtcNow
                 });
@@ -2144,14 +2174,14 @@ namespace Listenarr.Api.Controllers
 
             _logger.LogInformation(
                 "Transferred {Count} file(s) ({Physical} moved on disk) from audiobook {SourceId} to {TargetId}",
-                toMove.Count, physicallyMoved, source.Id, target.Id);
+                reassigned, physicallyMoved, source.Id, target.Id);
 
             return Ok(new
             {
-                message = $"Transferred {toMove.Count} file(s) to '{target.Title}'",
+                message = $"Transferred {reassigned} file(s) to '{target.Title}'",
                 sourceId = source.Id,
                 targetId = target.Id,
-                transferred = toMove.Count,
+                transferred = reassigned,
                 physicallyMoved,
                 verificationJobId,
                 warnings
