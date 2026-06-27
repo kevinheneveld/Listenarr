@@ -1887,7 +1887,37 @@ namespace Listenarr.Api.Controllers
             if (audiobook == null) return NotFound(new { message = "Audiobook not found" });
 
             var files = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
-            var clusters = FileClustering.Cluster(files, audiobook.BasePath);
+
+            // Read each file's embedded book title (Album/Title tag) so a collection that was
+            // bulk-renamed to the parent record's name still splits by the real book each file
+            // belongs to — filenames are useless there, but the tags name the actual book.
+            // Best-effort and concurrency-capped; a file we can't read falls back to filename
+            // clustering.
+            var embeddedTitles = new System.Collections.Concurrent.ConcurrentDictionary<int, string>();
+            if (_fileExtractionService != null)
+            {
+                await Parallel.ForEachAsync(
+                    files,
+                    new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = ct },
+                    async (file, token) =>
+                    {
+                        try
+                        {
+                            var meta = await _fileExtractionService.ReadEmbeddedAsync(id, file.Id, token);
+                            var bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
+                            if (!string.IsNullOrWhiteSpace(bookTitle))
+                            {
+                                embeddedTitles[file.Id] = bookTitle!;
+                            }
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                        {
+                            _logger.LogDebug(ex, "Failed to read embedded tags for split clustering (file {FileId})", file.Id);
+                        }
+                    });
+            }
+
+            var clusters = FileClustering.Cluster(files, audiobook.BasePath, embeddedTitles);
 
             // Suggestion candidates: same-author records first (a collection
             // dump is almost always one author's shelf), then the whole library

@@ -99,6 +99,56 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Fact]
+        public void Cluster_EmbeddedBookTitles_SplitACollectionRenamedToTheParentName()
+        {
+            // Live case (John Scalzi "Old Man's War"): a collection's files were all renamed to
+            // the parent record's name and dropped in one subfolder, so filenames cluster into a
+            // single useless group — but each file's embedded tag names the real book. The
+            // embedded title must win and split them, with track noise stripped.
+            const string omwBase = "/audiobooks/John Scalzi/Old Man's War";
+            AudiobookFile E(int id, string rel) => new() { Id = id, Path = $"{omwBase}/Old Man's War/{rel}" };
+
+            var files = new[]
+            {
+                E(1, "Old Man's War-001.mp3"),
+                E(2, "Old Man's War-030.mp3"),
+                E(3, "Old Man's War-072.mp3"),
+                E(4, "Old Man's War-114.mp3"),
+            };
+            var embedded = new Dictionary<int, string>
+            {
+                [1] = "Old Man's War 1-77",
+                [2] = "The Ghost Brigades 10-41",
+                [3] = "The Ghost Brigades 38-41",
+                [4] = "1 - The Sagan Diary",
+            };
+
+            var clusters = FileClustering.Cluster(files, omwBase, embedded);
+
+            Assert.Equal(3, clusters.Count);
+            Assert.Contains(clusters, c => c.DisplayName == "The Ghost Brigades" && c.Files.Count == 2);
+            Assert.Contains(clusters, c => c.DisplayName == "The Sagan Diary" && c.Files.Count == 1);
+            Assert.Contains(clusters, c => c.DisplayName == "Old Man's War" && c.Files.Count == 1);
+        }
+
+        [Fact]
+        public void Cluster_NoEmbeddedTitle_FallsBackToPathClustering()
+        {
+            // A file with no usable embedded tag must still cluster by filename/subdir, and a
+            // tag that cleans to nothing is treated as "no signal".
+            const string b = "/audiobooks/Author/Record/Narrator";
+            AudiobookFile F2(int id, string rel) => new() { Id = id, Path = $"{b}/{rel}" };
+
+            var files = new[] { F2(1, "Some Book-01.mp3"), F2(2, "Some Book-02.mp3") };
+            var embedded = new Dictionary<int, string> { [1] = "   ", [2] = "07" }; // whitespace + bare digits
+
+            var clusters = FileClustering.Cluster(files, b, embedded);
+
+            Assert.Single(clusters);
+            Assert.Equal("Some Book", clusters[0].DisplayName);
+        }
+
+        [Fact]
         public void Cluster_DifferentVolumesInOneFolder_FormSeparateClusters()
         {
             // Live case (book 1335): a Vol. 2 set was moved into the Vol. 1

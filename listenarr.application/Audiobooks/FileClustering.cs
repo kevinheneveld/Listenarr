@@ -54,32 +54,52 @@ namespace Listenarr.Application.Audiobooks
         // Leading number of a matched trailing run ("  1" of "  1-001").
         private static readonly Regex LeadingRunNumberRegex = new(@"^\s*\d+", RegexOptions.Compiled);
 
-        public static List<FileCluster> Cluster(IEnumerable<AudiobookFile> files, string? basePath)
+        public static List<FileCluster> Cluster(
+            IEnumerable<AudiobookFile> files,
+            string? basePath,
+            IReadOnlyDictionary<int, string>? embeddedTitles = null)
         {
             var groups = new Dictionary<string, FileCluster>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var file in files.Where(f => !string.IsNullOrWhiteSpace(f.Path)))
             {
-                var relative = MakeRelative(file.Path!, basePath);
-                var slash = relative.IndexOf('/');
-
                 string key;
                 string display;
-                if (slash > 0)
+
+                // Embedded book title wins when present. When a collection is bulk-renamed to
+                // the parent record's name, every filename is identical and useless for
+                // splitting — but each file's embedded Album/Title tag still names the real book
+                // it belongs to (e.g. files all named "Old Man's War-NNN.mp3" whose tags say
+                // "The Ghost Brigades" / "The Sagan Diary"). Track noise is stripped the same way
+                // as filenames; the numbering *style* is intentionally ignored here (a tag is a
+                // book identity, not a duplicate-copy signal).
+                if (embeddedTitles != null
+                    && embeddedTitles.TryGetValue(file.Id, out var embeddedTitle)
+                    && TryEmbeddedTitleKey(embeddedTitle, out var embedKey, out var embedDisplay))
                 {
-                    // Subdirectory wins: everything inside it belongs together.
-                    key = "dir:" + relative[..slash];
-                    display = relative[..slash];
+                    key = embedKey;
+                    display = embedDisplay;
                 }
                 else
                 {
-                    var (stem, signature) = CleanStemWithSignature(Path.GetFileNameWithoutExtension(relative));
-                    // The numbering STYLE is part of the identity: a record
-                    // holding two copies of one book ("Title-NN.mp3" and
-                    // "Title (N).mp3") must yield two groups, or the
-                    // delete-the-duplicate-copy workflow can't target one.
-                    key = "stem:" + stem.ToLowerInvariant() + "|" + signature;
-                    display = stem;
+                    var relative = MakeRelative(file.Path!, basePath);
+                    var slash = relative.IndexOf('/');
+                    if (slash > 0)
+                    {
+                        // Subdirectory wins: everything inside it belongs together.
+                        key = "dir:" + relative[..slash];
+                        display = relative[..slash];
+                    }
+                    else
+                    {
+                        var (stem, signature) = CleanStemWithSignature(Path.GetFileNameWithoutExtension(relative));
+                        // The numbering STYLE is part of the identity: a record
+                        // holding two copies of one book ("Title-NN.mp3" and
+                        // "Title (N).mp3") must yield two groups, or the
+                        // delete-the-duplicate-copy workflow can't target one.
+                        key = "stem:" + stem.ToLowerInvariant() + "|" + signature;
+                        display = stem;
+                    }
                 }
 
                 if (!groups.TryGetValue(key, out var cluster))
@@ -96,6 +116,33 @@ namespace Listenarr.Application.Audiobooks
                 .OrderByDescending(c => c.Files.Count)
                 .ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Builds a cluster key/display from a file's embedded book title, stripping the same
+        /// track/list numbering noise as filenames ("The Ghost Brigades 10-41" → "The Ghost
+        /// Brigades"; "1 - The Sagan Diary" → "The Sagan Diary"). Returns false when the tag
+        /// carries no usable signal (empty, or cleans down to nothing/bare digits) so the caller
+        /// falls back to path-based clustering for that file.
+        /// </summary>
+        private static bool TryEmbeddedTitleKey(string? embeddedTitle, out string key, out string display)
+        {
+            key = string.Empty;
+            display = string.Empty;
+            if (string.IsNullOrWhiteSpace(embeddedTitle))
+            {
+                return false;
+            }
+
+            var (stem, _) = CleanStemWithSignature(embeddedTitle);
+            if (string.IsNullOrWhiteSpace(stem) || stem.All(char.IsDigit))
+            {
+                return false;
+            }
+
+            key = "embed:" + stem.ToLowerInvariant();
+            display = stem;
+            return true;
         }
 
         /// <summary>
