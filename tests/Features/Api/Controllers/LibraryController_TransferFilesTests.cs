@@ -194,6 +194,51 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Assert.Equal(VerificationStatus.Unverified, source.VerificationStatus);
         }
 
+        [Fact]
+        public async Task TransferFiles_DestinationCollides_DoesNotMoveOnDisk()
+        {
+            // The 3778 bug: the target has a BasePath, so the file would relocate to
+            // <BasePath>/<name> — but the target already owns a row there. The collision must be
+            // caught BEFORE the disk move, otherwise the file is physically relocated to the
+            // destination while the reassign is skipped, orphaning the source's row at a now-empty
+            // path (logs showed "Transferred 0 file(s) (1 moved on disk)"). Assert the move on disk
+            // is never even attempted, and the row stays under the source.
+            var source = new Audiobook { Id = 1, Title = "Source" };
+            var target = new Audiobook
+            {
+                Id = 2,
+                Title = "Target",
+                BasePath = "/lib/target",
+                Files = new List<AudiobookFile> { new() { Id = 99, AudiobookId = 2, Path = "/lib/target/a.mp3" } }
+            };
+            var files = new List<AudiobookFile> { new() { Id = 10, AudiobookId = 1, Path = "/lib/s/a.mp3" } };
+
+            var (controller, _, fileRepo, _, fileMover) = CreateControllerWithMover(source, target, files);
+
+            var result = await controller.TransferFiles(1, new LibraryController.TransferFilesRequest(2, null));
+
+            Assert.IsType<OkObjectResult>(result);
+            // No disk move attempted, no reassign — the file is left entirely under the source.
+            fileMover.Verify(m => m.PerformActionOn(FileAction.Move, It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+            fileRepo.Verify(r => r.ReassignAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+            Assert.Equal(1, files[0].AudiobookId);
+        }
+
+        private static (
+            LibraryController controller,
+            Mock<IAudiobookRepository> repo,
+            Mock<IAudiobookFileRepository> fileRepo,
+            Mock<ILibraryVerificationQueueService> queue,
+            Mock<IFileMover> fileMover) CreateControllerWithMover(
+            Audiobook source,
+            Audiobook? target,
+            List<AudiobookFile> files)
+        {
+            var (repo, fileRepo, fileMover, _, queue, factory) = BuildDependencies(source, target, files);
+            var controller = BuildController(repo, fileRepo, queue, factory);
+            return (controller, repo, fileRepo, queue, fileMover);
+        }
+
         private static (
             LibraryController controller,
             Mock<IAudiobookRepository> repo,
@@ -202,6 +247,20 @@ namespace Listenarr.Tests.Features.Api.Controllers
             Audiobook source,
             Audiobook? target,
             List<AudiobookFile> files)
+        {
+            var (repo, fileRepo, _, _, queue, factory) = BuildDependencies(source, target, files);
+            var controller = BuildController(repo, fileRepo, queue, factory);
+            return (controller, repo, fileRepo, queue);
+        }
+
+        private static (
+            Mock<IAudiobookRepository> repo,
+            Mock<IAudiobookFileRepository> fileRepo,
+            Mock<IFileMover> fileMover,
+            Mock<IWhisperService> whisper,
+            Mock<ILibraryVerificationQueueService> queue,
+            IServiceScopeFactory factory)
+            BuildDependencies(Audiobook source, Audiobook? target, List<AudiobookFile> files)
         {
             var repo = new Mock<IAudiobookRepository>();
             repo.Setup(r => r.GetByIdAsync(source.Id)).ReturnsAsync(source);
@@ -231,8 +290,17 @@ namespace Listenarr.Tests.Features.Api.Controllers
             services.AddSingleton(whisper.Object);
             services.AddSingleton(queue.Object);
             var provider = services.BuildServiceProvider();
-            var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+            var factory = provider.GetRequiredService<IServiceScopeFactory>();
 
+            return (repo, fileRepo, fileMover, whisper, queue, factory);
+        }
+
+        private static LibraryController BuildController(
+            Mock<IAudiobookRepository> repo,
+            Mock<IAudiobookFileRepository> fileRepo,
+            Mock<ILibraryVerificationQueueService> queue,
+            IServiceScopeFactory scopeFactory)
+        {
             var controller = new LibraryController(
                 repo.Object,
                 new Mock<IImageCacheService>().Object,
@@ -256,7 +324,7 @@ namespace Listenarr.Tests.Features.Api.Controllers
                 HttpContext = new DefaultHttpContext()
             };
 
-            return (controller, repo, fileRepo, queue);
+            return controller;
         }
     }
 }

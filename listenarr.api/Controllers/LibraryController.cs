@@ -2022,6 +2022,24 @@ namespace Listenarr.Api.Controllers
 
             foreach (var file in toMove)
             {
+                // Determine the path this file would occupy under the target, and bail BEFORE
+                // touching disk if the target already owns a row there — a duplicate from a prior
+                // (partial) split, or the same physical file dual-referenced by both records.
+                // Reassigning would violate the (AudiobookId, Path) unique key; moving first and
+                // only then discovering the collision relocates the file on disk but orphans the
+                // source's DB row (the file leaves but never reassigns). Skip it entirely so the
+                // rest of the transfer (and the other split groups) still go through; the user can
+                // delete the redundant copy from the source if it's a true duplicate.
+                var candidatePath = (!string.IsNullOrWhiteSpace(target.BasePath) && !string.IsNullOrWhiteSpace(file.Path))
+                    ? Path.Join(target.BasePath, Path.GetFileName(file.Path))
+                    : file.Path;
+                if (!string.IsNullOrWhiteSpace(candidatePath)
+                    && (target.Files?.Any(tf => tf.Id != file.Id && string.Equals(tf.Path, candidatePath, StringComparison.OrdinalIgnoreCase)) ?? false))
+                {
+                    warnings.Add($"{Path.GetFileName(candidatePath)} already exists under the target — left in place (delete the redundant copy if it's a duplicate)");
+                    continue;
+                }
+
                 // Physical relocation is best-effort: ownership (the DB row) is the
                 // core semantic, and a file left in the old folder is fixable via
                 // the Organize tool. A failed disk move must not abort the transfer.
