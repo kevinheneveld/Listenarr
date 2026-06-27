@@ -1888,33 +1888,49 @@ namespace Listenarr.Api.Controllers
 
             var files = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
 
-            // Read each file's embedded book title (Album/Title tag) so a collection that was
-            // bulk-renamed to the parent record's name still splits by the real book each file
-            // belongs to — filenames are useless there, but the tags name the actual book.
-            // Best-effort and concurrency-capped; a file we can't read falls back to filename
-            // clustering.
+            // Read each file's embedded book title (Album/Title tag) so a collection bulk-renamed
+            // to the parent record's name still splits by the real book each file belongs to —
+            // filenames are useless there, but the tags name the actual book.
+            //
+            // CRITICAL: parallelize ONLY the raw ffprobe (RunFfprobeAsync spawns a process and
+            // touches no DbContext). The higher-level reads (ReadEmbeddedAsync / metadata service)
+            // hit the request-scoped, non-thread-safe EF DbContext per call; probing those
+            // concurrently corrupted results, so the same file read its tag on one run and blank
+            // on the next — making the clusters (and therefore the moves) non-deterministic.
             var embeddedTitles = new System.Collections.Concurrent.ConcurrentDictionary<int, string>();
-            if (_fileExtractionService != null)
+            using (var ffScope = _scopeFactory.CreateScope())
             {
-                await Parallel.ForEachAsync(
-                    files,
-                    new ParallelOptions { MaxDegreeOfParallelism = 8, CancellationToken = ct },
-                    async (file, token) =>
-                    {
-                        try
+                var ffmpeg = ffScope.ServiceProvider.GetService<IFfmpegService>();
+                if (ffmpeg != null)
+                {
+                    // Resolve/install ffprobe once up front so the parallel probes don't race on it.
+                    await ffmpeg.GetFfprobePathAsync();
+
+                    var targets = files
+                        .Select(f => (f.Id, path: ResolvePathWithOptionalBase(audiobook.BasePath, f.Path ?? string.Empty)))
+                        .Where(x => !string.IsNullOrWhiteSpace(x.path) && System.IO.File.Exists(x.path))
+                        .ToList();
+
+                    await Parallel.ForEachAsync(
+                        targets,
+                        new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+                        async (target, token) =>
                         {
-                            var meta = await _fileExtractionService.ReadEmbeddedAsync(id, file.Id, token);
-                            var bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
-                            if (!string.IsNullOrWhiteSpace(bookTitle))
+                            try
                             {
-                                embeddedTitles[file.Id] = bookTitle!;
+                                var meta = await ffmpeg.RunFfprobeAsync(target.path);
+                                var bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
+                                if (!string.IsNullOrWhiteSpace(bookTitle))
+                                {
+                                    embeddedTitles[target.Id] = bookTitle!;
+                                }
                             }
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                        {
-                            _logger.LogDebug(ex, "Failed to read embedded tags for split clustering (file {FileId})", file.Id);
-                        }
-                    });
+                            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                            {
+                                _logger.LogDebug(ex, "ffprobe failed for split clustering (file {FileId})", target.Id);
+                            }
+                        });
+                }
             }
 
             var clusters = FileClustering.Cluster(files, audiobook.BasePath, embeddedTitles);
