@@ -111,6 +111,9 @@ const props = defineProps<{
   audiobook: Audiobook | null
   // Seeds the destination search — typically the title the spoken credits named.
   initialQuery?: string | null
+  // Pre-select a subset of files (e.g. a multi-select made in the file list).
+  // When omitted/empty, all of the source's files are selected as before.
+  initialFileIds?: number[] | null
 }>()
 
 const emit = defineEmits<{
@@ -140,7 +143,10 @@ watch(
     if (!visible) return
     query.value = (props.initialQuery || '').trim()
     chosenTargetId.value = null
-    selectedFileIds.value = new Set(sourceFiles.value.map((f) => f.id))
+    selectedFileIds.value =
+      props.initialFileIds && props.initialFileIds.length
+        ? new Set(props.initialFileIds)
+        : new Set(sourceFiles.value.map((f) => f.id))
     transferring.value = false
     if (libraryStore.audiobooks.length === 0) {
       libraryLoading.value = true
