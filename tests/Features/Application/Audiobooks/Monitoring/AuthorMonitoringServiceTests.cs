@@ -252,5 +252,85 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 catalog => catalog.GetCatalogAsync("Andy Weir", "us", 500, null, true, It.IsAny<System.Threading.CancellationToken>()),
                 Times.Once);
         }
+
+        [Fact]
+        public async Task UpdateAuthorLanguageAsync_ChangesLanguageAndStopsAddingOffLanguageBooks()
+        {
+            var dbOptions = new DbContextOptionsBuilder<ListenArrDbContext>()
+                .UseInMemoryDatabase(databaseName: $"author-monitor-lang-{System.Guid.NewGuid():N}")
+                .Options;
+
+            await using var dbContext = new ListenArrDbContext(dbOptions);
+            dbContext.MonitoredAuthors.Add(new MonitoredAuthor
+            {
+                Id = 1,
+                AuthorName = "Dean Koontz",
+                AuthorNameNormalized = "dean koontz",
+                Region = "us",
+                Language = "all",
+                CreatedAt = DateTime.UtcNow.AddDays(-30),
+                UpdatedAt = DateTime.UtcNow.AddDays(-30),
+                LastCheckedAt = DateTime.UtcNow.AddDays(-1)
+            });
+            await dbContext.SaveChangesAsync();
+
+            var authorCatalogService = new Mock<IAuthorCatalogService>();
+            authorCatalogService
+                .Setup(service => service.GetCatalogAsync("Dean Koontz", "us", 500, null, true, It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new AuthorCatalogFetchResult
+                {
+                    Author = new AuthorLookupItem { Name = "Dean Koontz" },
+                    Books = new List<AudibleSearchResult>
+                    {
+                        new()
+                        {
+                            Asin = "B000ENGLISH",
+                            Title = "Devoted",
+                            Authors = new List<AudibleAuthor> { new() { Name = "Dean Koontz" } },
+                            Language = "english"
+                        },
+                        new()
+                        {
+                            Asin = "B000GERMAN",
+                            Title = "Devoted - Der Beschützer",
+                            Authors = new List<AudibleAuthor> { new() { Name = "Dean Koontz" } },
+                            Language = "german"
+                        }
+                    }
+                });
+
+            var libraryAddService = new Mock<ILibraryAddService>();
+            libraryAddService
+                .Setup(service => service.AddToLibraryAsync(It.IsAny<LibraryAddOperationRequest>(), It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new LibraryAddOperationResult
+                {
+                    Added = true,
+                    Audiobook = new Audiobook { Id = 99, Title = "Devoted", Asin = "B000ENGLISH" }
+                });
+
+            var service = new AuthorMonitoringService(
+                new EfMonitoredAuthorRepository(dbContext),
+                new AudiobookRepository(dbContext),
+                authorCatalogService.Object,
+                libraryAddService.Object,
+                new EfAuthorMonitoringExclusionRepository(dbContext),
+                Mock.Of<ILogger<AuthorMonitoringService>>());
+
+            var result = await service.UpdateAuthorLanguageAsync(1, "english");
+
+            Assert.NotNull(result);
+            Assert.Equal("english", result!.MonitoredAuthor!.Language);
+            // Only the english edition is added; the german translation is filtered out.
+            Assert.Equal(1, result.SyncResult.AddedCount);
+            libraryAddService.Verify(s => s.AddToLibraryAsync(
+                It.Is<LibraryAddOperationRequest>(r => r.Metadata.Title == "Devoted"),
+                It.IsAny<System.Threading.CancellationToken>()), Times.Once);
+            libraryAddService.Verify(s => s.AddToLibraryAsync(
+                It.Is<LibraryAddOperationRequest>(r => r.Metadata.Title == "Devoted - Der Beschützer"),
+                It.IsAny<System.Threading.CancellationToken>()), Times.Never);
+
+            var stored = await dbContext.MonitoredAuthors.SingleAsync();
+            Assert.Equal("english", stored.Language);
+        }
     }
 }

@@ -125,6 +125,48 @@ namespace Listenarr.Api.Features.Library
         }
 
         /// <summary>
+        /// Change a monitored author's language filter and re-sync so the change takes
+        /// effect immediately (a narrowed language stops adding off-language books; a
+        /// widened one backfills newly-in-language books on this pass).
+        /// </summary>
+        [HttpPut("{id:int}")]
+        [ProducesResponseType(typeof(MonitorAuthorResponse), StatusCodes.Status200OK)]
+        public async Task<ActionResult<MonitorAuthorResponse>> UpdateAuthorMonitoring(
+            int id,
+            [FromBody] UpdateAuthorMonitoringRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Language))
+            {
+                return BadRequest("Language is required");
+            }
+
+            try
+            {
+                var result = await _authorMonitoringService.UpdateAuthorLanguageAsync(id, request.Language, cancellationToken);
+                if (result?.MonitoredAuthor == null)
+                {
+                    return NotFound();
+                }
+
+                return Ok(new MonitorAuthorResponse
+                {
+                    Message = "Author monitoring updated",
+                    MonitoredAuthor = ToResponse(result.MonitoredAuthor),
+                    AddedCount = result.SyncResult.AddedCount,
+                    ExistingCount = result.SyncResult.ExistingCount,
+                    FailedCount = result.SyncResult.FailedCount,
+                    ErrorMessage = result.SyncResult.ErrorMessage
+                });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to update monitoring for author {AuthorId}", id);
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+        /// <summary>
         /// List the books excluded from author-monitoring re-adds (created when a book is
         /// deleted with "keep out of author monitoring").
         /// </summary>
@@ -202,6 +244,11 @@ namespace Listenarr.Api.Features.Library
             public string Title { get; set; } = string.Empty;
             public string? AuthorName { get; set; }
             public DateTime CreatedAt { get; set; }
+        }
+
+        public sealed class UpdateAuthorMonitoringRequest
+        {
+            public string Language { get; set; } = string.Empty;
         }
 
         public sealed class MonitorAuthorResponse

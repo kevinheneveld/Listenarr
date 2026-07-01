@@ -516,6 +516,13 @@ class ApiService {
     })
   }
 
+  async updateAuthorMonitoring(id: number, language: string): Promise<MonitorAuthorResponse> {
+    return this.request<MonitorAuthorResponse>(`/authors/monitoring/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ language }),
+    })
+  }
+
   async getAuthorMonitoringExclusions(): Promise<AuthorMonitoringExclusion[]> {
     return this.request<AuthorMonitoringExclusion[]>('/authors/monitoring/exclusions')
   }

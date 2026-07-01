@@ -32,6 +32,8 @@ namespace Listenarr.Application.Audiobooks.Contracts
 
         Task<bool> UnmonitorAuthorAsync(int id, CancellationToken cancellationToken = default);
 
+        Task<MonitorAuthorOperationResult?> UpdateAuthorLanguageAsync(int id, string language, CancellationToken cancellationToken = default);
+
         Task<MonitorAuthorSyncResult> SyncAuthorAsync(int id, CancellationToken cancellationToken = default);
 
         Task<int> SyncDueAuthorsAsync(CancellationToken cancellationToken = default);

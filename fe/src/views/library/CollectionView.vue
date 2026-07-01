@@ -284,6 +284,26 @@
               <component v-else :is="isCurrentAuthorMonitored ? PhEye : PhPlus" />
               {{ isCurrentAuthorMonitored ? 'Monitoring Author' : 'Monitor Author' }}
             </button>
+            <label
+              v-if="isCurrentAuthorMonitored"
+              class="author-language-select"
+              title="Which catalog languages this author's monitoring adds. Set to a single language to stop pulling foreign-language translations."
+            >
+              <PhGlobe />
+              <select
+                :value="currentMonitoredLanguage"
+                :disabled="authorMonitoringBusy || authorMetadataRefreshBusy"
+                @change="changeAuthorLanguage(($event.target as HTMLSelectElement).value)"
+              >
+                <option
+                  v-for="opt in preferredSearchLanguageOptions"
+                  :key="opt.value"
+                  :value="opt.value"
+                >
+                  {{ opt.value === 'all' ? 'All Languages' : opt.label }}
+                </option>
+              </select>
+            </label>
           </div>
         </div>
         <div v-else-if="isSeriesCollection" class="author-monitoring-controls">
@@ -918,6 +938,9 @@ const authorLanguageLabel = computed(() => {
   )
 })
 const isCurrentAuthorMonitored = computed(() => Boolean(authorMonitoringStatus.value))
+const currentMonitoredLanguage = computed(() =>
+  normalizePreferredSearchLanguage(authorMonitoringStatus.value?.language ?? undefined),
+)
 const authorMonitoringContextLabel = computed(() => {
   return `${authorRegionLabel.value} / ${authorLanguageLabel.value}`
 })
@@ -2053,6 +2076,40 @@ async function toggleAuthorMonitoring() {
   }
 }
 
+async function changeAuthorLanguage(language: string) {
+  const current = authorMonitoringStatus.value
+  if (!current || authorMonitoringBusy.value) return
+  const normalized = normalizePreferredSearchLanguage(language)
+  if (normalized === current.language) return
+
+  authorMonitoringBusy.value = true
+  try {
+    const response = await apiService.updateAuthorMonitoring(current.id, normalized)
+    authorMonitoringStatus.value = response.monitoredAuthor
+
+    const label =
+      preferredSearchLanguageOptions.find((o) => o.value === normalized)?.label ?? normalized
+    toast.success(
+      'Author language updated',
+      normalized === 'all'
+        ? 'Monitoring now adds books in all languages from this catalog.'
+        : `Monitoring now adds only ${label} books. Existing off-language entries are left in place — remove them from the library if you no longer want them.`,
+    )
+
+    await loadCollectionData(true)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to update author language.'
+    toast.error('Could not update author language', message)
+    errorTracking.captureException(err as Error, {
+      component: 'CollectionView',
+      operation: 'changeAuthorLanguage',
+      metadata: { author: name.value, language: normalized },
+    })
+  } finally {
+    authorMonitoringBusy.value = false
+  }
+}
+
 async function toggleSeriesMonitoring() {
   if (!isSeriesCollection.value || seriesMonitoringBusy.value) return
 
@@ -2989,6 +3046,36 @@ defineExpose({
 
 .author-monitor-btn.active {
   border-color: rgba(72, 187, 120, 0.42);
+}
+
+.author-language-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  color: #e6eef8;
+  font-size: 12px;
+}
+
+.author-language-select select {
+  background-color: transparent;
+  border: none;
+  color: #e6eef8;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+.author-language-select select option {
+  background-color: #1a1a1a;
+  color: #e6eef8;
+}
+
+.author-language-select select:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .spin-icon {
