@@ -3,6 +3,7 @@ using System;
 using Listenarr.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Listenarr.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ListenArrDbContext))]
-    partial class ListenArrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260701180228_AddAuthorMonitoringExclusions")]
+    partial class AddAuthorMonitoringExclusions
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.8");
@@ -941,15 +944,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.Property<string>("AudnexusApiUrl")
                         .IsRequired()
                         .HasColumnType("TEXT");
-
-                    b.Property<int>("AutomaticSearchBookDelaySeconds")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("AutomaticSearchIntervalHours")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("AutomaticSearchTitleOnlyFallback")
-                        .HasColumnType("INTEGER");
 
                     b.Property<int>("CompletedFileAction")
                         .HasColumnType("INTEGER");
