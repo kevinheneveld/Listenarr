@@ -1117,3 +1117,21 @@ export interface AuthorMonitoringExclusion {
   asin?: string | null
   createdAt: string
 }
+
+/**
+ * One background automatic-search activity event. `stage` is a small vocabulary
+ * the UI styles by: `searching` (a book is being queried), `grabbed` (a release
+ * was queued), `no_results` (nothing found), `idle` (the sweep isn't running).
+ */
+export interface SearchActivityEvent {
+  message: string
+  stage: 'searching' | 'grabbed' | 'no_results' | 'idle' | string
+  audiobookId?: number | null
+  asin?: string | null
+  timestamp: string
+}
+
+export interface SearchActivityResponse {
+  current: SearchActivityEvent | null
+  recent: SearchActivityEvent[]
+}
