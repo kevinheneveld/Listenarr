@@ -756,6 +756,15 @@
     @close="closeTransferModal"
     @done="onTransferDone"
   />
+
+  <!-- Break a multi-book record apart: server-side clustering with a suggested
+       destination per group; applying is transfers/deletes of each group. -->
+  <SplitCollectionModal
+    :visible="showSplitModal"
+    :audiobook="audiobook"
+    @close="showSplitModal = false"
+    @done="onSplitDone"
+  />
 </template>
 
 <script setup lang="ts">
@@ -786,6 +795,7 @@ import { useProtectedImages } from '@/composables/useProtectedImages'
 import { buildAudibleProductUrl } from '@/utils/marketDomains'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
+import SplitCollectionModal from '@/components/domain/audiobook/SplitCollectionModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import CustomSelect from '@/components/form/CustomSelect.vue'
@@ -826,6 +836,7 @@ import {
   PhCircle,
   PhDiscordLogo,
   PhArrowsLeftRight,
+  PhArrowsSplit,
 } from '@phosphor-icons/vue'
 
 const route = useRoute()
@@ -855,6 +866,7 @@ const scanJobId = ref<string | null>(null)
 const showEditModal = ref(false)
 const showOrganizeModal = ref(false)
 const showTransferModal = ref(false)
+const showSplitModal = ref(false)
 const showMoreActions = ref(false)
 
 // History state
@@ -965,6 +977,18 @@ const topActions = computed<DetailTopAction[]>(() => [
     },
   },
   {
+    key: 'split-collection',
+    label: 'Split Collection',
+    title: 'Break a multi-book record into its real books',
+    ariaLabel: 'Split Collection',
+    icon: PhArrowsSplit,
+    disabled: (audiobook.value?.files?.length ?? 0) < 2,
+    desktopGroup: 'secondary',
+    onClick: () => {
+      showSplitModal.value = true
+    },
+  },
+  {
     key: 'delete',
     label: 'Delete',
     title: 'Delete',
@@ -1010,6 +1034,7 @@ type DetailTopAction = {
     | 'rescan-metadata'
     | 'organize'
     | 'transfer-files'
+    | 'split-collection'
     | 'delete'
   label: string
   title: string
@@ -1758,6 +1783,15 @@ async function handleOrganizeDone() {
 function closeTransferModal() {
   showTransferModal.value = false
   bulkMoveFileIds.value = []
+}
+
+function onSplitDone() {
+  showSplitModal.value = false
+  clearFileSelection()
+  // Groups left this record — reload it, and refresh the library list so the
+  // destinations' file counts are current too.
+  void loadAudiobook()
+  void libraryStore.fetchLibrary()
 }
 
 async function onTransferDone() {
