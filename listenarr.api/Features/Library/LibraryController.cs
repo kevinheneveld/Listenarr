@@ -43,6 +43,8 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryTransferFilesWorkflow _transferFilesWorkflow;
         private readonly LibraryFileDeleteWorkflow _fileDeleteWorkflow;
         private readonly LibrarySplitPreviewWorkflow _splitPreviewWorkflow;
+        private readonly LibraryOrganizeSweepWorkflow _organizeSweepWorkflow;
+        private readonly LibraryMoveSummaryWorkflow _moveSummaryWorkflow;
         /// <summary>Initializes the library transport façade.</summary>
         public LibraryController(
             ILibraryListService libraryListService,
@@ -61,7 +63,9 @@ namespace Listenarr.Api.Features.Library
             LibraryRenameWorkflow renameWorkflow,
             LibraryTransferFilesWorkflow transferFilesWorkflow,
             LibraryFileDeleteWorkflow fileDeleteWorkflow,
-            LibrarySplitPreviewWorkflow splitPreviewWorkflow)
+            LibrarySplitPreviewWorkflow splitPreviewWorkflow,
+            LibraryOrganizeSweepWorkflow organizeSweepWorkflow,
+            LibraryMoveSummaryWorkflow moveSummaryWorkflow)
         {
             _libraryListService = libraryListService;
             _addWorkflow = addWorkflow;
@@ -80,6 +84,8 @@ namespace Listenarr.Api.Features.Library
             _transferFilesWorkflow = transferFilesWorkflow;
             _fileDeleteWorkflow = fileDeleteWorkflow;
             _splitPreviewWorkflow = splitPreviewWorkflow;
+            _organizeSweepWorkflow = organizeSweepWorkflow;
+            _moveSummaryWorkflow = moveSummaryWorkflow;
         }
 
         /// <summary>

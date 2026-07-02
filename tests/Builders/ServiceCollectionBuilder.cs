@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Listenarr.Application.Audiobooks.Organizing;
 
 namespace Listenarr.Tests.Builders
 {
@@ -205,6 +206,9 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryTransferFilesWorkflow>();
             services.AddSingleton<LibraryFileDeleteWorkflow>();
             services.AddSingleton<LibrarySplitPreviewWorkflow>();
+            services.AddSingleton<LibraryOrganizeSweepWorkflow>();
+            services.AddSingleton<LibraryMoveSummaryWorkflow>();
+            services.AddSingleton<IOrganizeFilesystem, Listenarr.Infrastructure.Library.Organizing.OrganizeFilesystem>();
             services.AddSingleton<SearchResponseMapper>();
             services.AddSingleton<ImagePlaceholderResolver>();
             services.AddSingleton<IndexerTestWorkflow>();

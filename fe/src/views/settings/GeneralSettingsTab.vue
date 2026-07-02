@@ -58,6 +58,8 @@
         ></AuthenticationSection>
 
         <AuthorMonitoringExclusionsSection />
+
+        <LibraryMaintenanceSection />
       </div>
       <!-- settings-form -->
     </div>
@@ -77,6 +79,7 @@ import FeaturesSection from '@/components/settings/FeaturesSection.vue'
 import SearchSettingsSection from '@/components/settings/SearchSettingsSection.vue'
 import AuthenticationSection from '@/components/settings/AuthenticationSection.vue'
 import AuthorMonitoringExclusionsSection from '@/components/settings/AuthorMonitoringExclusionsSection.vue'
+import LibraryMaintenanceSection from '@/components/settings/LibraryMaintenanceSection.vue'
 
 interface Props {
   settings: ApplicationSettings | null
