@@ -43,6 +43,8 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryTransferFilesWorkflow _transferFilesWorkflow;
         private readonly LibraryFileDeleteWorkflow _fileDeleteWorkflow;
         private readonly LibrarySplitPreviewWorkflow _splitPreviewWorkflow;
+        private readonly LibraryNotAudiobookWorkflow _notAudiobookWorkflow;
+        private readonly LibraryEmbeddedMetadataWorkflow _embeddedMetadataWorkflow;
         private readonly LibraryOrganizeSweepWorkflow _organizeSweepWorkflow;
         private readonly LibraryMoveSummaryWorkflow _moveSummaryWorkflow;
         private readonly LibraryDuplicatesWorkflow _duplicatesWorkflow;
@@ -69,7 +71,9 @@ namespace Listenarr.Api.Features.Library
             LibraryOrganizeSweepWorkflow organizeSweepWorkflow,
             LibraryMoveSummaryWorkflow moveSummaryWorkflow,
             LibraryDuplicatesWorkflow duplicatesWorkflow,
-            LibraryFileStreamWorkflow fileStreamWorkflow)
+            LibraryFileStreamWorkflow fileStreamWorkflow,
+            LibraryNotAudiobookWorkflow notAudiobookWorkflow,
+            LibraryEmbeddedMetadataWorkflow embeddedMetadataWorkflow)
         {
             _libraryListService = libraryListService;
             _addWorkflow = addWorkflow;
@@ -92,6 +96,35 @@ namespace Listenarr.Api.Features.Library
             _moveSummaryWorkflow = moveSummaryWorkflow;
             _duplicatesWorkflow = duplicatesWorkflow;
             _fileStreamWorkflow = fileStreamWorkflow;
+            _notAudiobookWorkflow = notAudiobookWorkflow;
+            _embeddedMetadataWorkflow = embeddedMetadataWorkflow;
+        }
+
+        /// <summary>
+        /// Read a tracked file's embedded tags (ffprobe) — the hint the relabel
+        /// flow ranks candidates with. Read-only.
+        /// </summary>
+        /// <param name="audiobookId">Owning audiobook ID.</param>
+        /// <param name="fileId">AudiobookFile row ID.</param>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpGet("{audiobookId}/files/{fileId}/embedded-metadata")]
+        public async Task<IActionResult> GetEmbeddedFileMetadata(int audiobookId, int fileId, CancellationToken ct)
+        {
+            return await _embeddedMetadataWorkflow.ReadAsync(audiobookId, fileId, ct);
+        }
+
+        /// <summary>
+        /// "Not an audiobook" / wrong content: removes every tracked file from
+        /// disk and the library, blocklists the delivering release(s) so the
+        /// re-search cannot re-grab the same junk, resets the stale verification
+        /// verdict, keeps the book monitored, and starts a background search.
+        /// </summary>
+        /// <param name="id">Audiobook whose imported files are the wrong content.</param>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpPost("{id}/not-audiobook")]
+        public async Task<IActionResult> RejectNotAudiobook(int id, CancellationToken ct)
+        {
+            return await _notAudiobookWorkflow.RejectAsync(id, ct);
         }
 
         /// <summary>

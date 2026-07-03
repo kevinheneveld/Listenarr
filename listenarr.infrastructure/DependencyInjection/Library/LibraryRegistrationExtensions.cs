@@ -46,6 +46,8 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<IAudiobookRepository, AudiobookRepository>();
         services.AddScoped<IQualityProfileRepository, QualityProfileRepository>();
         services.AddScoped<IAudiobookFileRepository, EfAudiobookFileRepository>();
+        services.AddScoped<IBlockedReleaseRepository, EfBlockedReleaseRepository>();
+        services.AddScoped<IVerificationJobRepository, EfVerificationJobRepository>();
         services.AddScoped<IMoveJobRepository, EfMoveJobRepository>();
         services.AddScoped<IMonitoredAuthorRepository, EfMonitoredAuthorRepository>();
         services.AddScoped<IMonitoredSeriesRepository, EfMonitoredSeriesRepository>();

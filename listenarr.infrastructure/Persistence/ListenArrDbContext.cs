@@ -46,6 +46,8 @@ namespace Listenarr.Infrastructure.Persistence
         public DbSet<AuthorCacheEntry> AuthorCacheEntries { get; set; } = null!;
         public DbSet<SeriesCacheEntry> SeriesCacheEntries { get; set; } = null!;
         public DbSet<UserSession> UserSessions { get; set; } = null!;
+        public DbSet<Listenarr.Domain.Search.BlockedRelease> BlockedReleases { get; set; } = null!;
+        public DbSet<VerificationJobRecord> VerificationJobs { get; set; } = null!;
 
         public ListenArrDbContext(DbContextOptions<ListenArrDbContext> options)
             : base(options)

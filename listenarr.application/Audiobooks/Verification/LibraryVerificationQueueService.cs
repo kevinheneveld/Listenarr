@@ -89,10 +89,14 @@ namespace Listenarr.Application.Audiobooks.Verification
         private readonly ConcurrentDictionary<Guid, VerificationJob> _jobs = new();
         private readonly Channel<VerificationJob> _channel = Channel.CreateUnbounded<VerificationJob>();
         private readonly ILogger<LibraryVerificationQueueService> _logger;
+        private readonly Contracts.IVerificationJobPersistence? _persistence;
 
-        public LibraryVerificationQueueService(ILogger<LibraryVerificationQueueService> logger)
+        public LibraryVerificationQueueService(
+            ILogger<LibraryVerificationQueueService> logger,
+            Contracts.IVerificationJobPersistence? persistence = null)
         {
             _logger = logger;
+            _persistence = persistence;
         }
 
         public ChannelReader<VerificationJob> Reader => _channel.Reader;
@@ -120,6 +124,20 @@ namespace Listenarr.Application.Audiobooks.Verification
                 "Enqueueing verification job {JobId} ({Scope}, trigger {Trigger})",
                 job.Id, audiobookIds == null ? "whole library" : $"{audiobookIds.Count} book(s)", trigger);
             await _channel.Writer.WriteAsync(job);
+
+            // Durable shadow (best-effort): jobs queued behind a long
+            // transcription must survive a container restart.
+            if (_persistence != null)
+            {
+                try
+                {
+                    await _persistence.RecordQueuedAsync(job.Id, audiobookIds, trigger);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Failed to persist verification job {JobId} (job still runs; it just won't survive a restart)", job.Id);
+                }
+            }
             return job.Id;
         }
 
@@ -132,6 +150,11 @@ namespace Listenarr.Application.Audiobooks.Verification
 
             _logger.LogInformation("Cancellation requested for verification job {JobId} ({Status})", id, job.Status);
             job.CancelSource.Cancel();
+            if (_persistence != null)
+            {
+                // Fire-and-forget: the durable row must not re-run a job the user killed.
+                _ = _persistence.SetStatusAsync(id, "Cancelled");
+            }
             return true;
         }
 

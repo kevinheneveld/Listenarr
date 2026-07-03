@@ -62,6 +62,12 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             _logger.LogInformation("LibraryVerificationBackgroundService started");
+
+            // Restart recovery: re-enqueue jobs whose durable rows are still
+            // pending — the in-memory channel died with the previous process
+            // (live losses: two deploys dropped queued verifications).
+            await RehydratePendingJobsAsync(stoppingToken);
+
             try
             {
                 await foreach (var job in _queue.Reader.ReadAllAsync(stoppingToken))
@@ -71,6 +77,7 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                     {
                         job.Status = "Cancelled";
                         job.CompletedAt = DateTime.UtcNow;
+                        await MirrorStatusAsync(job, stoppingToken);
                         await SendCompleteAsync(job, error: null, stoppingToken);
                         _logger.LogInformation("Verification job {JobId} cancelled before it started", job.Id);
                         continue;
@@ -83,10 +90,12 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                     {
                         _logger.LogInformation("Processing verification job {JobId}", job.Id);
                         job.Status = "Processing";
+                        await MirrorStatusAsync(job, stoppingToken);
                         await RunJobAsync(job, jobCts.Token);
 
                         job.Status = "Completed";
                         job.CompletedAt = DateTime.UtcNow;
+                        await MirrorStatusAsync(job, stoppingToken);
                         await SendCompleteAsync(job, error: null, stoppingToken);
                         _logger.LogInformation(
                             "Verification job {JobId} completed: {Verified} verified, {Flagged} flagged, {Unverifiable} unverifiable, {Skipped} skipped, {Failed} failed",
@@ -100,6 +109,7 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                     {
                         job.Status = "Cancelled";
                         job.CompletedAt = DateTime.UtcNow;
+                        await MirrorStatusAsync(job, stoppingToken);
                         await SendCompleteAsync(job, error: null, stoppingToken);
                         _logger.LogInformation(
                             "Verification job {JobId} cancelled after {Processed}/{Total} books ({Verified} verified, {Flagged} flagged)",
@@ -111,6 +121,7 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                         job.Status = "Failed";
                         job.Error = ex.Message;
                         job.CompletedAt = DateTime.UtcNow;
+                        await MirrorStatusAsync(job, stoppingToken);
                         await SendCompleteAsync(job, ex.Message, stoppingToken);
                     }
                 }
@@ -118,6 +129,67 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 _logger.LogInformation("LibraryVerificationBackgroundService stopping due to host shutdown");
+            }
+        }
+
+        /// <summary>Best-effort mirror of the in-memory status onto the durable row.</summary>
+        private async Task MirrorStatusAsync(VerificationJob job, CancellationToken ct)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var persistence = scope.ServiceProvider.GetService<Listenarr.Application.Audiobooks.Verification.Contracts.IVerificationJobPersistence>();
+                if (persistence != null)
+                {
+                    await persistence.SetStatusAsync(job.Id, job.Status, ct);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "Failed to mirror status for verification job {JobId}", job.Id);
+            }
+        }
+
+        private async Task RehydratePendingJobsAsync(CancellationToken ct)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var persistence = scope.ServiceProvider.GetService<Listenarr.Application.Audiobooks.Verification.Contracts.IVerificationJobPersistence>();
+                if (persistence == null) return;
+
+                var pending = await persistence.GetPendingAsync(ct);
+                foreach (var record in pending)
+                {
+                    // Retire the old row first: the re-enqueue below writes a fresh
+                    // one, and a crash between the two must not double-enqueue.
+                    await persistence.SetStatusAsync(record.Id, "Rehydrated", ct);
+
+                    List<int>? ids = null;
+                    if (!string.IsNullOrWhiteSpace(record.AudiobookIdsJson))
+                    {
+                        try
+                        {
+                            ids = System.Text.Json.JsonSerializer.Deserialize<List<int>>(record.AudiobookIdsJson);
+                        }
+                        catch (System.Text.Json.JsonException)
+                        {
+                            _logger.LogWarning("Verification job {JobId} had unreadable ids; skipping rehydration", record.Id);
+                            continue;
+                        }
+                    }
+
+                    var newId = await _queue.EnqueueAsync(ids, record.Trigger);
+                    _logger.LogInformation(
+                        "Rehydrated verification job {OldJobId} as {NewJobId} ({Scope}, trigger {Trigger}) after restart",
+                        record.Id, newId, ids == null ? "whole library" : $"{ids.Count} book(s)", record.Trigger);
+                }
+
+                await persistence.CleanupAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "Verification job rehydration failed (queue starts empty)");
             }
         }
 

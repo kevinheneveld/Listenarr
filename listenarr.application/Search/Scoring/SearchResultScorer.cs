@@ -40,7 +40,18 @@ namespace Listenarr.Application.Search.Scoring
             _logger = logger;
         }
 
-        public async Task<QualityScore> Score(SearchResult searchResult, QualityProfile profile)
+        // Runtime-relative size ceiling: 320 kbps ≈ 2.4 MB/min is already a
+        // premium audiobook bitrate; double it for container/companion-file
+        // headroom. A release bigger than this for the book's runtime is a
+        // collection/mega-pack whose title happened to match, not a copy of the
+        // book (live case: a "12h" record kept re-grabbing a ~300h 15-book
+        // collection titled exactly like it after every cleanup).
+        private const double MaxPlausibleBytesPerMinute = 4.8 * 1024 * 1024;
+        // Never apply the ceiling below this, so short books with generously
+        // mastered releases can't be rejected.
+        private const long MinSizeCeilingBytes = 250L * 1024 * 1024;
+
+        public async Task<QualityScore> Score(SearchResult searchResult, QualityProfile profile, int? expectedRuntimeMinutes = null)
         {
             // Mirror existing QualityProfileService semantics, but organized and configurable
             var score = new QualityScore
@@ -103,6 +114,18 @@ namespace Listenarr.Application.Search.Scoring
                     score.RejectionReasons.Add($"File too large (> {profile.MaximumSize} MB)");
                     score.TotalScore = -1;
                     return score;
+                }
+
+                if (expectedRuntimeMinutes is > 0)
+                {
+                    var ceiling = Math.Max((long)(expectedRuntimeMinutes.Value * MaxPlausibleBytesPerMinute), MinSizeCeilingBytes);
+                    if (searchResult.Size > ceiling)
+                    {
+                        score.RejectionReasons.Add(
+                            $"Release far larger than this book's runtime supports ({searchResult.Size / (1024 * 1024)} MB for a {expectedRuntimeMinutes.Value} min book) — likely a collection");
+                        score.TotalScore = -1;
+                        return score;
+                    }
                 }
             }
 

@@ -37,6 +37,8 @@ namespace Listenarr.Api.Features.Library
         private readonly IFileMover _fileMover;
         private readonly IFileSystem _fileSystem;
         private readonly ILogger<LibraryTransferFilesWorkflow> _logger;
+        private readonly Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService? _whisperService;
+        private readonly Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService? _verificationQueue;
 
         public LibraryTransferFilesWorkflow(
             IAudiobookRepository repo,
@@ -44,7 +46,9 @@ namespace Listenarr.Api.Features.Library
             IHistoryRepository historyRepository,
             IFileMover fileMover,
             IFileSystem fileSystem,
-            ILogger<LibraryTransferFilesWorkflow> logger)
+            ILogger<LibraryTransferFilesWorkflow> logger,
+            Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService? whisperService = null,
+            Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService? verificationQueue = null)
         {
             _repo = repo;
             _audioFileRepository = audioFileRepository;
@@ -52,6 +56,8 @@ namespace Listenarr.Api.Features.Library
             _fileMover = fileMover;
             _fileSystem = fileSystem;
             _logger = logger;
+            _whisperService = whisperService;
+            _verificationQueue = verificationQueue;
         }
 
         public async Task<IActionResult> TransferAsync(int id, LibraryController.TransferFilesRequest? request, CancellationToken ct)
@@ -189,7 +195,28 @@ namespace Listenarr.Api.Features.Library
             {
                 source.FilePath = null;
                 source.FileSize = null;
+                // Any verification verdict described audio the source no longer
+                // owns (same rationale as the not-audiobook reset).
+                source.VerificationStatus = VerificationStatus.Unverified;
+                source.VerificationConfidence = null;
+                source.VerifiedAt = null;
+                source.VerifiedBy = null;
+                source.VerificationMethod = null;
+                source.VerificationTranscript = null;
+                source.VerificationDetailJson = null;
                 await _repo.UpdateAsync(source);
+            }
+
+            // Target bookkeeping: its content set changed, so an agent verdict is
+            // stale; manual states stay sticky (a human ruling outranks this).
+            if (reassigned > 0 && target.VerificationStatus.IsAgentWritable() && target.VerificationStatus != VerificationStatus.Unverified)
+            {
+                target.VerificationStatus = VerificationStatus.Unverified;
+                target.VerificationConfidence = null;
+                target.VerifiedAt = null;
+                target.VerifiedBy = null;
+                target.VerificationMethod = null;
+                await _repo.UpdateAsync(target);
             }
 
             try
@@ -218,9 +245,26 @@ namespace Listenarr.Api.Features.Library
                 _logger.LogWarning(ex, "transfer-files: failed to record history (non-critical)");
             }
 
-            // Post-transfer hook point: when content verification lands, this is where
-            // the target gets re-verified against its new audio (and stale verdicts on
-            // both records get reset).
+            // Re-verify the target against its new audio (best-effort; skipped when
+            // whisper isn't installed rather than queueing a job that can only fail).
+            string? verificationJobId = null;
+            if (reassigned > 0 && _whisperService != null && _verificationQueue != null)
+            {
+                try
+                {
+                    if (await _whisperService.IsAvailableAsync())
+                    {
+                        var jobGuid = await _verificationQueue.EnqueueAsync(
+                            new List<int> { target.Id },
+                            Listenarr.Application.Audiobooks.Verification.VerificationTriggers.Transfer);
+                        verificationJobId = jobGuid.ToString();
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "transfer-files: failed to enqueue verification for audiobook {AudiobookId}", target.Id);
+                }
+            }
 
             _logger.LogInformation(
                 "Transferred {Count} file(s) ({Physical} moved on disk) from audiobook {SourceId} to {TargetId}",
@@ -233,6 +277,7 @@ namespace Listenarr.Api.Features.Library
                 targetId = target.Id,
                 transferred = reassigned,
                 physicallyMoved,
+                verificationJobId,
                 warnings
             });
         }

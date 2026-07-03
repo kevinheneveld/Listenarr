@@ -1070,6 +1070,12 @@ export interface AudibleSearchResult {
   narrators?: AudibleNarrator[]
   releaseDate?: string
   link?: string
+  /**
+   * Lowercase Audible region code (`us`, `uk`, `ca`, `au`, …) that this result
+   * came from, so multi-region UIs can route the subsequent per-ASIN metadata
+   * lookup to the right store. Optional: the backend may not tag it.
+   */
+  region?: string
 }
 
 /**
@@ -1188,6 +1194,29 @@ export interface SearchActivityEvent {
   audiobookId?: number | null
   asin?: string | null
   timestamp: string
+}
+
+export interface EmbeddedFileMetadata {
+  fileId: number
+  audiobookId: number
+  currentPath?: string
+  size?: number
+  title?: string
+  subtitle?: string
+  author?: string
+  albumArtist?: string
+  narrator?: string
+  album?: string
+  description?: string
+  genre?: string
+  year?: number
+  asin?: string
+  isbn?: string
+  series?: string
+  seriesPosition?: number
+  durationSeconds?: number
+  bitRate?: number
+  format?: string
 }
 
 export interface SearchActivityResponse {

@@ -412,6 +412,20 @@
                   </div>
                 </div>
               </div>
+              <div class="verification-remedies">
+                <button
+                  v-if="
+                    audiobook.verificationStatus === 'agentFlagged' &&
+                    (heardCredits.title || heardCredits.author)
+                  "
+                  type="button"
+                  class="show-more-btn relabel-btn"
+                  title="Search the catalog for the book the audio actually names, and relabel this record to it"
+                  @click="showRelabelModal = true"
+                >
+                  Find correct match…
+                </button>
+              </div>
             </div>
             <div class="detail-row detail-row-stacked" v-if="audiobook.verificationTranscript">
               <span class="label">
@@ -780,6 +794,8 @@
             </label>
           </div>
         </div>
+
+        <NotAudiobookAction :audiobook-id="audiobook?.id" @done="onNotAudiobookDone" />
       </template>
     </DeleteConfirmationModal>
 
@@ -869,6 +885,16 @@
 
   <!-- Move files to another EXISTING library record (e.g. tracks imported onto
        the wrong book, or a collection being split into its real books). -->
+  <!-- Verification "find correct match" relabel flow: candidate search seeded
+       with what the spoken credits claim the book is, not the (suspect) record. -->
+  <MetadataBackfillModal
+    :visible="showRelabelModal"
+    :audiobook="audiobook"
+    :initialSearch="relabelSeed"
+    @close="showRelabelModal = false"
+    @applied="onRelabelApplied"
+  />
+
   <TransferFilesModal
     :visible="showTransferModal"
     :audiobook="audiobook"
@@ -931,6 +957,8 @@ import { useProtectedImages } from '@/composables/useProtectedImages'
 import { buildAudibleProductUrl } from '@/utils/marketDomains'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
+import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
+import NotAudiobookAction from '@/components/library/NotAudiobookAction.vue'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import SplitCollectionModal from '@/components/domain/audiobook/SplitCollectionModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
@@ -2107,6 +2135,26 @@ function onSplitDone() {
   // destinations' file counts are current too.
   void loadAudiobook()
   void libraryStore.fetchLibrary()
+}
+
+// Relabel ("find correct match") state: seeded with what the spoken credits
+// claim the book is when the agent flagged it.
+const showRelabelModal = ref(false)
+const relabelSeed = computed(() => {
+  const heard = heardCredits.value
+  if (!heard) return null
+  return { title: heard.title ?? null, author: heard.author ?? null }
+})
+
+function onRelabelApplied() {
+  showRelabelModal.value = false
+  void loadAudiobook()
+}
+
+async function onNotAudiobookDone() {
+  showDeleteDialog.value = false
+  // Reload so the detail reflects the now-missing files and re-search state.
+  await loadAudiobook()
 }
 
 async function onTransferDone() {

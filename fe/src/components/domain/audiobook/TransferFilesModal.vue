@@ -80,7 +80,7 @@
 
         <div class="transfer-note">
           Files keep their audio untouched: ownership moves to the destination record (and the file
-          relocates into its folder when possible).
+          relocates into its folder when possible). The destination is re-verified automatically.
         </div>
       </template>
     </ModalBody>

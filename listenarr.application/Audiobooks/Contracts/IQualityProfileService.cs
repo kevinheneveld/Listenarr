@@ -9,7 +9,10 @@ namespace Listenarr.Application.Audiobooks.Contracts
         Task<QualityProfile> CreateAsync(QualityProfile profile);
         Task<QualityProfile> UpdateAsync(QualityProfile profile);
         Task<bool> DeleteAsync(int id);
-        Task<QualityScore> ScoreSearchResult(SearchResult searchResult, QualityProfile profile);
-        Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile);
+        // expectedRuntimeMinutes (the book's catalog runtime) enables the
+        // runtime-relative size sanity check; null skips it (e.g. profile
+        // testing without a book context).
+        Task<QualityScore> ScoreSearchResult(SearchResult searchResult, QualityProfile profile, int? expectedRuntimeMinutes = null);
+        Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile, int? expectedRuntimeMinutes = null);
     }
 }

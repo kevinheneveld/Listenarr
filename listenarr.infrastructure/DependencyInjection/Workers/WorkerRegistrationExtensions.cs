@@ -37,9 +37,13 @@ internal static class WorkerRegistrationExtensions
         AddProcessor<QueueMonitorProcessor, IQueueMonitorProcessor>(services);
         services.AddHostedService<QueueMonitorService>();
 
+        services.AddSingleton<Listenarr.Application.Audiobooks.Verification.Contracts.IVerificationJobPersistence,
+            Listenarr.Infrastructure.HostedServices.Verification.VerificationJobPersistence>();
         services.AddHostedService<Listenarr.Infrastructure.HostedServices.Verification.LibraryVerificationBackgroundService>();
 
         AddHostedProcessor<AutomaticSearchProcessor, IAutomaticSearchProcessor, AutomaticSearchService>(services);
+        // Manual per-book "search now" rides the same processor instance.
+        services.AddSingleton<IAutomaticSearchInvoker>(sp => (AutomaticSearchProcessor)sp.GetRequiredService<IAutomaticSearchProcessor>());
         AddHostedProcessor<AuthorMonitoringProcessor, IAuthorMonitoringProcessor, AuthorMonitoringBackgroundService>(services);
         AddHostedProcessor<SeriesMonitoringProcessor, ISeriesMonitoringProcessor, SeriesMonitoringBackgroundService>(services);
         AddHostedProcessor<FfmpegInstallProcessor, IFfmpegInstallProcessor, FfmpegInstallBackgroundService>(services);

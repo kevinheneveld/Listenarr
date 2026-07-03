@@ -17,6 +17,7 @@
  */
 
 using Listenarr.Application.Notifications.Progress;
+using Listenarr.Application.Search;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -61,7 +62,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
         }
     }
 
-    public class AutomaticSearchProcessor : IAutomaticSearchProcessor
+    public class AutomaticSearchProcessor : IAutomaticSearchProcessor, IAutomaticSearchInvoker
     {
         private readonly ILogger<AutomaticSearchProcessor> _logger;
         private readonly IServiceScopeFactory _serviceScopeFactory;
@@ -81,6 +82,66 @@ namespace Listenarr.Infrastructure.HostedServices.Search
         }
 
         public Task RunCycleAsync(CancellationToken cancellationToken) => PerformAutomaticSearchesAsync(cancellationToken);
+
+        /// <summary>
+        /// Manual per-book "search now" — same pipeline as the sweep, invoked
+        /// on demand (e.g. right after wrong content was purged). Blocked
+        /// releases still apply: the user rejected that exact release's CONTENT.
+        /// </summary>
+        public async Task<AutomaticSearchBookResult> SearchAudiobookNowAsync(int audiobookId, CancellationToken ct = default)
+        {
+            using var scope = _serviceScopeFactory.CreateScope();
+            var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
+            var downloadRepository = scope.ServiceProvider.GetRequiredService<IDownloadRepository>();
+            var fileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
+            var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
+            var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
+            var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
+            var configService = scope.ServiceProvider.GetRequiredService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
+
+            var audiobook = await audiobookRepository.GetByIdAsync(audiobookId);
+            if (audiobook == null)
+            {
+                return new AutomaticSearchBookResult
+                {
+                    AudiobookId = audiobookId,
+                    Success = false,
+                    Message = "Audiobook not found"
+                };
+            }
+
+            try
+            {
+                var appSettings = await configService.GetApplicationSettingsAsync();
+                var queued = await ProcessAudiobookAsync(
+                    audiobook, searchService, qualityProfileService, downloadService,
+                    audiobookRepository, downloadRepository, fileRepository,
+                    appSettings.AutomaticSearchTitleOnlyFallback, ct,
+                    blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
+
+                audiobook.LastSearchTime = DateTime.UtcNow;
+                await audiobookRepository.UpdateAsync(audiobook);
+
+                return new AutomaticSearchBookResult
+                {
+                    AudiobookId = audiobookId,
+                    Title = audiobook.Title ?? string.Empty,
+                    Success = true,
+                    DownloadsQueued = queued
+                };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Manual automatic-search failed for audiobook {Id}", audiobookId);
+                return new AutomaticSearchBookResult
+                {
+                    AudiobookId = audiobookId,
+                    Title = audiobook.Title ?? string.Empty,
+                    Success = false,
+                    Message = ex.Message
+                };
+            }
+        }
 
         private async Task PerformAutomaticSearchesAsync(CancellationToken stoppingToken)
         {
@@ -131,7 +192,8 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 try
                 {
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
-                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, enableTitleOnlyFallback, stoppingToken);
+                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, enableTitleOnlyFallback, stoppingToken,
+                        blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
 
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
@@ -191,7 +253,8 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
             bool enableTitleOnlyFallback,
-            CancellationToken stoppingToken)
+            CancellationToken stoppingToken,
+            IBlockedReleaseRepository? blockedReleaseRepository = null)
         {
             if (audiobook.QualityProfile == null)
             {
@@ -282,8 +345,42 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 return 0;
             }
 
-            // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile);
+            // Drop releases the user explicitly rejected for this book ("Wrong
+            // content") — without this the same wrong-content/collection release
+            // wins the search again immediately after every cleanup.
+            if (blockedReleaseRepository != null)
+            {
+                try
+                {
+                    var blocked = await blockedReleaseRepository.GetByAudiobookIdAsync(audiobook.Id, stoppingToken);
+                    if (blocked.Count > 0)
+                    {
+                        var before = searchResults.Count;
+                        searchResults = searchResults
+                            .Where(r => !BlockedReleaseMatcher.IsBlocked(r.Title, blocked))
+                            .ToList();
+                        if (searchResults.Count < before)
+                        {
+                            _logger.LogInformation(
+                                "Filtered {Removed} blocked release(s) for audiobook '{Title}'",
+                                before - searchResults.Count, audiobook.Title);
+                        }
+                        if (!searchResults.Any())
+                        {
+                            _logger.LogInformation("All remaining results are blocked releases for audiobook '{Title}'", audiobook.Title);
+                            return 0;
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogWarning(ex, "Failed to apply blocked-release filter for audiobook {Id}", audiobook.Id);
+                }
+            }
+
+            // Score results against quality profile (runtime enables the
+            // collection-sized-release rejection).
+            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile, audiobook.Runtime);
 
             // Log all scored results for debugging
             _logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, audiobook.Title);

@@ -62,6 +62,7 @@ import type {
   RenameOperation,
   RenameResult,
   SearchActivityResponse,
+  EmbeddedFileMetadata,
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
   OrganizeFlattenResult,
@@ -1418,6 +1419,28 @@ class ApiService {
 
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {
     return this.request<LibraryDuplicatesResponse>(`/library/duplicates`)
+  }
+
+  async rejectNotAudiobook(id: number): Promise<{
+    message: string
+    id: number
+    filesRemoved: number
+    searchStarted: boolean
+    warnings: string[]
+  }> {
+    return this.request(`/library/${id}/not-audiobook`, { method: 'POST' })
+  }
+
+  async getFileEmbeddedMetadata(
+    audiobookId: number,
+    fileId: number,
+  ): Promise<EmbeddedFileMetadata> {
+    return this.request<EmbeddedFileMetadata>(
+      `/library/${audiobookId}/files/${fileId}/embedded-metadata`,
+      {
+        method: 'GET',
+      },
+    )
   }
 
   async removeFromLibrary(

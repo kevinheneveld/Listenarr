@@ -3,6 +3,7 @@ using System;
 using Listenarr.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,10 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Listenarr.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ListenArrDbContext))]
-    partial class ListenArrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260703170000_AddBlockedReleasesAndVerificationJobs")]
+    partial class AddBlockedReleasesAndVerificationJobs
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.8");
@@ -538,33 +540,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.ToTable("AuthorCacheEntries");
                 });
 
-            modelBuilder.Entity("Listenarr.Domain.Audiobooks.AuthorMonitoringExclusion", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Asin")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AuthorName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TitleAuthorKey")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("AuthorMonitoringExclusions");
-                });
-
             modelBuilder.Entity("Listenarr.Domain.Audiobooks.MonitoredAuthor", b =>
                 {
                     b.Property<int>("Id")
@@ -698,9 +673,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Error")
                         .HasColumnType("TEXT");
-
-                    b.Property<bool>("ReplaceStubTarget")
-                        .HasColumnType("INTEGER");
 
                     b.Property<string>("RequestedPath")
                         .HasColumnType("TEXT");
@@ -965,15 +937,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.Property<string>("AudnexusApiUrl")
                         .IsRequired()
                         .HasColumnType("TEXT");
-
-                    b.Property<int>("AutomaticSearchBookDelaySeconds")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("AutomaticSearchIntervalHours")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("AutomaticSearchTitleOnlyFallback")
-                        .HasColumnType("INTEGER");
 
                     b.Property<int>("CompletedFileAction")
                         .HasColumnType("INTEGER");

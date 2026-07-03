@@ -30,8 +30,8 @@
       <template v-else>
         <p class="split-intro">
           {{ clusters.length }} group{{ clusters.length === 1 ? '' : 's' }} detected. Move a group
-          to the record it belongs to (files relocate into its folder), delete a redundant copy, or
-          leave it alone.
+          to the record it belongs to (files relocate and the destination re-verifies), delete a
+          redundant copy, or leave it alone.
         </p>
         <div class="split-clusters">
           <div v-for="c in clusters" :key="c.key" class="split-cluster">
