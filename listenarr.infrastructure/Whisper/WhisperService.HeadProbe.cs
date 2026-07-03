@@ -67,43 +67,86 @@ namespace Listenarr.Infrastructure.Whisper
         }
 
         /// <summary>
-        /// Writes the first <paramref name="seconds"/> of a canonical
-        /// verification clip (44-byte-header 16 kHz mono s16le WAV) to a sibling
-        /// temp file, patching the RIFF/data sizes. Returns null when the input
-        /// is not such a WAV, is already shorter than the window, or on IO
-        /// failure — the caller simply skips the probe. Physical truncation is
+        /// Locates the <c>data</c> chunk of a RIFF/WAVE file by walking its
+        /// chunks. Returns the byte offset of the chunk HEADER and the payload
+        /// size, or null when the file isn't a WAV or has no data chunk.
+        /// Chunk-walking is load-bearing: ffmpeg copies source-file tags into a
+        /// LIST/INFO chunk between fmt and data (live case "Before Eden": IART/
+        /// ICMT pushed data to byte 248), so assuming the canonical 44-byte
+        /// header corrupts the clip — the v2 head probe silently decoded garbage
+        /// because of exactly that. Public + pure for unit testing.
+        /// </summary>
+        public static (long ChunkOffset, long DataSize)? TryLocateDataChunk(string wavPath)
+        {
+            try
+            {
+                using var source = File.OpenRead(wavPath);
+                var header = new byte[12];
+                if (source.Read(header, 0, 12) != 12) return null;
+                if (header[0] != (byte)'R' || header[1] != (byte)'I' || header[2] != (byte)'F' || header[3] != (byte)'F'
+                    || header[8] != (byte)'W' || header[9] != (byte)'A' || header[10] != (byte)'V' || header[11] != (byte)'E')
+                {
+                    return null;
+                }
+
+                var chunkHeader = new byte[8];
+                long pos = 12;
+                while (pos + 8 <= source.Length)
+                {
+                    source.Seek(pos, SeekOrigin.Begin);
+                    if (source.Read(chunkHeader, 0, 8) != 8) return null;
+                    var size = BitConverter.ToUInt32(chunkHeader, 4);
+                    if (chunkHeader[0] == (byte)'d' && chunkHeader[1] == (byte)'a'
+                        && chunkHeader[2] == (byte)'t' && chunkHeader[3] == (byte)'a')
+                    {
+                        return (pos, size);
+                    }
+                    // Chunks are word-aligned; odd sizes carry a pad byte.
+                    pos += 8 + size + (size & 1);
+                }
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Writes the first <paramref name="seconds"/> of a verification clip
+        /// (16 kHz mono s16le WAV) to a sibling temp file: everything up to the
+        /// data payload is copied verbatim (wherever the data chunk sits — see
+        /// <see cref="TryLocateDataChunk"/>), then the truncated payload, with
+        /// the RIFF and data sizes patched. Returns null when the input isn't
+        /// such a WAV, is already shorter than the window, or on IO failure —
+        /// the caller simply skips the probe. Physical truncation is
         /// load-bearing: whisper-cli's --duration does not shorten the decode
         /// window (see the head re-probe comment).
         /// </summary>
         public static string? TryWriteHeadClip(string wavPath, double seconds)
         {
-            const int headerBytes = 44;
             const int bytesPerSecond = 16000 * 2; // 16 kHz, mono, 16-bit
             try
             {
-                var info = new FileInfo(wavPath);
+                var located = TryLocateDataChunk(wavPath);
+                if (located == null) return null;
+                var (chunkOffset, dataSize) = located.Value;
+
                 var wantedDataBytes = (long)(seconds * bytesPerSecond);
                 // Already short enough → the main decode saw the whole head; a
                 // probe would just repeat it.
-                if (info.Length <= headerBytes + wantedDataBytes) return null;
+                if (dataSize <= wantedDataBytes) return null;
 
                 var clipPath = wavPath + ".head.wav";
                 using var source = File.OpenRead(wavPath);
-                var header = new byte[headerBytes];
-                if (source.Read(header, 0, headerBytes) != headerBytes) return null;
-                // Not a plain PCM WAV with the canonical 44-byte header — bail
-                // rather than produce a corrupt clip.
-                if (header[0] != (byte)'R' || header[1] != (byte)'I' || header[2] != (byte)'F' || header[3] != (byte)'F'
-                    || header[12] != (byte)'f' || header[13] != (byte)'m' || header[14] != (byte)'t')
-                {
-                    return null;
-                }
+                var prefix = new byte[chunkOffset + 8];
+                if (source.Read(prefix, 0, prefix.Length) != prefix.Length) return null;
 
-                BitConverter.GetBytes((uint)(headerBytes - 8 + wantedDataBytes)).CopyTo(header, 4);
-                BitConverter.GetBytes((uint)wantedDataBytes).CopyTo(header, 40);
+                BitConverter.GetBytes((uint)(chunkOffset + wantedDataBytes)).CopyTo(prefix, 4);
+                BitConverter.GetBytes((uint)wantedDataBytes).CopyTo(prefix, (int)chunkOffset + 4);
 
                 using var dest = File.Create(clipPath);
-                dest.Write(header, 0, headerBytes);
+                dest.Write(prefix, 0, prefix.Length);
                 var remaining = wantedDataBytes;
                 var buffer = new byte[81920];
                 while (remaining > 0)

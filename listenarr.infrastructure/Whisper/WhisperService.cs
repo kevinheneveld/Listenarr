@@ -201,11 +201,24 @@ namespace Listenarr.Infrastructure.Whisper
                 // announcement-shaped content at all — cheap insurance for
                 // swallow shapes the geometry heuristic doesn't cover.
                 string? headText = null;
-                if (ShouldProbeHead(segments) || HeadLacksCreditText(segments))
+                var probeGeometry = ShouldProbeHead(segments);
+                var probeNoCredits = HeadLacksCreditText(segments);
+                if (probeGeometry || probeNoCredits)
                 {
+                    var triggerReason = probeGeometry ? "geometry" : "no-credit-text";
                     cancellationToken.ThrowIfCancellationRequested();
                     var headClipPath = TryWriteHeadClip(wavPath, HeadProbeSeconds);
-                    if (headClipPath != null)
+                    if (headClipPath == null)
+                    {
+                        // Once-per-job diagnostics at Information: the v2 probe
+                        // failed here for DAYS invisibly (ffmpeg's LIST/INFO tag
+                        // chunk defeated the canonical-header assumption) because
+                        // this path was silent.
+                        _logger.LogInformation(
+                            "whisper head probe: triggered ({Reason}) but clip could not be written for {Path} — skipped",
+                            triggerReason, wavPath);
+                    }
+                    else
                     {
                         try
                         {
@@ -221,15 +234,15 @@ namespace Listenarr.Infrastructure.Whisper
                             if (HeadProbeRecoversNewText(firstText, probeText))
                             {
                                 _logger.LogInformation(
-                                    "whisper head re-probe recovered {Chars} chars from 0–{End:0.0}s of {Path}",
-                                    probeText!.Length, HeadProbeSeconds, wavPath);
+                                    "whisper head probe: triggered ({Reason}), recovered {Chars} chars from 0–{End:0.0}s of {Path}",
+                                    triggerReason, probeText!.Length, HeadProbeSeconds, wavPath);
                                 headText = probeText;
                             }
                             else
                             {
-                                _logger.LogDebug(
-                                    "whisper head re-probe found no new text in 0–{End:0.0}s of {Path} (probe: {Probe})",
-                                    HeadProbeSeconds, wavPath, Truncate(probeText, 120));
+                                _logger.LogInformation(
+                                    "whisper head probe: triggered ({Reason}), no new text in 0–{End:0.0}s of {Path} (probe: {Probe})",
+                                    triggerReason, HeadProbeSeconds, wavPath, Truncate(probeText, 120));
                             }
                         }
                         finally
@@ -241,6 +254,11 @@ namespace Listenarr.Infrastructure.Whisper
                             }
                         }
                     }
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "whisper head probe: skipped (opening text already announcement-shaped) for {Path}", wavPath);
                 }
 
                 var transcript = string.Join(" ", segments.OrderBy(s => s.Start).Select(s => s.Text)).Trim();
@@ -321,9 +339,14 @@ namespace Listenarr.Infrastructure.Whisper
         {
             try
             {
+                const double bytesPerSecond = 16000 * 2; // 16 kHz, mono, 16-bit
+                // Chunk-aware: extractor WAVs can carry a LIST/INFO tag chunk
+                // before data, so file-size math over-counts.
+                var located = TryLocateDataChunk(wavPath);
+                if (located != null) return located.Value.DataSize / bytesPerSecond;
+
                 var length = new FileInfo(wavPath).Length;
                 const int headerBytes = 44;
-                const double bytesPerSecond = 16000 * 2; // 16 kHz, mono, 16-bit
                 if (length <= headerBytes) return null;
                 return (length - headerBytes) / bytesPerSecond;
             }

@@ -120,6 +120,14 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
                 startInfo.ArgumentList.Add("16000");
                 startInfo.ArgumentList.Add("-c:a");
                 startInfo.ArgumentList.Add("pcm_s16le");
+                // Without these, ffmpeg copies the source's tags into a
+                // LIST/INFO chunk between fmt and data (live case: IART/ICMT
+                // pushed the data chunk from byte 44 to 248), which broke the
+                // head-probe's WAV handling and skews size-based duration math.
+                // Clip metadata is worthless to whisper — always strip it.
+                startInfo.ArgumentList.Add("-map_metadata");
+                startInfo.ArgumentList.Add("-1");
+                startInfo.ArgumentList.Add("-bitexact");
                 startInfo.ArgumentList.Add("-y");
                 startInfo.ArgumentList.Add(clipPath);
 

@@ -318,5 +318,111 @@ namespace Listenarr.Tests.Features.Infrastructure
             }
             finally { File.Delete(path); }
         }
+
+        /// <summary>
+        /// The production shape that broke the v2 probe: ffmpeg copies the
+        /// source file's tags into a LIST/INFO chunk between fmt and data
+        /// (live case "Before Eden": IART "Arthur C Clarke" / ICMT pushed the
+        /// data chunk from byte 44 to byte 248). Byte layout mirrors the real
+        /// clip captured from the deploy host.
+        /// </summary>
+        private static string WriteTaggedWav(double seconds)
+        {
+            const int bytesPerSecond = 16000 * 2;
+            var dataBytes = (int)(seconds * bytesPerSecond);
+            var path = Path.Join(Path.GetTempPath(), $"whisper-test-{Guid.NewGuid():N}.wav");
+
+            // LIST/INFO payload: IART "Arthur C Clarke\0" (16) + ICMT "www..." — like production.
+            var iart = System.Text.Encoding.ASCII.GetBytes("Arthur C Clarke\0");
+            var icmt = System.Text.Encoding.ASCII.GetBytes("www.example.org\0");
+            var infoBytes = 4 + (8 + iart.Length) + (8 + icmt.Length); // "INFO" + subchunks
+            var listChunk = new byte[8 + infoBytes];
+            System.Text.Encoding.ASCII.GetBytes("LIST").CopyTo(listChunk, 0);
+            BitConverter.GetBytes((uint)infoBytes).CopyTo(listChunk, 4);
+            System.Text.Encoding.ASCII.GetBytes("INFO").CopyTo(listChunk, 8);
+            System.Text.Encoding.ASCII.GetBytes("IART").CopyTo(listChunk, 12);
+            BitConverter.GetBytes((uint)iart.Length).CopyTo(listChunk, 16);
+            iart.CopyTo(listChunk, 20);
+            System.Text.Encoding.ASCII.GetBytes("ICMT").CopyTo(listChunk, 20 + iart.Length);
+            BitConverter.GetBytes((uint)icmt.Length).CopyTo(listChunk, 24 + iart.Length);
+            icmt.CopyTo(listChunk, 28 + iart.Length);
+
+            var fmt = new byte[24];
+            System.Text.Encoding.ASCII.GetBytes("fmt ").CopyTo(fmt, 0);
+            BitConverter.GetBytes(16u).CopyTo(fmt, 4);
+            BitConverter.GetBytes((ushort)1).CopyTo(fmt, 8);
+            BitConverter.GetBytes((ushort)1).CopyTo(fmt, 10);
+            BitConverter.GetBytes(16000u).CopyTo(fmt, 12);
+            BitConverter.GetBytes((uint)bytesPerSecond).CopyTo(fmt, 16);
+            BitConverter.GetBytes((ushort)2).CopyTo(fmt, 20);
+            BitConverter.GetBytes((ushort)16).CopyTo(fmt, 22);
+
+            var riffSize = 4 + fmt.Length + listChunk.Length + 8 + dataBytes;
+            using var stream = File.Create(path);
+            stream.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+            stream.Write(BitConverter.GetBytes((uint)riffSize));
+            stream.Write(System.Text.Encoding.ASCII.GetBytes("WAVE"));
+            stream.Write(fmt);
+            stream.Write(listChunk);
+            stream.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+            stream.Write(BitConverter.GetBytes((uint)dataBytes));
+            stream.Write(new byte[dataBytes]);
+            return path;
+        }
+
+        [Fact]
+        public void TryLocateDataChunk_TaggedWav_FindsDataPastListChunk()
+        {
+            var source = WriteTaggedWav(seconds: 30);
+            try
+            {
+                var located = WhisperService.TryLocateDataChunk(source);
+                Assert.NotNull(located);
+                Assert.True(located!.Value.ChunkOffset > 44); // pushed past the canonical offset
+                Assert.Equal(30L * 16000 * 2, located.Value.DataSize);
+            }
+            finally { File.Delete(source); }
+        }
+
+        [Fact]
+        public void TryWriteHeadClip_TaggedWav_TruncatesAtRealDataChunk()
+        {
+            // The v2 regression: canonical-offset math corrupted exactly this shape.
+            var source = WriteTaggedWav(seconds: 30);
+            try
+            {
+                var located = WhisperService.TryLocateDataChunk(source)!.Value;
+                var clip = WhisperService.TryWriteHeadClip(source, seconds: 15);
+                Assert.NotNull(clip);
+                try
+                {
+                    const long expectedData = 15L * 16000 * 2;
+                    var bytes = File.ReadAllBytes(clip!);
+                    // Same prefix (fmt + LIST survive verbatim), data chunk at the same offset.
+                    var clipLocated = WhisperService.TryLocateDataChunk(clip!);
+                    Assert.NotNull(clipLocated);
+                    Assert.Equal(located.ChunkOffset, clipLocated!.Value.ChunkOffset);
+                    Assert.Equal(expectedData, clipLocated.Value.DataSize);
+                    Assert.Equal(located.ChunkOffset + 8 + expectedData, bytes.Length);
+                    Assert.Equal((uint)(located.ChunkOffset + expectedData), BitConverter.ToUInt32(bytes, 4));
+                }
+                finally { File.Delete(clip!); }
+            }
+            finally { File.Delete(source); }
+        }
+
+        [Fact]
+        public void TryLocateDataChunk_CanonicalWav_DataAt36()
+        {
+            var source = WriteCanonicalWav(seconds: 5);
+            try
+            {
+                var located = WhisperService.TryLocateDataChunk(source);
+                Assert.NotNull(located);
+                Assert.Equal(36, located!.Value.ChunkOffset);
+                Assert.Equal(5L * 16000 * 2, located.Value.DataSize);
+            }
+            finally { File.Delete(source); }
+        }
     }
 }
