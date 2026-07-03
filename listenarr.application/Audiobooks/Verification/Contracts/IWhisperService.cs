@@ -42,5 +42,15 @@ namespace Listenarr.Application.Audiobooks.Verification.Contracts
         /// a single unreadable clip must not abort a batch verification pass.
         /// </summary>
         Task<string?> TranscribeAsync(string wavPath, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Transcribe with a specific (typically larger) ggml model instead of the
+        /// default first-pass one — the escalation tier of the two-model cascade.
+        /// The model is resolved from the baked tools directory or a persistent
+        /// download cache (fetched on first use); null when the model cannot be
+        /// resolved or transcription failed. Never throws for model problems: an
+        /// unavailable escalation model degrades to the first-pass verdict.
+        /// </summary>
+        Task<string?> TranscribeWithModelAsync(string wavPath, string modelName, CancellationToken cancellationToken = default);
     }
 }

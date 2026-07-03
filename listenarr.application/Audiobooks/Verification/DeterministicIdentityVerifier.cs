@@ -107,6 +107,42 @@ namespace Listenarr.Application.Audiobooks.Verification
                 return Inconclusive("transcription failed for every sampled window");
             }
 
+            // Two-tier cascade: the first pass screens everything fast; when it
+            // can't reach a confident Match, re-read the SAME extracted samples
+            // with a larger model — proper nouns are exactly where small models
+            // garble (live case: base.en heard "Before Eden"'s closing credits
+            // as "closing even"). The escalated verdict wins even when it too
+            // isn't a Match: its transcript and heard credits are still better
+            // material for the card and the relabel flow. Escalation failures
+            // (model missing, download failed) silently keep the first pass.
+            var escalationModel = settings?.VerificationEscalationModel?.Trim();
+            if (ShouldEscalate(verdict.Outcome, escalationModel, _whisper.ModelName))
+            {
+                _logger.LogInformation(
+                    "Escalating verification of audiobook {Id} to whisper model {Model} (first pass: {Outcome})",
+                    audiobook.Id, escalationModel, verdict.Outcome);
+
+                string? escalatedOpening = null, escalatedClosing = null;
+                if (samples.OpeningClipPath != null)
+                {
+                    escalatedOpening = await _whisper.TranscribeWithModelAsync(samples.OpeningClipPath, escalationModel!, cancellationToken);
+                }
+                if (samples.ClosingClipPath != null)
+                {
+                    escalatedClosing = await _whisper.TranscribeWithModelAsync(samples.ClosingClipPath, escalationModel!, cancellationToken);
+                }
+
+                if (escalatedOpening != null || escalatedClosing != null)
+                {
+                    verdict = Evaluate(audiobook, escalatedOpening, escalatedClosing) with
+                    {
+                        Method = ComposeEscalatedMethod(_whisper.ModelName, escalationModel!)
+                    };
+                    openingText = escalatedOpening ?? openingText;
+                    closingText = escalatedClosing ?? closingText;
+                }
+            }
+
             // Independently of the match verdict, extract what the credits CLAIM
             // the book is — on a flagged book this seeds the "find the correct
             // match" relabel flow with the actual title/author the audio names.
@@ -158,6 +194,26 @@ namespace Listenarr.Application.Audiobooks.Verification
             }
             return adjusted;
         }
+
+        /// <summary>
+        /// Escalate only when a larger model could change the answer: the first
+        /// pass fell short of a confident Match, an escalation model is
+        /// configured, and it isn't just the first-pass model again. Public +
+        /// pure so the gating matrix is directly unit-testable.
+        /// </summary>
+        public static bool ShouldEscalate(VerificationOutcome firstPassOutcome, string? escalationModel, string firstPassModelName)
+        {
+            if (string.IsNullOrWhiteSpace(escalationModel)) return false;
+            if (string.Equals(escalationModel.Trim(), firstPassModelName, StringComparison.OrdinalIgnoreCase)) return false;
+            return firstPassOutcome != VerificationOutcome.Match;
+        }
+
+        /// <summary>
+        /// Method string recording the cascade path, e.g.
+        /// "deterministic:whisper-base.en→small.en". Public + pure for unit testing.
+        /// </summary>
+        public static string ComposeEscalatedMethod(string firstPassModelName, string escalationModel) =>
+            $"deterministic:whisper-{firstPassModelName}→{escalationModel.Trim()}";
 
         private string Method => $"deterministic:whisper-{_whisper.ModelName}";
 

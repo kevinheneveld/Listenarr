@@ -23,6 +23,8 @@ internal static class LibraryRegistrationExtensions
 
         // Audio identity verification (ADR-0001). Whisper is scoped (not
         // singleton): it reads scoped IConfigurationService per transcription.
+        // Long timeout: the escalation model download is ~466 MB on first use.
+        services.AddHttpClient("WhisperModels", client => client.Timeout = TimeSpan.FromMinutes(30));
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService, Listenarr.Infrastructure.Whisper.WhisperService>();
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IAudioSampleExtractor, Listenarr.Infrastructure.Ffmpeg.Sampling.AudioSampleExtractor>();
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IIdentityVerifier, Listenarr.Application.Audiobooks.Verification.DeterministicIdentityVerifier>();

@@ -187,5 +187,29 @@ namespace Listenarr.Tests.Features.Infrastructure
             Assert.False(WhisperService.HeadProbeRecoversNewText(
                 "I guess, said Jerry Garfield.", "   "));
         }
+
+        // --- Escalation model name resolution ---------------------------------
+
+        [Theory]
+        [InlineData("small.en", "ggml-small.en.bin")]
+        [InlineData("  Medium.EN ", "ggml-medium.en.bin")]      // trimmed + lowercased
+        [InlineData("base", "ggml-base.bin")]
+        public void ModelFileName_ValidNames_MapToGgmlFiles(string name, string expected)
+        {
+            Assert.Equal(expected, WhisperService.ModelFileName(name));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("../etc/passwd")]                            // path traversal
+        [InlineData("small.en/../../x")]
+        [InlineData("small en")]                                 // whitespace inside
+        [InlineData("-leading-dash")]                            // must start alphanumeric
+        public void ModelFileName_InvalidNames_AreRefused(string? name)
+        {
+            Assert.Null(WhisperService.ModelFileName(name));
+        }
     }
 }

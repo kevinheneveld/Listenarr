@@ -128,6 +128,11 @@ namespace Listenarr.Domain.Configuration
         // grab gets flagged right away instead of waiting for a manual walk;
         // skipped when whisper.cpp isn't installed.
         public bool VerificationOnImport { get; set; } = true;
+
+        // Two-tier cascade: when the first-pass model can't reach a confident
+        // Match, the same samples are re-read with this larger model (downloaded
+        // on first use). Empty disables escalation.
+        public string VerificationEscalationModel { get; set; } = "small.en";
         public List<string> ImportBlacklistExtensions
         {
             get

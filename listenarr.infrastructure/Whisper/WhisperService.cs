@@ -32,7 +32,7 @@ namespace Listenarr.Infrastructure.Whisper
     /// in the Dockerfile). Dev machines point LISTENARR_WHISPER_BIN /
     /// LISTENARR_WHISPER_MODEL at a local build instead.
     /// </summary>
-    public class WhisperService : IWhisperService
+    public partial class WhisperService : IWhisperService
     {
         public const string BinaryPathEnvVar = "LISTENARR_WHISPER_BIN";
         public const string ModelPathEnvVar = "LISTENARR_WHISPER_MODEL";
@@ -41,27 +41,45 @@ namespace Listenarr.Infrastructure.Whisper
         // target host may be a busy NAS — be generous before declaring a hang.
         private const int TranscribeTimeoutMs = 10 * 60 * 1000;
 
+        // Escalation models are fetched at runtime (the image bakes only the
+        // first-pass model). ggml-small.en.bin is ~466 MB; anything shorter than
+        // this is a truncated/failed download, never a real model.
+        private const long MinDownloadedModelBytes = 100L * 1024 * 1024;
+        private const string ModelDownloadUrlTemplate =
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{0}";
+
+        // Single-flight for model downloads: concurrent escalations must not
+        // race a 466 MB fetch. Static — the service is scoped, the cache is not.
+        private static readonly SemaphoreSlim ModelDownloadLock = new(1, 1);
+
         private readonly IProcessRunner _processRunner;
         private readonly IConfigurationService _configurationService;
+        private readonly IHttpClientFactory? _httpClientFactory;
         private readonly ILogger<WhisperService> _logger;
         private readonly string _binaryPath;
         private readonly string _modelPath;
+        private readonly string _modelsDownloadDir;
 
         public WhisperService(
             IApplicationPathService applicationPathService,
             IProcessRunner processRunner,
             IConfigurationService configurationService,
-            ILogger<WhisperService> logger)
+            ILogger<WhisperService> logger,
+            IHttpClientFactory? httpClientFactory = null)
         {
             _processRunner = processRunner;
             _configurationService = configurationService;
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
 
             var whisperRoot = Path.Join(applicationPathService.ToolsRootPath, "whisper");
             _binaryPath = Environment.GetEnvironmentVariable(BinaryPathEnvVar)
                           ?? Path.Join(whisperRoot, "whisper-cli");
             _modelPath = Environment.GetEnvironmentVariable(ModelPathEnvVar)
                          ?? Path.Join(whisperRoot, "ggml-base.en.bin");
+            // Escalation models live on the persistent config volume (like the
+            // ffmpeg runtime download), so an image swap doesn't re-download 466 MB.
+            _modelsDownloadDir = Path.Join(applicationPathService.ConfigRootPath, "whisper-models");
         }
 
         public string ModelName
@@ -87,9 +105,25 @@ namespace Listenarr.Infrastructure.Whisper
             return Task.FromResult(available);
         }
 
-        public async Task<string?> TranscribeAsync(string wavPath, CancellationToken cancellationToken = default)
+        public Task<string?> TranscribeAsync(string wavPath, CancellationToken cancellationToken = default)
+            => TranscribeCoreAsync(wavPath, _modelPath, cancellationToken);
+
+        public async Task<string?> TranscribeWithModelAsync(string wavPath, string modelName, CancellationToken cancellationToken = default)
         {
-            if (!await IsAvailableAsync()) return null;
+            var modelPath = await ResolveModelPathAsync(modelName, cancellationToken);
+            if (modelPath == null) return null;
+            return await TranscribeCoreAsync(wavPath, modelPath, cancellationToken);
+        }
+
+        private async Task<string?> TranscribeCoreAsync(string wavPath, string modelPath, CancellationToken cancellationToken)
+        {
+            if (!File.Exists(_binaryPath) || !File.Exists(modelPath))
+            {
+                _logger.LogInformation(
+                    "whisper.cpp unavailable (binary {BinaryExists} at {Binary}, model {ModelExists} at {Model})",
+                    File.Exists(_binaryPath), _binaryPath, File.Exists(modelPath), modelPath);
+                return null;
+            }
             if (!File.Exists(wavPath))
             {
                 _logger.LogWarning("whisper transcription requested for missing clip {Path}", wavPath);
@@ -106,7 +140,7 @@ namespace Listenarr.Infrastructure.Whisper
                     ? ProcessPriorityClass.Idle
                     : (ProcessPriorityClass?)null;
 
-                var stdout = await RunWhisperCliAsync(wavPath, offsetMs: null, durationMs: null, priorityClass, cancellationToken);
+                var stdout = await RunWhisperCliAsync(wavPath, modelPath, offsetMs: null, durationMs: null, priorityClass, cancellationToken);
                 if (stdout == null) return null;
 
                 var segments = ParseSegments(stdout);
@@ -131,6 +165,7 @@ namespace Listenarr.Infrastructure.Whisper
                     cancellationToken.ThrowIfCancellationRequested();
                     var probeStdout = await RunWhisperCliAsync(
                         wavPath,
+                        modelPath,
                         offsetMs: (int)(gap.Start * 1000),
                         durationMs: (int)((gap.End - gap.Start) * 1000),
                         priorityClass,
@@ -159,6 +194,7 @@ namespace Listenarr.Infrastructure.Whisper
                     cancellationToken.ThrowIfCancellationRequested();
                     var headStdout = await RunWhisperCliAsync(
                         wavPath,
+                        modelPath,
                         offsetMs: null,
                         durationMs: (int)(HeadProbeSeconds * 1000),
                         priorityClass,
@@ -193,7 +229,7 @@ namespace Listenarr.Infrastructure.Whisper
         }
 
         private async Task<string?> RunWhisperCliAsync(
-            string wavPath, int? offsetMs, int? durationMs, ProcessPriorityClass? priorityClass, CancellationToken cancellationToken)
+            string wavPath, string modelPath, int? offsetMs, int? durationMs, ProcessPriorityClass? priorityClass, CancellationToken cancellationToken)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -204,7 +240,7 @@ namespace Listenarr.Infrastructure.Whisper
                 CreateNoWindow = true
             };
             startInfo.ArgumentList.Add("-m");
-            startInfo.ArgumentList.Add(_modelPath);
+            startInfo.ArgumentList.Add(modelPath);
             startInfo.ArgumentList.Add("-f");
             startInfo.ArgumentList.Add(wavPath);
             // Deliberately NOT --no-timestamps: timestamp tokens anchor the

@@ -203,5 +203,121 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.Null(verdict.PublisherMatch);
             Assert.Equal(VerificationOutcome.Match, verdict.Outcome);
         }
+
+        // --- Two-tier cascade -------------------------------------------------
+
+        [Theory]
+        [InlineData(VerificationOutcome.Uncertain, "small.en", true)]
+        [InlineData(VerificationOutcome.NoSpokenCredits, "small.en", true)]
+        [InlineData(VerificationOutcome.Mismatch, "small.en", true)]
+        [InlineData(VerificationOutcome.Match, "small.en", false)]        // confident: no escalation
+        [InlineData(VerificationOutcome.Uncertain, "", false)]            // disabled
+        [InlineData(VerificationOutcome.Uncertain, "   ", false)]         // disabled (whitespace)
+        [InlineData(VerificationOutcome.Uncertain, null, false)]          // disabled (null)
+        [InlineData(VerificationOutcome.Uncertain, "base.en", false)]     // same model: pointless
+        [InlineData(VerificationOutcome.Uncertain, "BASE.EN", false)]     // same model, case-insensitive
+        public void ShouldEscalate_Matrix(VerificationOutcome outcome, string? model, bool expected)
+        {
+            Assert.Equal(expected, DeterministicIdentityVerifier.ShouldEscalate(outcome, model, "base.en"));
+        }
+
+        [Fact]
+        public void ComposeEscalatedMethod_RecordsCascadePath()
+        {
+            Assert.Equal(
+                "deterministic:whisper-base.en→small.en",
+                DeterministicIdentityVerifier.ComposeEscalatedMethod("base.en", " small.en "));
+        }
+
+        [Fact]
+        public async Task VerifyAsync_EscalatesInconclusiveFirstPass_AndUsesEscalatedVerdict()
+        {
+            // First pass (base.en) garbles the credits into an uncertain read;
+            // the escalated model hears them cleanly — the Before Eden shape.
+            var whisper = new Mock<IWhisperService>();
+            whisper.SetupGet(w => w.ModelName).Returns("base.en");
+            whisper.Setup(w => w.TranscribeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync("closing even by author c clock some story text follows here and continues on for a while longer");
+            whisper.Setup(w => w.TranscribeWithModelAsync(It.IsAny<string>(), "small.en", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("Project Hail Mary by Andy Weir narrated by Ray Porter");
+
+            var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
+            var extractor = new Mock<IAudioSampleExtractor>();
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(samples);
+
+            var configuration = new Mock<IConfigurationService>();
+            configuration.Setup(c => c.GetApplicationSettingsAsync())
+                .ReturnsAsync(new ApplicationSettings { VerificationEscalationModel = "small.en" });
+
+            var verifier = new DeterministicIdentityVerifier(
+                extractor.Object, whisper.Object, configuration.Object,
+                NullLogger<DeterministicIdentityVerifier>.Instance);
+
+            var verdict = await verifier.VerifyAsync(HailMary(), "/tmp/book.mp3");
+
+            Assert.Equal(VerificationOutcome.Match, verdict.Outcome);
+            Assert.Equal("deterministic:whisper-base.en→small.en", verdict.Method);
+            whisper.Verify(w => w.TranscribeWithModelAsync(It.IsAny<string>(), "small.en", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task VerifyAsync_EscalationUnavailable_KeepsFirstPassVerdict()
+        {
+            // TranscribeWithModelAsync returning null = model missing/undownloadable;
+            // the first-pass verdict (and its method string) must survive untouched.
+            var whisper = new Mock<IWhisperService>();
+            whisper.SetupGet(w => w.ModelName).Returns("base.en");
+            whisper.Setup(w => w.TranscribeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync("closing even by author c clock some story text follows here and continues on for a while longer");
+            whisper.Setup(w => w.TranscribeWithModelAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string?)null);
+
+            var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
+            var extractor = new Mock<IAudioSampleExtractor>();
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(samples);
+
+            var configuration = new Mock<IConfigurationService>();
+            configuration.Setup(c => c.GetApplicationSettingsAsync())
+                .ReturnsAsync(new ApplicationSettings { VerificationEscalationModel = "small.en" });
+
+            var verifier = new DeterministicIdentityVerifier(
+                extractor.Object, whisper.Object, configuration.Object,
+                NullLogger<DeterministicIdentityVerifier>.Instance);
+
+            var verdict = await verifier.VerifyAsync(HailMary(), "/tmp/book.mp3");
+
+            Assert.NotEqual(VerificationOutcome.Match, verdict.Outcome);
+            Assert.Equal("deterministic:whisper-base.en", verdict.Method);
+        }
+
+        [Fact]
+        public async Task VerifyAsync_EscalationDisabled_NeverCallsEscalatedTranscription()
+        {
+            var whisper = new Mock<IWhisperService>();
+            whisper.SetupGet(w => w.ModelName).Returns("base.en");
+            whisper.Setup(w => w.TranscribeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync("closing even by author c clock some story text follows here and continues on for a while longer");
+
+            var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
+            var extractor = new Mock<IAudioSampleExtractor>();
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(samples);
+
+            var configuration = new Mock<IConfigurationService>();
+            configuration.Setup(c => c.GetApplicationSettingsAsync())
+                .ReturnsAsync(new ApplicationSettings { VerificationEscalationModel = "" });
+
+            var verifier = new DeterministicIdentityVerifier(
+                extractor.Object, whisper.Object, configuration.Object,
+                NullLogger<DeterministicIdentityVerifier>.Instance);
+
+            await verifier.VerifyAsync(HailMary(), "/tmp/book.mp3");
+
+            whisper.Verify(
+                w => w.TranscribeWithModelAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
     }
 }

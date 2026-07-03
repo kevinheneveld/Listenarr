@@ -53,6 +53,26 @@
     </div>
 
     <div class="setting-row">
+      <label for="verification-escalation-model">
+        <strong>Escalation model</strong>
+        <small
+          >When the first pass can't reach a confident match, the same samples are re-read with this
+          larger model (downloaded on first use, ~466&nbsp;MB for small.en). medium.en is noticeably
+          slower.</small
+        >
+      </label>
+      <select
+        id="verification-escalation-model"
+        :value="settings.verificationEscalationModel ?? 'small.en'"
+        @change="patch('verificationEscalationModel', ($event.target as HTMLSelectElement).value)"
+      >
+        <option value="">Disabled</option>
+        <option value="small.en">small.en</option>
+        <option value="medium.en">medium.en (slow)</option>
+      </select>
+    </div>
+
+    <div class="setting-row">
       <label for="verification-on-import">
         <strong>Verify new imports automatically</strong>
         <small>Queue a verification pass whenever a download finishes importing.</small>
@@ -141,6 +161,16 @@ function patchNumber(field: keyof ApplicationSettings, event: Event, min: number
   color: #868e96;
   font-size: 0.85rem;
   line-height: 1.4;
+}
+
+.setting-row select {
+  width: 170px;
+  padding: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff;
+  flex-shrink: 0;
 }
 
 .setting-row input[type='number'] {

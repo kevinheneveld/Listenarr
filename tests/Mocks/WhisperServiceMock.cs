@@ -17,5 +17,11 @@ namespace Listenarr.Tests.Mocks
 
         public Task<string?> TranscribeAsync(string wavPath, CancellationToken cancellationToken = default)
             => Task.FromResult(Transcript);
+
+        /// <summary>Escalation transcript; null (default) = escalation model unavailable.</summary>
+        public string? EscalatedTranscript { get; set; } = null;
+
+        public Task<string?> TranscribeWithModelAsync(string wavPath, string modelName, CancellationToken cancellationToken = default)
+            => Task.FromResult(EscalatedTranscript);
     }
 }
