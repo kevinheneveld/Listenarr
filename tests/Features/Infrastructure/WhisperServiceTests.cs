@@ -108,5 +108,84 @@ namespace Listenarr.Tests.Features.Infrastructure
 
             Assert.Empty(gaps);
         }
+
+        [Fact]
+        public void ShouldProbeHead_FirstSegmentClaimsWholeHead_True()
+        {
+            // Live case ("Before Eden"): one 0:00–0:28 segment carrying only story
+            // text while the announcement sat swallowed in its head.
+            var segments = new List<WhisperService.TranscriptSegment>
+            {
+                new(0.0, 28.3, "I guess, said Jerry Garfield, cutting the engines."),
+                new(28.3, 35.2, "The gentle sigh, the underjets faded out."),
+            };
+
+            Assert.True(WhisperService.ShouldProbeHead(segments));
+        }
+
+        [Fact]
+        public void ShouldProbeHead_ShortFirstSegment_False()
+        {
+            // A first segment that ends inside the head window means the decoder
+            // already segmented the head normally — an announcement would be its
+            // own segment, nothing to recover.
+            var segments = new List<WhisperService.TranscriptSegment>
+            {
+                new(0.0, 9.2, "Before Eden, by Arthur C. Clarke."),
+                new(9.2, 28.0, "I guess, said Jerry Garfield."),
+            };
+
+            Assert.False(WhisperService.ShouldProbeHead(segments));
+        }
+
+        [Fact]
+        public void ShouldProbeHead_LateFirstSegment_False_LeadingGapHandlesIt()
+        {
+            // First segment starting ≥ the gap threshold is a leading silent hole:
+            // FindSilentGaps re-probes 0→start already, head probe must not double up.
+            var segments = new List<WhisperService.TranscriptSegment>
+            {
+                new(12.0, 40.0, "Chapter one."),
+            };
+
+            Assert.False(WhisperService.ShouldProbeHead(segments));
+            Assert.Contains(WhisperService.FindSilentGaps(segments, 45.0), g => g.Start == 0.0);
+        }
+
+        [Fact]
+        public void ShouldProbeHead_NoSegments_False()
+        {
+            Assert.False(WhisperService.ShouldProbeHead(new List<WhisperService.TranscriptSegment>()));
+        }
+
+        [Fact]
+        public void HeadProbeRecoversNewText_Announcement_NotInFirstSegment_True()
+        {
+            Assert.True(WhisperService.HeadProbeRecoversNewText(
+                "I guess, said Jerry Garfield, cutting the engines, that this is the end of the line.",
+                "Before Eden, by Arthur C. Clarke"));
+        }
+
+        [Fact]
+        public void HeadProbeRecoversNewText_ProbeJustReHearsTheStoryOpening_False()
+        {
+            // Same words, different punctuation/casing — normalized containment
+            // must treat it as already present, not prepend a duplicate.
+            Assert.False(WhisperService.HeadProbeRecoversNewText(
+                "I guess, said Jerry Garfield, cutting the engines, that this is the end of the line.",
+                "\"I guess,\" said Jerry Garfield, cutting the engines"));
+        }
+
+        [Fact]
+        public void HeadProbeRecoversNewText_TrivialRecovery_False()
+        {
+            // Decode noise ("[Music]", a stray word) is not a credits announcement.
+            Assert.False(WhisperService.HeadProbeRecoversNewText(
+                "I guess, said Jerry Garfield.", "[Music]"));
+            Assert.False(WhisperService.HeadProbeRecoversNewText(
+                "I guess, said Jerry Garfield.", null));
+            Assert.False(WhisperService.HeadProbeRecoversNewText(
+                "I guess, said Jerry Garfield.", "   "));
+        }
     }
 }

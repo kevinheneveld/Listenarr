@@ -145,7 +145,40 @@ namespace Listenarr.Infrastructure.Whisper
                     }
                 }
 
+                // Head re-probe: the chunk that OPENS the clip can swallow a short
+                // spoken announcement wholesale — live case ("Before Eden"): the
+                // first segment claimed 0:00–0:28 but carried only story text,
+                // while decoding just the first 14s in isolation yielded
+                // "Before Eden, by Arthur C. Clarke" verbatim. The gap re-probe
+                // never sees this (there is no gap — the segment covers the span),
+                // so when the first segment claims the whole head of the clip,
+                // decode the head separately and prepend anything new it surfaces.
+                string? headText = null;
+                if (ShouldProbeHead(segments))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var headStdout = await RunWhisperCliAsync(
+                        wavPath,
+                        offsetMs: null,
+                        durationMs: (int)(HeadProbeSeconds * 1000),
+                        priorityClass,
+                        cancellationToken);
+                    var probeText = NormalizeTranscriptOutput(headStdout);
+                    var firstText = segments.OrderBy(s => s.Start).First().Text;
+                    if (HeadProbeRecoversNewText(firstText, probeText))
+                    {
+                        _logger.LogInformation(
+                            "whisper head re-probe recovered {Chars} chars from 0–{End:0.0}s of {Path}",
+                            probeText!.Length, HeadProbeSeconds, wavPath);
+                        headText = probeText;
+                    }
+                }
+
                 var transcript = string.Join(" ", segments.OrderBy(s => s.Start).Select(s => s.Text)).Trim();
+                if (headText != null)
+                {
+                    transcript = (headText + " " + transcript).Trim();
+                }
                 return transcript.Length == 0 ? null : transcript;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -299,6 +332,54 @@ namespace Listenarr.Infrastructure.Whisper
                 gaps.Add((cursor, clipDurationSeconds));
             }
             return gaps;
+        }
+
+        // The head window a swallowed announcement fits in. Deliberately half a
+        // whisper decode chunk: long enough for "Title, by Author" plus the pause
+        // that follows, short enough that the isolated decode can't itself merge
+        // the announcement into story text.
+        private const double HeadProbeSeconds = 15.0;
+
+        // Below this many normalized characters a head recovery is decode noise
+        // ("[Music]", a stray word), not a credits announcement.
+        private const int MinHeadRecoveryChars = 10;
+
+        /// <summary>
+        /// True when the clip's first segment claims the whole head of the clip
+        /// (starts near 0, extends past <see cref="HeadProbeSeconds"/>) — the
+        /// shape under which whisper can swallow a short spoken announcement into
+        /// the opening chunk. A first segment that starts LATE is a leading gap
+        /// and is already handled by <see cref="FindSilentGaps"/>. Public + pure
+        /// for unit testing.
+        /// </summary>
+        public static bool ShouldProbeHead(IReadOnlyList<TranscriptSegment> segments)
+        {
+            if (segments.Count == 0) return false;
+            var first = segments.OrderBy(s => s.Start).First();
+            return first.Start < MinGapSeconds && first.End >= HeadProbeSeconds;
+        }
+
+        /// <summary>
+        /// True when the head probe surfaced text worth prepending: non-trivial
+        /// after normalization and not already contained (normalized) in the
+        /// first segment — a probe that just re-hears the story opening must not
+        /// duplicate it. Public + pure for unit testing.
+        /// </summary>
+        public static bool HeadProbeRecoversNewText(string firstSegmentText, string? probeText)
+        {
+            var probe = NormalizeForComparison(probeText);
+            if (probe.Length < MinHeadRecoveryChars) return false;
+            var first = NormalizeForComparison(firstSegmentText);
+            return !first.Contains(probe, StringComparison.Ordinal);
+        }
+
+        // Lowercased letters/digits only (punctuation and whitespace removed) —
+        // both differ freely between two decodes of the same audio.
+        private static string NormalizeForComparison(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+            var chars = text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray();
+            return new string(chars);
         }
 
         /// <summary>
