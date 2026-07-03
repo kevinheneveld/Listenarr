@@ -211,5 +211,112 @@ namespace Listenarr.Tests.Features.Infrastructure
         {
             Assert.Null(WhisperService.ModelFileName(name));
         }
+
+        // --- Head-probe v2: text gate + physical truncation (live "Before Eden" case) ---
+
+        // The ACTUAL segment shape whisper-cli produced for the 90s "Before Eden"
+        // opening sample in production (2026-07-03): the announcement at 0–13s is
+        // swallowed into a story-text first segment claiming 0–28.32s.
+        private static List<WhisperService.TranscriptSegment> BeforeEden90sSegments() => new()
+        {
+            new(0.0, 28.32, "I guess, said Jerry Garfield, cutting the engines, that this is the end of the line."),
+            new(28.32, 35.34, "The gentle sigh, the underjets faded out. Deprived of its air-cushioned, the scout-car,"),
+            new(35.34, 41.76, "rambling wreck, settled down upon the twisted rocks of the Hesperian plateau."),
+        };
+
+        [Fact]
+        public void BeforeEden90sShape_TriggersBothHeadProbeGates()
+        {
+            var segments = BeforeEden90sSegments();
+            Assert.True(WhisperService.ShouldProbeHead(segments));      // geometry
+            Assert.True(WhisperService.HeadLacksCreditText(segments));  // text
+        }
+
+        [Fact]
+        public void HeadLacksCreditText_AnnouncedOpening_False()
+        {
+            var segments = new List<WhisperService.TranscriptSegment>
+            {
+                new(0.0, 6.5, "Blackstone Audio presents All You Zombies, Five Classic Stories by Robert A. Heinlein."),
+                new(6.5, 12.0, "This book is read by Spider Robinson."),
+            };
+            Assert.False(WhisperService.HeadLacksCreditText(segments));
+        }
+
+        [Fact]
+        public void HeadLacksCreditText_NoSegments_False()
+        {
+            Assert.False(WhisperService.HeadLacksCreditText(new List<WhisperService.TranscriptSegment>()));
+        }
+
+        private static string WriteCanonicalWav(double seconds)
+        {
+            const int bytesPerSecond = 16000 * 2;
+            var dataBytes = (int)(seconds * bytesPerSecond);
+            var path = Path.Join(Path.GetTempPath(), $"whisper-test-{Guid.NewGuid():N}.wav");
+            var header = new byte[44];
+            System.Text.Encoding.ASCII.GetBytes("RIFF").CopyTo(header, 0);
+            BitConverter.GetBytes((uint)(36 + dataBytes)).CopyTo(header, 4);
+            System.Text.Encoding.ASCII.GetBytes("WAVE").CopyTo(header, 8);
+            System.Text.Encoding.ASCII.GetBytes("fmt ").CopyTo(header, 12);
+            BitConverter.GetBytes(16u).CopyTo(header, 16);
+            BitConverter.GetBytes((ushort)1).CopyTo(header, 20);
+            BitConverter.GetBytes((ushort)1).CopyTo(header, 22);
+            BitConverter.GetBytes(16000u).CopyTo(header, 24);
+            BitConverter.GetBytes((uint)bytesPerSecond).CopyTo(header, 28);
+            BitConverter.GetBytes((ushort)2).CopyTo(header, 32);
+            BitConverter.GetBytes((ushort)16).CopyTo(header, 34);
+            System.Text.Encoding.ASCII.GetBytes("data").CopyTo(header, 36);
+            BitConverter.GetBytes((uint)dataBytes).CopyTo(header, 40);
+            using var stream = File.Create(path);
+            stream.Write(header);
+            stream.Write(new byte[dataBytes]);
+            return path;
+        }
+
+        [Fact]
+        public void TryWriteHeadClip_TruncatesCanonicalWav_AndPatchesHeader()
+        {
+            var source = WriteCanonicalWav(seconds: 30);
+            try
+            {
+                var clip = WhisperService.TryWriteHeadClip(source, seconds: 15);
+                Assert.NotNull(clip);
+                try
+                {
+                    const int expectedData = 15 * 16000 * 2;
+                    var bytes = File.ReadAllBytes(clip!);
+                    Assert.Equal(44 + expectedData, bytes.Length);
+                    Assert.Equal((uint)(36 + expectedData), BitConverter.ToUInt32(bytes, 4));
+                    Assert.Equal((uint)expectedData, BitConverter.ToUInt32(bytes, 40));
+                }
+                finally { File.Delete(clip!); }
+            }
+            finally { File.Delete(source); }
+        }
+
+        [Fact]
+        public void TryWriteHeadClip_ClipAlreadyShorterThanWindow_Null()
+        {
+            // The main decode already saw the whole head — a probe would repeat it.
+            var source = WriteCanonicalWav(seconds: 10);
+            try
+            {
+                Assert.Null(WhisperService.TryWriteHeadClip(source, seconds: 15));
+            }
+            finally { File.Delete(source); }
+        }
+
+        [Fact]
+        public void TryWriteHeadClip_NotACanonicalWav_Null()
+        {
+            var path = Path.Join(Path.GetTempPath(), $"whisper-test-{Guid.NewGuid():N}.bin");
+            File.WriteAllBytes(path, System.Text.Encoding.ASCII.GetBytes(new string('x', 4 * 1024 * 1024)));
+            try
+            {
+                Assert.Null(WhisperService.TryWriteHeadClip(path, seconds: 15));
+            }
+            finally { File.Delete(path); }
+        }
     }
 }

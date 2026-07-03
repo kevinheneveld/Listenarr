@@ -185,28 +185,61 @@ namespace Listenarr.Infrastructure.Whisper
                 // first segment claimed 0:00–0:28 but carried only story text,
                 // while decoding just the first 14s in isolation yielded
                 // "Before Eden, by Arthur C. Clarke" verbatim. The gap re-probe
-                // never sees this (there is no gap — the segment covers the span),
-                // so when the first segment claims the whole head of the clip,
-                // decode the head separately and prepend anything new it surfaces.
+                // never sees this (there is no gap — the segment covers the span).
+                //
+                // CRITICAL: the probe must decode a PHYSICALLY TRUNCATED clip.
+                // whisper-cli's --duration does NOT create a short decode window —
+                // it still feeds the same fixed 30s mel chunk (only --offset
+                // re-anchors it, which is why the mid-file gap probe works), so a
+                // --duration head decode reproduces the identical swallowed
+                // segment. Verified live on "Before Eden": --duration 14000
+                // re-emitted the story text; a physically cut 15s file of the
+                // same audio decoded "Before evening, by Arthur C. Clarke."
+                //
+                // Trigger is geometry OR text: a long head-claiming first segment
+                // (the classic swallow shape), or opening text with no
+                // announcement-shaped content at all — cheap insurance for
+                // swallow shapes the geometry heuristic doesn't cover.
                 string? headText = null;
-                if (ShouldProbeHead(segments))
+                if (ShouldProbeHead(segments) || HeadLacksCreditText(segments))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var headStdout = await RunWhisperCliAsync(
-                        wavPath,
-                        modelPath,
-                        offsetMs: null,
-                        durationMs: (int)(HeadProbeSeconds * 1000),
-                        priorityClass,
-                        cancellationToken);
-                    var probeText = NormalizeTranscriptOutput(headStdout);
-                    var firstText = segments.OrderBy(s => s.Start).First().Text;
-                    if (HeadProbeRecoversNewText(firstText, probeText))
+                    var headClipPath = TryWriteHeadClip(wavPath, HeadProbeSeconds);
+                    if (headClipPath != null)
                     {
-                        _logger.LogInformation(
-                            "whisper head re-probe recovered {Chars} chars from 0–{End:0.0}s of {Path}",
-                            probeText!.Length, HeadProbeSeconds, wavPath);
-                        headText = probeText;
+                        try
+                        {
+                            var headStdout = await RunWhisperCliAsync(
+                                headClipPath,
+                                modelPath,
+                                offsetMs: null,
+                                durationMs: null,
+                                priorityClass,
+                                cancellationToken);
+                            var probeText = NormalizeTranscriptOutput(headStdout);
+                            var firstText = segments.OrderBy(s => s.Start).First().Text;
+                            if (HeadProbeRecoversNewText(firstText, probeText))
+                            {
+                                _logger.LogInformation(
+                                    "whisper head re-probe recovered {Chars} chars from 0–{End:0.0}s of {Path}",
+                                    probeText!.Length, HeadProbeSeconds, wavPath);
+                                headText = probeText;
+                            }
+                            else
+                            {
+                                _logger.LogDebug(
+                                    "whisper head re-probe found no new text in 0–{End:0.0}s of {Path} (probe: {Probe})",
+                                    HeadProbeSeconds, wavPath, Truncate(probeText, 120));
+                            }
+                        }
+                        finally
+                        {
+                            try { File.Delete(headClipPath); }
+                            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                            {
+                                _logger.LogDebug(ex, "could not delete head-probe clip {Path}", headClipPath);
+                            }
+                        }
                     }
                 }
 
@@ -368,54 +401,6 @@ namespace Listenarr.Infrastructure.Whisper
                 gaps.Add((cursor, clipDurationSeconds));
             }
             return gaps;
-        }
-
-        // The head window a swallowed announcement fits in. Deliberately half a
-        // whisper decode chunk: long enough for "Title, by Author" plus the pause
-        // that follows, short enough that the isolated decode can't itself merge
-        // the announcement into story text.
-        private const double HeadProbeSeconds = 15.0;
-
-        // Below this many normalized characters a head recovery is decode noise
-        // ("[Music]", a stray word), not a credits announcement.
-        private const int MinHeadRecoveryChars = 10;
-
-        /// <summary>
-        /// True when the clip's first segment claims the whole head of the clip
-        /// (starts near 0, extends past <see cref="HeadProbeSeconds"/>) — the
-        /// shape under which whisper can swallow a short spoken announcement into
-        /// the opening chunk. A first segment that starts LATE is a leading gap
-        /// and is already handled by <see cref="FindSilentGaps"/>. Public + pure
-        /// for unit testing.
-        /// </summary>
-        public static bool ShouldProbeHead(IReadOnlyList<TranscriptSegment> segments)
-        {
-            if (segments.Count == 0) return false;
-            var first = segments.OrderBy(s => s.Start).First();
-            return first.Start < MinGapSeconds && first.End >= HeadProbeSeconds;
-        }
-
-        /// <summary>
-        /// True when the head probe surfaced text worth prepending: non-trivial
-        /// after normalization and not already contained (normalized) in the
-        /// first segment — a probe that just re-hears the story opening must not
-        /// duplicate it. Public + pure for unit testing.
-        /// </summary>
-        public static bool HeadProbeRecoversNewText(string firstSegmentText, string? probeText)
-        {
-            var probe = NormalizeForComparison(probeText);
-            if (probe.Length < MinHeadRecoveryChars) return false;
-            var first = NormalizeForComparison(firstSegmentText);
-            return !first.Contains(probe, StringComparison.Ordinal);
-        }
-
-        // Lowercased letters/digits only (punctuation and whitespace removed) —
-        // both differ freely between two decodes of the same audio.
-        private static string NormalizeForComparison(string? text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
-            var chars = text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray();
-            return new string(chars);
         }
 
         /// <summary>
