@@ -91,6 +91,11 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.False(item.TryGetProperty("files", out _));
             Assert.False(item.TryGetProperty("description", out _));
             Assert.False(item.TryGetProperty("subtitle", out _));
+
+            // Verification state rides the slim payload: grid badges, library
+            // filters, and dashboard health counts read it without detail calls.
+            Assert.True(item.TryGetProperty("verificationStatus", out var verification));
+            Assert.Equal((int)VerificationStatus.Unverified, verification.GetInt32());
         }
 
         [Fact]

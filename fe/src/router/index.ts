@@ -28,6 +28,12 @@ import type { StartupConfig } from '@/types'
 
 const routes = [
   {
+    path: '/dashboard',
+    name: 'dashboard',
+    component: () => import('../views/dashboard/DashboardView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/',
     name: 'home',
     component: () => import('../views/library/AudiobooksView.vue'),

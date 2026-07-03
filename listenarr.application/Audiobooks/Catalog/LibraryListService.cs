@@ -141,6 +141,7 @@ namespace Listenarr.Application.Audiobooks.Catalog
                     QualityProfileId = a.QualityProfileId,
                     AuthorAsins = a.AuthorAsins?.ToArray(),
                     Wanted = wanted,
+                    VerificationStatus = a.VerificationStatus,
                     Status = AudiobookStatusEvaluator.ComputeStatus(
                          activeDownloadAudiobookIdSet.Contains(a.Id),
                          hasAnyFile,

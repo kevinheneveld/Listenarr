@@ -1380,6 +1380,11 @@ try {
   if (initialGroup && initialGroup !== groupBy.value) {
     groupBy.value = initialGroup
   }
+  // Deep-linkable filter (e.g. dashboard health chips): /audiobooks?filter=needs-review
+  const initialFilter = route.query.filter
+  if (typeof initialFilter === 'string' && initialFilter.trim()) {
+    selectedFilterId.value = initialFilter.trim()
+  }
   // No need to set sortKey/order here; handled per-group below
   if (!initialGroup) {
     router.replace({ path: '/audiobooks', query: { group: groupBy.value } })

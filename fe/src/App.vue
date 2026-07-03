@@ -230,6 +230,18 @@
         <nav class="sidebar-nav" @click.capture="onNavCapture">
           <div class="nav-section">
             <RouterLink
+              to="/dashboard"
+              class="nav-item"
+              :class="{ 'router-link-active': pendingNavPath === '/dashboard' }"
+              @mouseenter="preload('dashboard')"
+              @focus="preload('dashboard')"
+              @touchstart.passive="preload('dashboard')"
+              @click="closeMobileMenu"
+            >
+              <PhSquaresFour />
+              <span>Dashboard</span>
+            </RouterLink>
+            <RouterLink
               :to="{ path: '/audiobooks', query: { group: 'books' } }"
               class="nav-item"
               :class="{
@@ -547,6 +559,7 @@ import {
   PhCheckCircle,
   PhList,
   PhFolderOpen,
+  PhSquaresFour,
 } from '@phosphor-icons/vue'
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useEventListener } from '@vueuse/core'

@@ -47,5 +47,12 @@ namespace Listenarr.Application.Audiobooks.Catalog
         public string[]? AuthorAsins { get; set; }
         public bool Wanted { get; set; }
         public string Status { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Audio identity verification state (ADR-0001). Included in the slim
+        /// payload so grid badges, library filters, and the dashboard's health
+        /// counts can read it without per-book detail requests.
+        /// </summary>
+        public VerificationStatus VerificationStatus { get; set; }
     }
 }
