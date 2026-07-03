@@ -66,7 +66,7 @@ namespace Listenarr.Api.Features.Library
             LibraryFileDeleteWorkflow fileDeleteWorkflow,
             LibrarySplitPreviewWorkflow splitPreviewWorkflow,
             LibraryOrganizeSweepWorkflow organizeSweepWorkflow,
-            LibraryMoveSummaryWorkflow moveSummaryWorkflow)
+            LibraryMoveSummaryWorkflow moveSummaryWorkflow,
             LibraryDuplicatesWorkflow duplicatesWorkflow)
         {
             _libraryListService = libraryListService;

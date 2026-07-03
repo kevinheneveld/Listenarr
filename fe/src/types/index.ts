@@ -306,6 +306,10 @@ export interface TranslatePathResponse {
 }
 
 export interface ApplicationSettings {
+  verificationOpeningSeconds?: number
+  verificationClosingSeconds?: number
+  verificationOnImport?: boolean
+  verificationLowCpuPriority?: boolean
   outputPath: string
   folderNamingPattern: string
   fileNamingPattern: string
