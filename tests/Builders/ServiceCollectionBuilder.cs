@@ -213,6 +213,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryOrganizeSweepWorkflow>();
             services.AddSingleton<LibraryMoveSummaryWorkflow>();
             services.AddSingleton<IOrganizeFilesystem, Listenarr.Infrastructure.Library.Organizing.OrganizeFilesystem>();
+            services.AddSingleton<LibraryDuplicatesWorkflow>();
             services.AddSingleton<SearchResponseMapper>();
             services.AddSingleton<ImagePlaceholderResolver>();
             services.AddSingleton<IndexerTestWorkflow>();

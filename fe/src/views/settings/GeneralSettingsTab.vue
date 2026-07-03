@@ -60,6 +60,7 @@
         <AuthorMonitoringExclusionsSection />
 
         <LibraryMaintenanceSection />
+        <DuplicatesSection />
       </div>
       <!-- settings-form -->
     </div>
@@ -80,6 +81,7 @@ import SearchSettingsSection from '@/components/settings/SearchSettingsSection.v
 import AuthenticationSection from '@/components/settings/AuthenticationSection.vue'
 import AuthorMonitoringExclusionsSection from '@/components/settings/AuthorMonitoringExclusionsSection.vue'
 import LibraryMaintenanceSection from '@/components/settings/LibraryMaintenanceSection.vue'
+import DuplicatesSection from '@/components/settings/DuplicatesSection.vue'
 
 interface Props {
   settings: ApplicationSettings | null

@@ -66,6 +66,7 @@ import type {
   OrganizeLibraryApplyResult,
   OrganizeFlattenResult,
   MoveQueueSummary,
+  LibraryDuplicatesResponse,
 } from '@/types'
 import { getStartupConfigCached, resetCache as resetStartupConfigCache } from './startupConfigCache'
 import { sessionTokenManager } from '@/utils/sessionToken'
@@ -1406,6 +1407,10 @@ class ApiService {
       `/library/move/summary?recentLimit=${encodeURIComponent(String(recentLimit))}`,
       { method: 'GET' },
     )
+  }
+
+  async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {
+    return this.request<LibraryDuplicatesResponse>(`/library/duplicates`)
   }
 
   async removeFromLibrary(
