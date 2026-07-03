@@ -46,6 +46,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryOrganizeSweepWorkflow _organizeSweepWorkflow;
         private readonly LibraryMoveSummaryWorkflow _moveSummaryWorkflow;
         private readonly LibraryDuplicatesWorkflow _duplicatesWorkflow;
+        private readonly LibraryFileStreamWorkflow _fileStreamWorkflow;
         /// <summary>Initializes the library transport façade.</summary>
         public LibraryController(
             ILibraryListService libraryListService,
@@ -67,7 +68,8 @@ namespace Listenarr.Api.Features.Library
             LibrarySplitPreviewWorkflow splitPreviewWorkflow,
             LibraryOrganizeSweepWorkflow organizeSweepWorkflow,
             LibraryMoveSummaryWorkflow moveSummaryWorkflow,
-            LibraryDuplicatesWorkflow duplicatesWorkflow)
+            LibraryDuplicatesWorkflow duplicatesWorkflow,
+            LibraryFileStreamWorkflow fileStreamWorkflow)
         {
             _libraryListService = libraryListService;
             _addWorkflow = addWorkflow;
@@ -89,6 +91,7 @@ namespace Listenarr.Api.Features.Library
             _organizeSweepWorkflow = organizeSweepWorkflow;
             _moveSummaryWorkflow = moveSummaryWorkflow;
             _duplicatesWorkflow = duplicatesWorkflow;
+            _fileStreamWorkflow = fileStreamWorkflow;
         }
 
         /// <summary>
@@ -117,6 +120,20 @@ namespace Listenarr.Api.Features.Library
         public async Task<IActionResult> GetSplitPreview(int id, CancellationToken ct)
         {
             return await _splitPreviewWorkflow.PreviewAsync(id, ct);
+        }
+
+        /// <summary>
+        /// Stream a single tracked audio file for in-browser preview. Range
+        /// processing enabled so the native audio element can scrub without
+        /// downloading the whole file.
+        /// </summary>
+        /// <param name="id">Audiobook ID the file must belong to.</param>
+        /// <param name="fileId">AudiobookFile row ID.</param>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpGet("{id}/files/{fileId}/stream")]
+        public async Task<IActionResult> StreamAudiobookFile(int id, int fileId, CancellationToken ct)
+        {
+            return await _fileStreamWorkflow.StreamAsync(id, fileId, ct);
         }
 
         /// <summary>

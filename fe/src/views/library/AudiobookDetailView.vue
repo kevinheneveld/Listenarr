@@ -162,6 +162,14 @@
               <PhTag />
               {{ audiobook.edition }}
             </Pill>
+            <Pill
+              v-if="audiobook.verificationStatus && audiobook.verificationStatus !== 'unverified'"
+              :variant="verificationPillVariant"
+              :title="verificationTooltip"
+            >
+              <component :is="verificationPillIcon" />
+              {{ verificationLabel(audiobook.verificationStatus) }}
+            </Pill>
           </div>
 
           <div class="description" v-if="audiobook.description">
@@ -566,6 +574,15 @@
                 >
               </div>
               <div class="file-actions">
+                <button
+                  type="button"
+                  class="preview-play-btn"
+                  title="Preview this file in the browser"
+                  aria-label="Preview this file"
+                  @click.stop="openFilePreview(f)"
+                >
+                  <PhPlay weight="fill" />
+                </button>
                 <span class="file-size" v-if="f.size">{{ formatFileSize(f.size) }}</span>
                 <span class="file-size" v-else>Unknown size</span>
                 <PhCaretDown
@@ -855,10 +872,20 @@
   <TransferFilesModal
     :visible="showTransferModal"
     :audiobook="audiobook"
-    :initial-query="audiobook?.title || ''"
+    :initial-query="heardCredits?.title || audiobook?.title || ''"
     :initial-file-ids="bulkMoveFileIds"
     @close="closeTransferModal"
     @done="onTransferDone"
+  />
+
+  <!-- In-browser preview of one file: identify the narrator / language / quality
+       without downloading. Streams with Range support for scrubbing. -->
+  <FilePreviewModal
+    :visible="previewVisible"
+    :audiobook-id="audiobook?.id ?? null"
+    :file="previewFile"
+    :audiobook-title="audiobook?.title"
+    @close="closeFilePreview"
   />
 
   <!-- Break a multi-book record apart: server-side clustering with a suggested
@@ -904,6 +931,7 @@ import { useProtectedImages } from '@/composables/useProtectedImages'
 import { buildAudibleProductUrl } from '@/utils/marketDomains'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
+import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import SplitCollectionModal from '@/components/domain/audiobook/SplitCollectionModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
@@ -918,6 +946,11 @@ import {
   PhMagnifyingGlass,
   PhFolderOpen,
   PhWaveform,
+  PhPlay,
+  PhShieldCheck,
+  PhShieldWarning,
+  PhShieldSlash,
+  PhEarSlash,
   PhTrash,
   PhClock,
   PhFolder,
@@ -982,6 +1015,86 @@ const showSplitModal = ref(false)
 const verifyingAudio = ref(false)
 let verifyAudioJobId: string | null = null
 const showTranscript = ref(false)
+
+const verificationPillVariant = computed(() => {
+  switch (audiobook.value?.verificationStatus) {
+    case 'agentVerified':
+    case 'manuallyVerified':
+      return 'success'
+    case 'agentFlagged':
+      return 'warning'
+    case 'rejected':
+      return 'error'
+    default:
+      return 'default'
+  }
+})
+
+const verificationPillIcon = computed(() => {
+  switch (audiobook.value?.verificationStatus) {
+    case 'agentVerified':
+    case 'manuallyVerified':
+      return PhShieldCheck
+    case 'agentFlagged':
+      return PhShieldWarning
+    case 'rejected':
+      return PhShieldSlash
+    default:
+      return PhEarSlash
+  }
+})
+
+const verificationTooltip = computed(() => {
+  const book = audiobook.value
+  if (!book) return ''
+  const parts: string[] = []
+  if (book.verifiedBy) parts.push(`By ${book.verifiedBy}`)
+  if (book.verifiedAt) parts.push(`on ${new Date(book.verifiedAt).toLocaleString()}`)
+  if (typeof book.verificationConfidence === 'number') {
+    parts.push(`confidence ${(book.verificationConfidence * 100).toFixed(0)}%`)
+  }
+  const detail = parseVerificationDetail(book)
+  if (detail) {
+    parts.push(`outcome: ${detail.outcome}`)
+    const fields: string[] = []
+    if (detail.titleMatch) fields.push(`title ${(detail.titleMatch.score * 100).toFixed(0)}%`)
+    if (detail.authorMatch) fields.push(`author ${(detail.authorMatch.score * 100).toFixed(0)}%`)
+    if (detail.narratorMatch)
+      fields.push(`narrator ${(detail.narratorMatch.score * 100).toFixed(0)}%`)
+    if (fields.length) parts.push(fields.join(', '))
+  }
+  return parts.join(' · ')
+})
+
+// ── In-browser file preview ────────────────────────────────────────────────
+// Drives the FilePreviewModal so the user can identify a narrator (or
+// language / audio quality) without leaving the page or downloading the
+// whole file locally.
+const previewVisible = ref(false)
+const previewFile = ref<{
+  id: number
+  path?: string | null
+  format?: string | null
+  durationSeconds?: number | null
+  size?: number | null
+} | null>(null)
+
+function openFilePreview(file: {
+  id: number
+  path?: string | null
+  format?: string | null
+  durationSeconds?: number | null
+  size?: number | null
+}): void {
+  previewFile.value = file
+  previewVisible.value = true
+}
+
+function closeFilePreview(): void {
+  previewVisible.value = false
+  // Keep `previewFile` around so the modal can render its closing animation
+  // without losing the bound file metadata; the next open overwrites it.
+}
 
 const verificationDetail = computed(() =>
   audiobook.value ? parseVerificationDetail(audiobook.value) : null,
@@ -3896,6 +4009,31 @@ a.identifier-link:hover {
 .bulk-delete-list li {
   margin: 2px 0;
   word-break: break-all;
+}
+
+/* Row-level in-browser preview */
+.preview-play-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid #3a3a3a;
+  border-radius: 50%;
+  color: #ddd;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.preview-play-btn:hover {
+  background: var(--brand-focus, #3b82f6);
+  border-color: var(--brand-focus, #3b82f6);
+  color: #fff;
 }
 
 /* Audio Verification card (ADR-0001) */

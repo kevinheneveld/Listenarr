@@ -94,6 +94,16 @@ public sealed class LibraryQueryWorkflow(
             })
             .ToList(),
         tags = audiobook.Tags,
+        // Audio identity verification (ADR-0001): the detail page's verdict card
+        // renders from these. The slim list carries only the status; the detail
+        // payload includes the full verdict material (transcript, per-field JSON).
+        verificationStatus = audiobook.VerificationStatus,
+        verificationConfidence = audiobook.VerificationConfidence,
+        verifiedAt = audiobook.VerifiedAt,
+        verifiedBy = audiobook.VerifiedBy,
+        verificationMethod = audiobook.VerificationMethod,
+        verificationTranscript = audiobook.VerificationTranscript,
+        verificationDetailJson = audiobook.VerificationDetailJson,
         files = audiobook.Files?.Select(file => new
         {
             id = file.Id,

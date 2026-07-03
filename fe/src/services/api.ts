@@ -1409,6 +1409,13 @@ class ApiService {
     )
   }
 
+  // The endpoint serves the raw file with HTTP Range support so scrubbing in
+  // a large m4b doesn't download the whole thing. Auth flows through the
+  // session cookie, so the browser's native <audio> element can play the URL.
+  getFileStreamUrl(audiobookId: number, fileId: number): string {
+    return buildApiRequestUrl(`/library/${audiobookId}/files/${fileId}/stream`)
+  }
+
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {
     return this.request<LibraryDuplicatesResponse>(`/library/duplicates`)
   }
