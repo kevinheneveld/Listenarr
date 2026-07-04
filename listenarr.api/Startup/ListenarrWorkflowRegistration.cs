@@ -62,6 +62,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<ISearchResultFilter, PromotionalTitleFilter>();
         services.AddScoped<ISearchResultFilter, ProductLikeTitleFilter>();
         services.AddScoped<ISearchResultFilter, MissingInformationFilter>();
+        services.AddScoped<ISearchResultFilter, RelevanceFilter>();
         services.AddScoped<SearchResultFilterPipeline>();
         services.AddScoped<AsinCandidateCollector>();
         services.AddScoped<AsinEnricher>();
@@ -93,6 +94,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryOrganizeSweepWorkflow>();
         services.AddScoped<LibraryMoveSummaryWorkflow>();
         services.AddScoped<LibraryDuplicatesWorkflow>();
+        services.AddScoped<Listenarr.Application.Audiobooks.Verification.IWrongContentAutoRejector, WrongContentAutoRejector>();
         services.AddScoped<LibraryNotAudiobookWorkflow>();
         services.AddScoped<LibraryEmbeddedMetadataWorkflow>();
         services.AddScoped<LibraryFileStreamWorkflow>();

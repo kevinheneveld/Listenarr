@@ -133,6 +133,13 @@ namespace Listenarr.Domain.Configuration
         // Match, the same samples are re-read with this larger model (downloaded
         // on first use). Empty disables escalation.
         public string VerificationEscalationModel { get; set; } = "small.en";
+
+        // Close the loop on confident wrong-content imports: when the on-import
+        // verification verdict is a Mismatch backed by credit evidence (the audio
+        // ANNOUNCES a different book) at high confidence, automatically run the
+        // "Not an audiobook" flow — purge files, blocklist the delivering release,
+        // re-monitor, re-search. NoSpokenCredits/Uncertain never auto-reject.
+        public bool VerificationAutoRejectWrongContent { get; set; } = true;
         public List<string> ImportBlacklistExtensions
         {
             get

@@ -55,5 +55,48 @@ namespace Listenarr.Application.Search
             if (sb.Length > 0 && sb[sb.Length - 1] == ' ') sb.Length--;
             return sb.ToString();
         }
+
+        /// <summary>
+        /// True when the candidate's <paramref name="title"/> or
+        /// <paramref name="subtitle"/> plausibly matches the user-supplied
+        /// <paramref name="query"/>. Primary check is normalized substring;
+        /// for multi-word queries a tight token-overlap fallback catches
+        /// reordering / extra noise. Single-token queries (e.g. "1634") fall
+        /// through to substring only, to avoid admitting every book that
+        /// contains the same one word.
+        /// </summary>
+        public static bool Matches(string? title, string? subtitle, string? query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return true;
+            var normalizedQuery = Normalize(query);
+            if (normalizedQuery.Length == 0) return true;
+
+            if (ContainsNormalized(title, normalizedQuery)) return true;
+            if (ContainsNormalized(subtitle, normalizedQuery)) return true;
+
+            // Token-overlap fallback: only when the query has 2+ significant
+            // tokens, and we require every one of them to appear in the
+            // candidate. This handles word reordering and extra punctuation
+            // / noise around the title without admitting books that merely
+            // share a couple of common words.
+            var queryTokens = new HashSet<string>(
+                Filters.SignificantTokens.From(query),
+                StringComparer.OrdinalIgnoreCase);
+            if (queryTokens.Count < 2) return false;
+
+            var combined = (title ?? string.Empty) + " " + (subtitle ?? string.Empty);
+            var candidateTokens = new HashSet<string>(
+                Filters.SignificantTokens.From(combined),
+                StringComparer.OrdinalIgnoreCase);
+            return queryTokens.IsSubsetOf(candidateTokens);
+        }
+
+        private static bool ContainsNormalized(string? field, string normalizedQuery)
+        {
+            if (string.IsNullOrWhiteSpace(field)) return false;
+            var normalizedField = Normalize(field);
+            return normalizedField.Length > 0
+                && normalizedField.Contains(normalizedQuery, StringComparison.Ordinal);
+        }
     }
 }

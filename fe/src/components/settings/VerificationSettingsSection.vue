@@ -86,6 +86,25 @@
     </div>
 
     <div class="setting-row">
+      <label for="verification-auto-reject">
+        <strong>Auto-reject confident wrong content</strong>
+        <small
+          >When a fresh import's audio announces a different book (heard credits) at high
+          confidence, automatically purge it, blocklist the release, and re-search. Books with no
+          spoken credits are never auto-rejected.</small
+        >
+      </label>
+      <input
+        id="verification-auto-reject"
+        type="checkbox"
+        :checked="settings.verificationAutoRejectWrongContent ?? true"
+        @change="
+          patch('verificationAutoRejectWrongContent', ($event.target as HTMLInputElement).checked)
+        "
+      />
+    </div>
+
+    <div class="setting-row">
       <label for="verification-low-cpu">
         <strong>Run verification at low CPU priority</strong>
         <small

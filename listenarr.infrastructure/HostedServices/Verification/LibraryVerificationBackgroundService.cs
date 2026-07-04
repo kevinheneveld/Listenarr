@@ -265,6 +265,12 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                     ApplyVerdict(audiobook, verdict, whisper.ModelName);
                     await audiobookRepository.UpdateAsync(audiobook);
 
+                    // Close the loop on confident wrong-content imports: the audio ANNOUNCED
+                    // a different book (credit evidence) at high confidence on a fresh import
+                    // — purge it, blocklist the release, re-search. Best-effort: a failed
+                    // auto-reject leaves the verdict flagged for the human path.
+                    await TryAutoRejectWrongContentAsync(scope.ServiceProvider, job, audiobook, verdict, ct);
+
                     switch (audiobook.VerificationStatus)
                     {
                         case VerificationStatus.AgentVerified: job.Verified++; break;
@@ -288,6 +294,55 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                 {
                     job.Processed++;
                 }
+            }
+        }
+
+        /// <summary>
+        /// Auto-reject hook (see <see cref="WrongContentAutoReject"/>): import-triggered
+        /// jobs only, requires the settings toggle, a confident Mismatch, and heard-credit
+        /// evidence. Runs the same not-audiobook flow as the manual button via
+        /// <see cref="IWrongContentAutoRejector"/>. Never throws into the job loop.
+        /// </summary>
+        private async Task TryAutoRejectWrongContentAsync(
+            IServiceProvider services,
+            VerificationJob job,
+            Audiobook audiobook,
+            VerificationVerdict verdict,
+            CancellationToken ct)
+        {
+            try
+            {
+                var configService = services.GetService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
+                if (configService == null) return;
+                var settings = await configService.GetApplicationSettingsAsync();
+
+                if (!WrongContentAutoReject.ShouldAutoReject(
+                        settings.VerificationAutoRejectWrongContent,
+                        job.Trigger,
+                        verdict.Outcome,
+                        verdict.Confidence,
+                        verdict.HeardCredits?.Title,
+                        verdict.HeardCredits?.Author))
+                {
+                    return;
+                }
+
+                var rejector = services.GetService<IWrongContentAutoRejector>();
+                if (rejector == null) return;
+
+                _logger.LogInformation(
+                    "Auto-rejecting wrong content for audiobook {Id} ('{Title}'): import verification heard \"{HeardTitle}\" by \"{HeardAuthor}\" at confidence {Confidence:0.00}",
+                    audiobook.Id, audiobook.Title, verdict.HeardCredits?.Title ?? "?", verdict.HeardCredits?.Author ?? "?", verdict.Confidence);
+
+                await rejector.TryRejectAsync(audiobook.Id, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "Auto-reject check failed for audiobook {Id} (verdict remains flagged for manual review)", audiobook.Id);
             }
         }
 

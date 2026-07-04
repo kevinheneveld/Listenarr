@@ -185,6 +185,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<IndexerSearchWorkflow>();
             services.AddSingleton<MetadataSourceCatalog>();
             services.AddSingleton<SearchResultFilterPipeline>();
+            services.AddSingleton<Listenarr.Application.Search.Contracts.ISearchResultFilter, RelevanceFilter>();
             services.AddSingleton<MetadataStrategyCoordinator>();
             services.AddSingleton<AsinCandidateCollector>();
             services.AddSingleton<AsinEnricher>();
@@ -214,6 +215,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryMoveSummaryWorkflow>();
             services.AddSingleton<IOrganizeFilesystem, Listenarr.Infrastructure.Library.Organizing.OrganizeFilesystem>();
             services.AddSingleton<LibraryDuplicatesWorkflow>();
+            services.AddSingleton<Listenarr.Application.Audiobooks.Verification.IWrongContentAutoRejector, WrongContentAutoRejector>();
             services.AddSingleton<LibraryNotAudiobookWorkflow>();
             services.AddSingleton<LibraryEmbeddedMetadataWorkflow>();
             services.AddSingleton<LibraryFileStreamWorkflow>();

@@ -310,6 +310,7 @@ export interface ApplicationSettings {
   verificationClosingSeconds?: number
   verificationOnImport?: boolean
   verificationLowCpuPriority?: boolean
+  verificationAutoRejectWrongContent?: boolean
   verificationEscalationModel?: string
   outputPath: string
   folderNamingPattern: string
