@@ -45,7 +45,8 @@ async function execute() {
       <small
         >Keep the entry but remove these files — wrong book, a non-audiobook release that matched
         the title, or an incomplete copy — and search for a correct version instead of deleting the
-        whole book.</small
+        whole book. The release that delivered them is blocklisted so it can never be
+        re-grabbed.</small
       >
     </div>
     <button

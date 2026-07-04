@@ -433,7 +433,7 @@
                   <button
                     type="button"
                     class="show-more-btn manual-verify-btn"
-                    title="Manually confirm this audio matches the metadata. Sticky — agent passes never overwrite it."
+                    title="Records your ruling that this content is right — the agent will never overwrite it. Verdict only: files and search are untouched."
                     @click="setManualVerification('verify')"
                   >
                     Mark verified
@@ -441,10 +441,10 @@
                   <button
                     type="button"
                     class="show-more-btn manual-reject-btn"
-                    title="Manually mark this audio as NOT the listed book. Sticky — agent passes never overwrite it."
+                    title="Records your ruling that this content is wrong — the agent will never overwrite it. Files stay on disk; nothing is searched."
                     @click="setManualVerification('reject')"
                   >
-                    Mark wrong content
+                    Reject (keep files)
                   </button>
                 </template>
                 <button
@@ -985,6 +985,7 @@ import {
 import { logger } from '@/utils/logger'
 import { errorTracking } from '@/services/errorTracking'
 import { useProtectedImages } from '@/composables/useProtectedImages'
+import { showConfirm } from '@/composables/useConfirm'
 import { buildAudibleProductUrl } from '@/utils/marketDomains'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
@@ -1228,6 +1229,35 @@ async function setManualVerification(action: 'verify' | 'reject' | 'clear') {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     toast.error('Could not update verification', message)
+    return
+  }
+
+  // Bridge to the full remediation: a verdict-only reject is often the first
+  // half of "this is junk — replace it". Offer the second half right away so
+  // the user doesn't have to find the separate flow in the Delete dialog.
+  if (action === 'reject' && (book.files?.length ?? 0) > 0) {
+    const purge = await showConfirm(
+      'Also purge the files, blocklist the release, and search for a better copy?\n\n' +
+        'The files are removed from disk, the delivering release can never be re-grabbed, ' +
+        'and a background search for a correct version starts immediately.',
+      'Find a better copy?',
+      { danger: true, confirmText: 'Purge & re-search', cancelText: 'Keep files' },
+    )
+    if (purge) {
+      try {
+        const result = await apiService.rejectNotAudiobook(book.id)
+        toast.success(
+          'Wrong content rejected',
+          result.searchStarted
+            ? `Removed ${result.filesRemoved} file(s); the release is blocklisted and a replacement search is running.`
+            : `Removed ${result.filesRemoved} file(s); the release is blocklisted.`,
+        )
+        await loadAudiobook()
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        toast.error('Could not purge files', message)
+      }
+    }
   }
 }
 
