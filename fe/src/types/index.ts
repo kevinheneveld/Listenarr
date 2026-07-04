@@ -711,6 +711,8 @@ export interface Audiobook {
     source?: string
   }[]
   verificationStatus?: VerificationStatus
+  /** When the book most recently had a file imported (max file CreatedAt); null when no tracked files. */
+  importedAt?: string
   verificationConfidence?: number | null
   verifiedAt?: string | null
   verifiedBy?: string | null

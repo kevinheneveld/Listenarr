@@ -96,6 +96,10 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             // filters, and dashboard health counts read it without detail calls.
             Assert.True(item.TryGetProperty("verificationStatus", out var verification));
             Assert.Equal((int)VerificationStatus.Unverified, verification.GetInt32());
+
+            // ImportedAt (max file CreatedAt) backs the "Recently Imported" filter/sort.
+            Assert.True(item.TryGetProperty("importedAt", out var importedAt));
+            Assert.NotEqual(System.Text.Json.JsonValueKind.Null, importedAt.ValueKind);
         }
 
         [Fact]

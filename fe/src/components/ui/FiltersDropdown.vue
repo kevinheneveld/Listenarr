@@ -103,6 +103,7 @@ const builtInOptions = [
   { value: 'unmonitored', label: 'Unmonitored Only' },
   { value: 'missing', label: 'Missing' },
   { value: 'recent', label: 'Recently Added' },
+  { value: 'recently-imported', label: 'Recently Imported' },
   { value: 'needs-review', label: 'Needs Review (verification)' },
   { value: 'no-spoken-credits', label: 'No Spoken Credits (verification)' },
   { value: 'verified', label: 'Verified (agent or manual)' },

@@ -54,5 +54,12 @@ namespace Listenarr.Application.Audiobooks.Catalog
         /// counts can read it without per-book detail requests.
         /// </summary>
         public VerificationStatus VerificationStatus { get; set; }
+
+        /// <summary>
+        /// When the book most recently had a file imported (max AudiobookFile.CreatedAt).
+        /// Null when no tracked file rows exist (missing books, or legacy filePath-only records).
+        /// Backs the "Recently Imported" filter/sort.
+        /// </summary>
+        public DateTime? ImportedAt { get; set; }
     }
 }

@@ -40,5 +40,11 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<List<AudiobookFile>> GetAllAsync(CancellationToken ct = default);
         Task<List<AudiobookFormatSummary>> GetFormatSummariesAsync(CancellationToken ct = default);
         Task<Dictionary<int, int>> GetCountsByAudiobookIdAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// The most recent file <see cref="AudiobookFile.CreatedAt"/> per audiobook — i.e. when the
+        /// book most recently had a file imported into the library. Backs the "Recently Imported" view.
+        /// </summary>
+        Task<Dictionary<int, DateTime>> GetMaxCreatedAtByAudiobookIdAsync(CancellationToken ct = default);
     }
 }

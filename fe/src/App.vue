@@ -301,6 +301,14 @@
               >
                 <span>Series</span>
               </RouterLink>
+              <RouterLink
+                :to="{ path: '/audiobooks', query: { group: 'narrators' } }"
+                class="nav-subitem"
+                @click="closeMobileMenu"
+                :class="{ active: route.query.group === 'narrators' }"
+              >
+                <span>Narrators</span>
+              </RouterLink>
             </div>
             <RouterLink
               to="/add-new"

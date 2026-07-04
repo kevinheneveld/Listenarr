@@ -69,6 +69,7 @@ namespace Listenarr.Application.Audiobooks.Catalog
             // was started on this context instance" under real database latency.
             var fileSummaryRows = await _audiobookFileRepository.GetFormatSummariesAsync();
             var fileCountById = await _audiobookFileRepository.GetCountsByAudiobookIdAsync();
+            var importedAtById = await _audiobookFileRepository.GetMaxCreatedAtByAudiobookIdAsync();
             var membershipsByAudiobookId = await _audiobookRepository.GetAllSeriesMembershipsGroupedByAudiobookIdAsync();
             var filesByAudiobookId = fileSummaryRows
                 .GroupBy(f => f.AudiobookId)
@@ -142,6 +143,9 @@ namespace Listenarr.Application.Audiobooks.Catalog
                     AuthorAsins = a.AuthorAsins?.ToArray(),
                     Wanted = wanted,
                     VerificationStatus = a.VerificationStatus,
+                    ImportedAt = importedAtById.TryGetValue(a.Id, out var importedAt)
+                        ? importedAt
+                        : (DateTime?)null,
                     Status = AudiobookStatusEvaluator.ComputeStatus(
                          activeDownloadAudiobookIdSet.Contains(a.Id),
                          hasAnyFile,

@@ -168,6 +168,15 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             }).ToList();
         }
 
+        public async Task<Dictionary<int, DateTime>> GetMaxCreatedAtByAudiobookIdAsync(CancellationToken ct = default)
+        {
+            return await _db.AudiobookFiles
+                .AsNoTracking()
+                .GroupBy(f => f.AudiobookId)
+                .Select(g => new { AudiobookId = g.Key, MaxCreatedAt = g.Max(f => f.CreatedAt) })
+                .ToDictionaryAsync(r => r.AudiobookId, r => r.MaxCreatedAt, ct);
+        }
+
         public async Task<Dictionary<int, int>> GetCountsByAudiobookIdAsync(CancellationToken ct = default)
         {
             return await _db.AudiobookFiles

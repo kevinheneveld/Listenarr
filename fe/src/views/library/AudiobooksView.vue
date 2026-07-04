@@ -50,7 +50,14 @@
                 ? groupedCollections.length
                 : 0
           }}
-          {{ groupBy === 'books' ? 'Book' : groupBy === 'authors' ? 'Author' : 'Series'
+          {{
+            groupBy === 'books'
+              ? 'Book'
+              : groupBy === 'authors'
+                ? 'Author'
+                : groupBy === 'narrators'
+                  ? 'Narrator'
+                  : 'Series'
           }}{{
             (groupBy === 'books'
               ? audiobooks.length
@@ -65,8 +72,17 @@
           <button class="toolbar-btn group-btn" @click="showGroupMenu = !showGroupMenu">
             <PhBook v-if="groupBy === 'books'" />
             <PhUser v-else-if="groupBy === 'authors'" />
+            <PhMicrophoneStage v-else-if="groupBy === 'narrators'" />
             <PhBooks v-else />
-            {{ groupBy === 'books' ? 'Books' : groupBy === 'authors' ? 'Authors' : 'Series' }}
+            {{
+              groupBy === 'books'
+                ? 'Books'
+                : groupBy === 'authors'
+                  ? 'Authors'
+                  : groupBy === 'narrators'
+                    ? 'Narrators'
+                    : 'Series'
+            }}
             <PhCaretDown />
           </button>
           <div v-if="showGroupMenu" class="group-menu">
@@ -93,6 +109,14 @@
             >
               <PhBooks />
               Series
+            </button>
+            <button
+              class="menu-item"
+              :class="{ active: groupBy === 'narrators' }"
+              @click="setGroupBy('narrators')"
+            >
+              <PhMicrophoneStage />
+              Narrators
             </button>
           </div>
         </div>
@@ -229,7 +253,7 @@
             'collection-card',
             {
               'author-collection': groupBy === 'authors',
-              'series-collection': groupBy === 'series',
+              'series-collection': groupBy === 'series' || groupBy === 'narrators',
             },
           ]"
           @click="navigateToCollection(collection)"
@@ -278,7 +302,7 @@
                 </div>
               </div>
             </template>
-            <template v-else-if="groupBy === 'series'">
+            <template v-else-if="groupBy === 'series' || groupBy === 'narrators'">
               <div
                 v-if="collection.coverUrls && collection.coverUrls.length > 0"
                 class="series-covers-container"
@@ -398,7 +422,10 @@
             </div>
           </div>
           <!-- Bottom placard for series (only show when item details are enabled) -->
-          <div v-if="groupBy === 'series' && showItemDetails" class="series-bottom-placard">
+          <div
+            v-if="(groupBy === 'series' || groupBy === 'narrators') && showItemDetails"
+            class="series-bottom-placard"
+          >
             <div class="series-bottom-content">
               <p class="series-bottom-title">{{ collection.name }}</p>
               <p class="series-bottom-count">
@@ -573,6 +600,42 @@
             <div class="col-select"></div>
             <div class="col-cover">Cover</div>
             <div class="col-title">Title / Author</div>
+            <div
+              class="col-series sortable"
+              :class="{ 'sort-active': isSeriesSortActive }"
+              role="button"
+              tabindex="0"
+              :aria-sort="
+                isSeriesSortActive ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'
+              "
+              @click="toggleListHeaderSort('series')"
+              @keydown="onListHeaderSortKeydown('series', $event)"
+            >
+              <span>Series</span>
+              <component
+                v-if="isSeriesSortActive"
+                :is="sortOrder === 'asc' ? PhCaretUp : PhCaretDown"
+                class="sort-caret"
+              />
+            </div>
+            <div
+              class="col-narrator sortable"
+              :class="{ 'sort-active': isNarratorSortActive }"
+              role="button"
+              tabindex="0"
+              :aria-sort="
+                isNarratorSortActive ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'
+              "
+              @click="toggleListHeaderSort('narrator')"
+              @keydown="onListHeaderSortKeydown('narrator', $event)"
+            >
+              <span>Narrator</span>
+              <component
+                v-if="isNarratorSortActive"
+                :is="sortOrder === 'asc' ? PhCaretUp : PhCaretDown"
+                class="sort-caret"
+              />
+            </div>
             <div class="col-status">Status</div>
             <div class="col-actions">Actions</div>
           </div>
@@ -630,24 +693,29 @@
                 }}
               </div>
               <div v-if="showItemDetails" class="list-extra-details">
-                <div v-if="formatSeriesMemberships(audiobook)" class="detail-line small">
+                <div
+                  v-if="formatSeriesMemberships(audiobook)"
+                  class="detail-line small list-narrow-only-block"
+                >
                   Series: {{ safeText(formatSeriesMemberships(audiobook)) }}
                 </div>
                 <div class="detail-line small">
-                  {{
-                    (audiobook.narrators || [])
-                      .slice(0, 1)
-                      .map((n) => safeText(n))
-                      .join(', ') || ''
-                  }}
-                  <span
-                    v-if="
-                      audiobook.narrators &&
-                      audiobook.narrators.length &&
-                      (audiobook.publisher || audiobook.publishYear)
-                    "
-                  >
-                    •
+                  <span class="list-narrow-only-inline">
+                    {{
+                      (audiobook.narrators || [])
+                        .slice(0, 1)
+                        .map((n) => safeText(n))
+                        .join(', ') || ''
+                    }}
+                    <span
+                      v-if="
+                        audiobook.narrators &&
+                        audiobook.narrators.length &&
+                        (audiobook.publisher || audiobook.publishYear)
+                      "
+                    >
+                      •
+                    </span>
                   </span>
                   {{ safeText(audiobook.publisher)
                   }}<span v-if="audiobook.publishYear">
@@ -655,6 +723,42 @@
                   >
                 </div>
               </div>
+            </div>
+            <div class="col-series-cell">
+              <template v-if="getPrimarySeries(audiobook)">
+                <span
+                  class="series-name"
+                  :title="formatAllSeriesTooltip(getPrimarySeries(audiobook))"
+                >
+                  {{ formatSeriesDisplay(getPrimarySeries(audiobook)) }}
+                </span>
+                <span
+                  v-if="(getPrimarySeries(audiobook)?.extraCount ?? 0) > 0"
+                  class="extra-count"
+                  :title="formatAllSeriesTooltip(getPrimarySeries(audiobook))"
+                >
+                  +{{ getPrimarySeries(audiobook)?.extraCount }}
+                </span>
+              </template>
+              <span v-else class="muted">—</span>
+            </div>
+            <div class="col-narrator-cell">
+              <template v-if="audiobook.narrators && audiobook.narrators.length">
+                <span
+                  class="narrator-name"
+                  :title="audiobook.narrators.length > 1 ? audiobook.narrators.join('\n') : ''"
+                >
+                  {{ safeText(audiobook.narrators[0]) }}
+                </span>
+                <span
+                  v-if="audiobook.narrators.length > 1"
+                  class="extra-count"
+                  :title="audiobook.narrators.join('\n')"
+                >
+                  +{{ audiobook.narrators.length - 1 }}
+                </span>
+              </template>
+              <span v-else class="muted">—</span>
             </div>
             <div class="list-badges">
               <div
@@ -853,6 +957,8 @@ import {
   PhShieldCheck,
   PhInfo,
   PhCaretDown,
+  PhCaretUp,
+  PhMicrophoneStage,
   PhBookOpen,
   PhX,
   PhUser,
@@ -882,9 +988,15 @@ import type { Audiobook, AudiobookStatus, QualityProfile } from '@/types'
 import { evaluateRules } from '@/utils/customFilterEvaluator'
 import type { RuleLike } from '@/utils/customFilterEvaluator'
 import { computeAudiobookStatus, formatAudiobookStatus } from '@/utils/audiobookStatus'
-import { safeText } from '@/utils/textUtils'
+import { safeText, normalizeCollectionText, isNonPersonNarrator } from '@/utils/textUtils'
 import { verificationClass, verificationLabel } from '@/utils/verificationStatus'
 import { formatSeriesMemberships } from '@/utils/seriesUtils'
+import {
+  getPrimarySeries,
+  formatSeriesDisplay,
+  formatAllSeriesTooltip,
+  getSeriesSortKey,
+} from '@/utils/seriesDisplay'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import { errorTracking } from '@/services/errorTracking'
 import { isLikelyBackendImageUrl, useProtectedImages } from '@/composables/useProtectedImages'
@@ -950,12 +1062,16 @@ const DEFAULT_SORTS = {
   books: { key: 'title', order: 'asc' },
   authors: { key: 'author-last', order: 'asc' },
   series: { key: 'title', order: 'asc' },
+  // Narrators are people: default to last-name like authors (getAuthorSortKey works
+  // on any "First Last" name).
+  narrators: { key: 'author-last', order: 'asc' },
 } as const
 
 const sortState = reactive({
   books: { key: 'title', order: 'asc' as 'asc' | 'desc' },
   authors: { key: 'author-last', order: 'asc' as 'asc' | 'desc' },
   series: { key: 'title', order: 'asc' as 'asc' | 'desc' },
+  narrators: { key: 'author-last', order: 'asc' as 'asc' | 'desc' },
 })
 
 const sortKey = computed({
@@ -1007,7 +1123,66 @@ interface CustomFilter {
 }
 
 const customFilters = ref<CustomFilter[]>([])
+// List-view column-header sorting (books grouping). The Narrator column maps to
+// two toolbar options (last- and first-name); treat both as "narrator is active"
+// so clicking the column toggles whichever is selected.
+const isSeriesSortActive = computed(() => sortKey.value === 'series')
+const isNarratorSortActive = computed(
+  () => sortKey.value === 'narrator-last' || sortKey.value === 'narrator-first',
+)
+
+function toggleListHeaderSort(key: 'series' | 'narrator') {
+  if (key === 'series') {
+    if (isSeriesSortActive.value) {
+      sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortKey.value = 'series'
+      sortOrder.value = 'asc'
+    }
+    return
+  }
+  if (isNarratorSortActive.value) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = 'narrator-last'
+    sortOrder.value = 'asc'
+  }
+}
+
+// Single keydown handler: two @keydown modifiers on one element compile to a
+// duplicate onKeydown key, which the pinned vue-tsc (3.x) rejects (TS1117).
+function onListHeaderSortKeydown(key: 'series' | 'narrator', e: KeyboardEvent) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    toggleListHeaderSort(key)
+  }
+}
+
 const selectedFilterId = ref<string | null>(null)
+
+// Persist the user's last-used filter + sort so the view is restored when they
+// return to the page (a bare /audiobooks visit carries no query). localStorage
+// mirrors the existing groupBy/viewMode/searchQuery pattern in this view. A
+// URL query (e.g. dashboard health-chip deep links) still wins over storage.
+const SELECTED_FILTER_KEY = 'listenarr.selectedFilter'
+const SORT_STORAGE_KEYS = {
+  books: 'listenarr.sort.books',
+  authors: 'listenarr.sort.authors',
+  series: 'listenarr.sort.series',
+  narrators: 'listenarr.sort.narrators',
+} as const
+const BUILTIN_FILTER_IDS = new Set([
+  'monitored',
+  'unmonitored',
+  'missing',
+  'recent',
+  'recently-imported',
+  'needs-review',
+  'no-spoken-credits',
+  'verified',
+  'manually-verified',
+  'rejected',
+])
 const showCustomFilterModal = ref(false)
 const editingFilter = ref<CustomFilter | null>(null)
 
@@ -1110,6 +1285,13 @@ const filteredAndSortedAudiobooks = computed(() => {
       filtered = filtered.filter((b) => {
         const y = Number(b.publishYear || 0)
         return !isNaN(y) && (y === thisYear || y === thisYear - 1)
+      })
+    } else if (sid === 'recently-imported') {
+      // Books we actually have a file for. The recency ordering itself is applied
+      // by the 'imported' sort key, which the filter selection switches to.
+      filtered = filtered.filter((b) => {
+        const st = getAudiobookStatus(b)
+        return st === 'quality-match' || st === 'quality-mismatch'
       })
     } else if (sid === 'needs-review') {
       // Audio verification (ADR-0001): books the agent flagged (mismatch or
@@ -1217,6 +1399,10 @@ const filteredAndSortedAudiobooks = computed(() => {
         av = getNarratorFirstNameSortKey(aNarratorFirst)
         bv = getNarratorFirstNameSortKey(bNarratorFirst)
         break
+      case 'series':
+        av = getSeriesSortKey(a)
+        bv = getSeriesSortKey(b)
+        break
       case 'publisher':
         av = (a.publisher || '').toString().toLowerCase()
         bv = (b.publisher || '').toString().toLowerCase()
@@ -1232,6 +1418,18 @@ const filteredAndSortedAudiobooks = computed(() => {
         av = (a.publishYear || '').toString().toLowerCase()
         bv = (b.publishYear || '').toString().toLowerCase()
         break
+      case 'imported': {
+        // Order by most-recent import. Books with no import timestamp (missing, or
+        // legacy filePath-only records) always sort to the end, regardless of direction.
+        const at = a.importedAt ? Date.parse(a.importedAt) : NaN
+        const bt = b.importedAt ? Date.parse(b.importedAt) : NaN
+        const aMissing = Number.isNaN(at)
+        const bMissing = Number.isNaN(bt)
+        if (aMissing && bMissing) return 0
+        if (aMissing) return 1
+        if (bMissing) return -1
+        return (at - bt) * (sortOrder.value === 'asc' ? 1 : -1)
+      }
       case 'monitored':
         av = !!a.monitored
         bv = !!b.monitored
@@ -1378,10 +1576,10 @@ async function ensureAuthorCover(authorName: string) {
 
 // Grouping mode
 const GROUP_BY_KEY = 'listenarr.groupBy'
-const GROUP_BY_MODES = ['books', 'authors', 'series'] as const
+const GROUP_BY_MODES = ['books', 'authors', 'series', 'narrators'] as const
 type GroupByMode = (typeof GROUP_BY_MODES)[number]
 const DEFAULT_VISIBLE_RANGE_END = 20
-const groupBy = ref<'books' | 'authors' | 'series'>('books')
+const groupBy = ref<GroupByMode>('books')
 const showGroupMenu = ref(false)
 
 function normalizeGroupBy(value: unknown): GroupByMode | null {
@@ -1402,12 +1600,33 @@ try {
   if (initialGroup && initialGroup !== groupBy.value) {
     groupBy.value = initialGroup
   }
-  // Deep-linkable filter (e.g. dashboard health chips): /audiobooks?filter=needs-review
+  // Deep-linkable filter (e.g. dashboard health chips): /audiobooks?filter=needs-review.
+  // The URL wins over the persisted filter; a bare visit restores the stored one.
   const initialFilter = route.query.filter
   if (typeof initialFilter === 'string' && initialFilter.trim()) {
     selectedFilterId.value = initialFilter.trim()
+  } else {
+    const storedFilter = localStorage.getItem(SELECTED_FILTER_KEY)
+    if (
+      storedFilter &&
+      (BUILTIN_FILTER_IDS.has(storedFilter) ||
+        customFilters.value.some((x) => x.id === storedFilter))
+    ) {
+      selectedFilterId.value = storedFilter
+    }
   }
-  // No need to set sortKey/order here; handled per-group below
+  // Restore each group's persisted sort (key + direction).
+  for (const g of GROUP_BY_MODES) {
+    try {
+      const rawSort = localStorage.getItem(SORT_STORAGE_KEYS[g])
+      if (!rawSort) continue
+      const parsed = JSON.parse(rawSort) as { key?: string; order?: string }
+      if (typeof parsed.key === 'string') sortState[g].key = parsed.key
+      if (parsed.order === 'asc' || parsed.order === 'desc') sortState[g].order = parsed.order
+    } catch {
+      /* ignore malformed stored sort */
+    }
+  }
   if (!initialGroup) {
     router.replace({ path: '/audiobooks', query: { group: groupBy.value } })
   } else if (route.query.group !== initialGroup) {
@@ -1415,10 +1634,44 @@ try {
   }
 } catch {}
 
+// Persist the active group's sort whenever it changes, so a later visit restores it.
+watch(
+  () => [groupBy.value, sortState[groupBy.value].key, sortState[groupBy.value].order],
+  () => {
+    try {
+      const slot = sortState[groupBy.value]
+      localStorage.setItem(
+        SORT_STORAGE_KEYS[groupBy.value],
+        JSON.stringify({ key: slot.key, order: slot.order }),
+      )
+    } catch {}
+  },
+)
+
+// Persist the dropdown filter selection; explicit clear is remembered too.
+watch(selectedFilterId, (v) => {
+  try {
+    if (v) localStorage.setItem(SELECTED_FILTER_KEY, v)
+    else localStorage.removeItem(SELECTED_FILTER_KEY)
+  } catch {}
+})
+
+// Selecting "Recently Imported" switches the sort to newest-import-first, so the
+// single filter delivers the expected outcome (owned books, most recent first) in
+// one click. Only the books grouping exposes the 'imported' sort key.
+watch(selectedFilterId, (sid) => {
+  if (sid === 'recently-imported' && groupBy.value === 'books') {
+    sortState.books.key = 'imported'
+    sortState.books.order = 'desc'
+  }
+})
+
 watch(groupBy, (v) => {
   try {
     localStorage.setItem(GROUP_BY_KEY, v)
   } catch {}
+  // Switch to this group's persisted view mode (grid/list is per-grouping).
+  viewMode.value = loadViewModeFor(v)
 
   // Ensure selected sort key is valid for the new grouping; reset to sensible defaults if needed
   const allowed = sortOptions.value.map((o) => o.value)
@@ -1462,13 +1715,40 @@ const groupedCollections = computed(() => {
     { name: string; count: number; coverUrl?: string; coverUrls?: string[] }
   >()
 
+  // Casing/punctuation variants of the same narrator merge into one card: the
+  // first-seen display form becomes the canonical key for its normalized name.
+  const narratorDisplayByNorm = new Map<string, string>()
   books.forEach((book) => {
-    const keys =
-      groupBy.value === 'authors'
-        ? book.authors?.[0]
-          ? [book.authors[0]]
-          : []
-        : getBookSeriesNames(book)
+    // A book contributes one membership per group key. Authors map to a single
+    // key; series may be several; narrators fan out — one membership per credited
+    // person, matched case-/punctuation-insensitively so casing variants merge.
+    // Non-person credits ("Full Cast") are excluded so the list stays browsable people.
+    let keys: string[]
+    if (groupBy.value === 'narrators') {
+      const seen = new Set<string>()
+      keys = []
+      for (const raw of book.narrators ?? []) {
+        const display = (raw ?? '').trim()
+        if (!display || isNonPersonNarrator(display)) continue
+        const norm = normalizeCollectionText(display)
+        if (!norm || seen.has(norm)) continue
+        seen.add(norm)
+        const canonical = narratorDisplayByNorm.get(norm)
+        if (canonical) {
+          keys.push(canonical)
+        } else {
+          narratorDisplayByNorm.set(norm, display)
+          keys.push(display)
+        }
+      }
+    } else {
+      keys =
+        groupBy.value === 'authors'
+          ? book.authors?.[0]
+            ? [book.authors[0]]
+            : []
+          : getBookSeriesNames(book)
+    }
     for (const key of keys) {
       if (!key) continue
       if (!groups.has(key)) {
@@ -1625,8 +1905,10 @@ const sortOptions = computed(() => {
       { value: 'author-first', label: 'Author First Name' },
       { value: 'narrator-last', label: 'Narrator Last Name' },
       { value: 'narrator-first', label: 'Narrator First Name' },
+      { value: 'series', label: 'Series' },
       { value: 'publisher', label: 'Publisher' },
       { value: 'year', label: 'Release Year' },
+      { value: 'imported', label: 'Recently Imported' },
       { value: 'monitored', label: 'Monitored' },
       { value: 'status', label: 'Status' },
     ]
@@ -1638,6 +1920,15 @@ const sortOptions = computed(() => {
       { value: 'author-last', label: 'Author Last Name' },
       { value: 'author-first', label: 'Author First Name' },
       { value: 'count', label: 'Books' }, // number of books in the collection
+    ]
+  }
+
+  // Narrators are people too — sort by name (reuses author-name sort keys) or count.
+  if (groupBy.value === 'narrators') {
+    return [
+      { value: 'author-last', label: 'Narrator Last Name' },
+      { value: 'author-first', label: 'Narrator First Name' },
+      { value: 'count', label: 'Books' },
     ]
   }
 
@@ -1712,7 +2003,32 @@ const BUFFER_ROWS = 2 // Extra rows to render above and below viewport
 const measuredRowHeight = ref<number | null>(null)
 
 // Local storage key for persisting view mode
-const VIEWMODE_KEY = 'listenarr.viewMode'
+// View mode is persisted per grouping so users can have, e.g., grid for books
+// but list for authors. The legacy single key is consulted once for migration —
+// when a per-grouping key is unset, we seed it from the legacy value.
+const VIEWMODE_KEY_LEGACY = 'listenarr.viewMode'
+const VIEWMODE_KEYS = {
+  books: 'listenarr.viewMode.books',
+  authors: 'listenarr.viewMode.authors',
+  series: 'listenarr.viewMode.series',
+  narrators: 'listenarr.viewMode.narrators',
+} as const
+
+function loadViewModeFor(g: GroupByMode): 'grid' | 'list' {
+  try {
+    const legacy = localStorage.getItem(VIEWMODE_KEY_LEGACY)
+    if (legacy === 'grid' || legacy === 'list') {
+      for (const k of Object.values(VIEWMODE_KEYS)) {
+        if (localStorage.getItem(k) === null) localStorage.setItem(k, legacy)
+      }
+    }
+    const stored = localStorage.getItem(VIEWMODE_KEYS[g])
+    if (stored === 'grid' || stored === 'list') return stored
+  } catch {
+    /* ignore localStorage errors (e.g., privacy mode) */
+  }
+  return 'grid'
+}
 
 const viewMode = ref<'grid' | 'list'>('grid')
 
@@ -1972,7 +2288,7 @@ async function initializeVirtualScroller() {
   if (!stopPersistViewModeWatch) {
     stopPersistViewModeWatch = watch(viewMode, (v) => {
       try {
-        localStorage.setItem(VIEWMODE_KEY, v)
+        localStorage.setItem(VIEWMODE_KEYS[groupBy.value], v)
       } catch {
         /* ignore */
       }
@@ -1988,15 +2304,8 @@ onMounted(async () => {
     loadQualityProfiles(),
   ])
 
-  // Load persisted view mode (if available) before layout calc
-  try {
-    const stored = localStorage.getItem(VIEWMODE_KEY)
-    if (stored === 'list' || stored === 'grid') {
-      viewMode.value = stored as 'grid' | 'list'
-    }
-  } catch {
-    // ignore localStorage errors (e.g., privacy mode)
-  }
+  // Load persisted view mode for the active grouping before layout calc
+  viewMode.value = loadViewModeFor(groupBy.value)
 
   await initializeVirtualScroller()
 
@@ -2156,7 +2465,8 @@ async function setGroupBy(mode: GroupByMode) {
 }
 
 function navigateToCollection(collection: { name: string }) {
-  const type = groupBy.value === 'authors' ? 'author' : 'series'
+  const type =
+    groupBy.value === 'authors' ? 'author' : groupBy.value === 'narrators' ? 'narrator' : 'series'
   router.push(`/collection/${type}/${encodeURIComponent(collection.name)}`)
 }
 
@@ -3912,7 +4222,7 @@ defineExpose({
 
 .audiobook-list-item {
   display: grid;
-  grid-template-columns: 40px 64px 1fr auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 260px 120px;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -3988,7 +4298,7 @@ defineExpose({
 /* Header row to mimic table columns */
 .list-header {
   display: grid;
-  grid-template-columns: 40px 64px 1fr auto 120px;
+  grid-template-columns: 40px 64px minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) 260px 120px;
   gap: 12px;
   padding: 8px 12px;
   color: #aaa;
@@ -4125,5 +4435,99 @@ defineExpose({
   background: rgba(134, 142, 150, 0.18);
   color: #adb5bd;
   border: 1px solid rgba(134, 142, 150, 0.35);
+}
+
+/* Series / Narrator list columns (books grouping) */
+.list-header .col-series,
+.list-header .col-narrator {
+  opacity: 0.9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.list-header .col-series.sortable,
+.list-header .col-narrator.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.list-header .col-series.sortable:hover,
+.list-header .col-narrator.sortable:hover {
+  color: #fff;
+}
+.list-header .col-series.sort-active,
+.list-header .col-narrator.sort-active {
+  color: #fff;
+  opacity: 1;
+}
+.list-header .col-series.sortable:focus-visible,
+.list-header .col-narrator.sortable:focus-visible {
+  outline: 2px solid rgba(140, 180, 255, 0.6);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.list-header .sort-caret {
+  width: 12px;
+  height: 12px;
+}
+
+.col-series-cell,
+.col-narrator-cell {
+  font-size: 13px;
+  color: #ddd;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.col-series-cell .series-name,
+.col-narrator-cell .narrator-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.col-series-cell .extra-count,
+.col-narrator-cell .extra-count {
+  font-size: 11px;
+  color: #888;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.col-series-cell .muted,
+.col-narrator-cell .muted {
+  color: #555;
+}
+
+/* Hide the Series/Narrator lines in the extra-details sub-row when the
+   dedicated columns are visible. The .list-narrow-only* classes are unhidden
+   at the same breakpoint where the columns collapse. */
+.list-narrow-only-block,
+.list-narrow-only-inline {
+  display: none;
+}
+
+/* Below 1100px the Series and Narrator columns collapse — surface them in
+   the existing extra-details sub-row instead. */
+@media (max-width: 1099px) {
+  .audiobook-list-item {
+    grid-template-columns: 40px 64px 1fr auto 120px;
+  }
+  .list-header {
+    grid-template-columns: 40px 64px 1fr auto 120px;
+  }
+  .list-header .col-series,
+  .list-header .col-narrator,
+  .col-series-cell,
+  .col-narrator-cell {
+    display: none;
+  }
+  .list-narrow-only-block {
+    display: block;
+  }
+  .list-narrow-only-inline {
+    display: inline;
+  }
 }
 </style>
