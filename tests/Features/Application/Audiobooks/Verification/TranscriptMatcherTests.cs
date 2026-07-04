@@ -36,6 +36,33 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Tokenize_CanonicalizesOrdinals_DigitAndWordFormsMeet()
+        {
+            // Live false-flag: "1st Case" scored 50% against a spoken "first case"
+            // because "1st" and "first" compared as unrelated tokens.
+            Assert.Equal(TranscriptMatcher.Tokenize("1st Case"), TranscriptMatcher.Tokenize("First Case"));
+            Assert.Contains("1", TranscriptMatcher.Tokenize("1st Case"));
+            Assert.Contains("22", TranscriptMatcher.Tokenize("catch the 22nd"));
+            Assert.Contains("90", TranscriptMatcher.Tokenize("ninety"));
+            // Multi-token composition is out of scope: "1984" stays a single
+            // digit token and "nineteen eighty four" stays three.
+            Assert.Equal(new[] { "1984" }, TranscriptMatcher.Tokenize("1984"));
+            Assert.Equal(new[] { "19", "80", "4" }, TranscriptMatcher.Tokenize("nineteen eighty four"));
+        }
+
+        [Fact]
+        public void MatchTitle_DigitOrdinalTitle_MatchesSpokenOrdinal()
+        {
+            var tokens = TranscriptMatcher.Tokenize(
+                "Hachette Audio presents First Case by James Patterson narrated by Brittany Pressley");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "1st Case");
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.95, $"expected ~1.0, got {match.Score}");
+        }
+
+        [Fact]
         public void MatchTitle_ExactSpokenTitle_ScoresHigh()
         {
             var tokens = TranscriptMatcher.Tokenize(HailMaryCredits);

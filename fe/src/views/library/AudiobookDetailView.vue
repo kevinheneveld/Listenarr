@@ -412,11 +412,15 @@
                   </div>
                 </div>
               </div>
+            </div>
+            <!-- Remedies live OUTSIDE the heardCredits row so manual verdicts are
+                 available even when the audio announced nothing (NoSpokenCredits). -->
+            <div class="detail-row">
               <div class="verification-remedies">
                 <button
                   v-if="
                     audiobook.verificationStatus === 'agentFlagged' &&
-                    (heardCredits.title || heardCredits.author)
+                    (heardCredits?.title || heardCredits?.author)
                   "
                   type="button"
                   class="show-more-btn relabel-btn"
@@ -424,6 +428,33 @@
                   @click="showRelabelModal = true"
                 >
                   Find correct match…
+                </button>
+                <template v-if="!hasManualVerdict">
+                  <button
+                    type="button"
+                    class="show-more-btn manual-verify-btn"
+                    title="Manually confirm this audio matches the metadata. Sticky — agent passes never overwrite it."
+                    @click="setManualVerification('verify')"
+                  >
+                    Mark verified
+                  </button>
+                  <button
+                    type="button"
+                    class="show-more-btn manual-reject-btn"
+                    title="Manually mark this audio as NOT the listed book. Sticky — agent passes never overwrite it."
+                    @click="setManualVerification('reject')"
+                  >
+                    Mark wrong content
+                  </button>
+                </template>
+                <button
+                  v-else
+                  type="button"
+                  class="show-more-btn"
+                  title="Remove the manual verdict and hand the book back to the agent for future passes"
+                  @click="setManualVerification('clear')"
+                >
+                  Clear manual verdict
                 </button>
               </div>
             </div>
@@ -1161,6 +1192,42 @@ async function verifyAudio() {
     verifyingAudio.value = false
     const message = err instanceof Error ? err.message : 'Unknown error'
     toast.error('Could not start audio verification', message)
+  }
+}
+
+// Manual verdicts are sticky: agent passes never overwrite ManuallyVerified /
+// Rejected. "clear" hands the book back to the agent (next pass may re-verdict).
+const hasManualVerdict = computed(
+  () =>
+    audiobook.value?.verificationStatus === 'manuallyVerified' ||
+    audiobook.value?.verificationStatus === 'rejected',
+)
+
+async function setManualVerification(action: 'verify' | 'reject' | 'clear') {
+  const book = audiobook.value
+  if (!book) return
+  const toast = useToast()
+  try {
+    const result = await apiService.setManualVerification(book.id, action)
+    audiobook.value = {
+      ...book,
+      verificationStatus: result.verificationStatus,
+      verificationConfidence: result.verificationConfidence,
+      verifiedAt: result.verifiedAt,
+      verifiedBy: result.verifiedBy,
+      verificationMethod: result.verificationMethod,
+    }
+    if (action === 'clear') {
+      toast.success('Verification cleared', 'This book is eligible for the next agent pass again.')
+    } else {
+      toast.success(
+        action === 'verify' ? 'Marked as verified' : 'Marked as rejected',
+        'Manual judgements are sticky — agent passes will never overwrite them.',
+      )
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not update verification', message)
   }
 }
 
@@ -4163,6 +4230,32 @@ a.identifier-link:hover {
 .relabel-btn {
   margin-top: 0.6rem;
   align-self: flex-start;
+}
+
+/* Inside the remedies row the flex gap does the spacing — align all buttons. */
+.verification-remedies .relabel-btn {
+  margin-top: 0;
+}
+
+/* Manual verdict controls: green = confirm, red = wrong content. Both sticky. */
+.manual-verify-btn {
+  border-color: rgba(46, 204, 113, 0.5);
+  color: #2ecc71;
+  background-color: rgba(46, 204, 113, 0.08);
+}
+
+.manual-verify-btn:hover {
+  background-color: rgba(46, 204, 113, 0.18);
+}
+
+.manual-reject-btn {
+  border-color: rgba(231, 76, 60, 0.5);
+  color: #e74c3c;
+  background-color: rgba(231, 76, 60, 0.08);
+}
+
+.manual-reject-btn:hover {
+  background-color: rgba(231, 76, 60, 0.18);
 }
 
 .split-collection-btn {

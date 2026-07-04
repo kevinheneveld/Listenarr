@@ -45,15 +45,44 @@ namespace Listenarr.Application.Audiobooks.Verification
         };
 
         // STT emits numbers either as digits or words; map the small ones so
-        // "Book 2" matches a spoken "book two".
+        // "Book 2" matches a spoken "book two". Ordinal words map to the same
+        // canonical digits ("first" -> "1") so "1st Case" matches a spoken
+        // "first case" (live false-flag: title scored 50% on exactly that).
+        // Single-token mappings only — multi-token composition ("nineteen
+        // eighty four" -> "1984") is deliberately out of scope.
         private static readonly Dictionary<string, string> NumberWords = new(StringComparer.Ordinal)
         {
             ["zero"] = "0", ["one"] = "1", ["two"] = "2", ["three"] = "3", ["four"] = "4",
             ["five"] = "5", ["six"] = "6", ["seven"] = "7", ["eight"] = "8", ["nine"] = "9",
             ["ten"] = "10", ["eleven"] = "11", ["twelve"] = "12", ["thirteen"] = "13",
             ["fourteen"] = "14", ["fifteen"] = "15", ["sixteen"] = "16", ["seventeen"] = "17",
-            ["eighteen"] = "18", ["nineteen"] = "19", ["twenty"] = "20"
+            ["eighteen"] = "18", ["nineteen"] = "19", ["twenty"] = "20",
+            ["thirty"] = "30", ["forty"] = "40", ["fifty"] = "50", ["sixty"] = "60",
+            ["seventy"] = "70", ["eighty"] = "80", ["ninety"] = "90", ["hundred"] = "100",
+            ["first"] = "1", ["second"] = "2", ["third"] = "3", ["fourth"] = "4",
+            ["fifth"] = "5", ["sixth"] = "6", ["seventh"] = "7", ["eighth"] = "8",
+            ["ninth"] = "9", ["tenth"] = "10", ["eleventh"] = "11", ["twelfth"] = "12",
+            ["thirteenth"] = "13", ["fourteenth"] = "14", ["fifteenth"] = "15",
+            ["sixteenth"] = "16", ["seventeenth"] = "17", ["eighteenth"] = "18",
+            ["nineteenth"] = "19", ["twentieth"] = "20"
         };
+
+        // Digit ordinals ("1st", "22nd", "103rd") reduce to their digits so they
+        // meet the ordinal words above at the same canonical form.
+        private static readonly Regex DigitOrdinalPattern = new(@"^(\d+)(st|nd|rd|th)$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Canonicalizes one lowercase token's numeral form: ordinal/cardinal
+        /// words and digit ordinals all reduce to plain digits. Pure — applied
+        /// identically to transcript and expected-field tokens via
+        /// <see cref="Tokenize"/>, so the two sides can never disagree on form.
+        /// </summary>
+        public static string CanonicalizeNumeralToken(string token)
+        {
+            if (NumberWords.TryGetValue(token, out var mapped)) return mapped;
+            var ordinal = DigitOrdinalPattern.Match(token);
+            return ordinal.Success ? ordinal.Groups[1].Value : token;
+        }
 
         /// <summary>Lowercase word tokens of a transcript, numbers canonicalized to digits.</summary>
         public static IReadOnlyList<string> Tokenize(string? text)
@@ -62,7 +91,7 @@ namespace Listenarr.Application.Audiobooks.Verification
             return TokenPattern.Matches(text.ToLowerInvariant())
                 .Select(m => m.Value.Trim('\''))
                 .Where(t => t.Length > 0)
-                .Select(t => NumberWords.GetValueOrDefault(t, t))
+                .Select(CanonicalizeNumeralToken)
                 .ToList();
         }
 
