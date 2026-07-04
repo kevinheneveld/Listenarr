@@ -35,10 +35,19 @@ vi.mock('@/services/api', () => ({
 
 type AudiobooksVm = {
   setGroupBy?: (value: string) => Promise<void> | void
-  groupedCollections?: Array<{ name: string; count: number; coverUrl?: string }>
+  groupedCollections?: Array<{
+    name: string
+    count: number
+    readyCount: number
+    qualityMismatchCount: number
+    coverUrl?: string
+    coverUrls?: string[]
+  }>
   showItemDetails?: boolean
   groupBy?: string
   visibleRange?: { start: number; end: number }
+  viewMode?: 'grid' | 'list'
+  toggleViewMode?: () => void
 }
 
 const getVm = (wrapper: ReturnType<typeof mount>) => wrapper.vm as unknown as AudiobooksVm
@@ -206,11 +215,15 @@ describe('AudiobooksView Grouping', () => {
     expect(groupedCollections.find((g) => g.name === 'Author A')).toEqual({
       name: 'Author A',
       count: 2,
+      readyCount: 0,
+      qualityMismatchCount: 0,
       coverUrl: undefined,
     })
     expect(groupedCollections.find((g) => g.name === 'Author B')).toEqual({
       name: 'Author B',
       count: 1,
+      readyCount: 0,
+      qualityMismatchCount: 0,
       coverUrl: undefined,
     })
 
@@ -299,11 +312,15 @@ describe('AudiobooksView Grouping', () => {
     expect(groupedCollections.find((g) => g.name === 'Series 1')).toEqual({
       name: 'Series 1',
       count: 2,
+      readyCount: 0,
+      qualityMismatchCount: 0,
       coverUrls: ['cover1.jpg', 'cover2.jpg'],
     })
     expect(groupedCollections.find((g) => g.name === 'Series 2')).toEqual({
       name: 'Series 2',
       count: 1,
+      readyCount: 0,
+      qualityMismatchCount: 0,
       coverUrls: ['cover3.jpg'],
     })
   })
@@ -795,4 +812,196 @@ describe('AudiobooksView Grouping', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.series-bottom-placard').exists()).toBe(true)
   })
+
+  it('tracks readyCount and qualityMismatchCount per collection from server status', async () => {
+    if (
+      typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver === 'undefined'
+    ) {
+      ;(globalThis as unknown as Record<string, unknown>).ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+      }
+    }
+    if (typeof (globalThis as unknown as { WebSocket?: unknown }).WebSocket === 'undefined') {
+      ;(globalThis as unknown as Record<string, unknown>).WebSocket = function () {
+        /* noop */
+      }
+    }
+
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/audiobooks', name: 'audiobooks', component: AudiobooksView },
+      ],
+    })
+    await router.push('/audiobooks')
+    await router.isReady().catch(() => {})
+
+    const store = useLibraryStore()
+    // Author A: one at-cutoff book and one below-cutoff book (both ready);
+    // Author B: one wanted book with no audio (not ready).
+    store.audiobooks = [
+      {
+        id: 1,
+        title: 'Book 1',
+        authors: ['Author A'],
+        imageUrl: 'cover1.jpg',
+        status: 'quality-match',
+      },
+      {
+        id: 2,
+        title: 'Book 2',
+        authors: ['Author A'],
+        imageUrl: 'cover2.jpg',
+        status: 'quality-mismatch',
+      },
+      {
+        id: 3,
+        title: 'Book 3',
+        authors: ['Author B'],
+        imageUrl: 'cover3.jpg',
+        status: 'no-file',
+      },
+    ] as unknown as import('@/types').Audiobook[]
+
+    store.fetchLibrary = vi.fn(async () => undefined)
+    const wrapper = mount(AudiobooksView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: [
+          'BulkEditModal',
+          'EditAudiobookModal',
+          'CustomFilterModal',
+          'FiltersDropdown',
+          'CustomSelect',
+        ],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+
+    const vm = getVm(wrapper)
+    await vm.setGroupBy?.('authors')
+    await wrapper.vm.$nextTick()
+
+    const groups = vm.groupedCollections ?? []
+    const a = groups.find((g) => g.name === 'Author A')!
+    const b = groups.find((g) => g.name === 'Author B')!
+    expect(a.count).toBe(2)
+    expect(a.readyCount).toBe(2)
+    expect(a.qualityMismatchCount).toBe(1)
+    expect(b.count).toBe(1)
+    expect(b.readyCount).toBe(0)
+    expect(b.qualityMismatchCount).toBe(0)
+  })
+
+  it.each([
+    ['authors', 'Author A', 'Author B'],
+    ['series', 'Series 1', 'Series 2'],
+    ['narrators', 'Narrator A', 'Narrator B'],
+  ] as const)(
+    'renders collection list rows when viewMode is list and groupBy is %s',
+    async (group, firstName, secondName) => {
+      if (
+        typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver ===
+        'undefined'
+      ) {
+        ;(globalThis as unknown as Record<string, unknown>).ResizeObserver = class {
+          observe() {}
+          disconnect() {}
+        }
+      }
+      if (typeof (globalThis as unknown as { WebSocket?: unknown }).WebSocket === 'undefined') {
+        ;(globalThis as unknown as Record<string, unknown>).WebSocket = function () {
+          /* noop */
+        }
+      }
+
+      // Clear persistence keys so this test isn't affected by other tests.
+      localStorage.removeItem('listenarr.viewMode')
+      localStorage.removeItem('listenarr.viewMode.books')
+      localStorage.removeItem('listenarr.viewMode.authors')
+      localStorage.removeItem('listenarr.viewMode.series')
+      localStorage.removeItem('listenarr.viewMode.narrators')
+
+      const pinia = createPinia()
+      setActivePinia(pinia)
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [
+          { path: '/', name: 'home', component: { template: '<div />' } },
+          { path: '/audiobooks', name: 'audiobooks', component: AudiobooksView },
+          {
+            path: '/collection/:type/:name',
+            name: 'collection',
+            component: { template: '<div />' },
+          },
+        ],
+      })
+      await router.push('/audiobooks')
+      await router.isReady().catch(() => {})
+
+      const store = useLibraryStore()
+      store.audiobooks = [
+        {
+          id: 1,
+          title: 'Book 1',
+          authors: ['Author A'],
+          series: 'Series 1',
+          narrators: ['Narrator A'],
+          imageUrl: 'cover1.jpg',
+        },
+        {
+          id: 2,
+          title: 'Book 2',
+          authors: ['Author A'],
+          series: 'Series 1',
+          narrators: ['Narrator A'],
+          imageUrl: 'cover2.jpg',
+        },
+        {
+          id: 3,
+          title: 'Book 3',
+          authors: ['Author B'],
+          series: 'Series 2',
+          narrators: ['Narrator B'],
+          imageUrl: 'cover3.jpg',
+        },
+      ] as unknown as import('@/types').Audiobook[]
+
+      store.fetchLibrary = vi.fn(async () => undefined)
+      const wrapper = mount(AudiobooksView, {
+        global: {
+          plugins: [pinia, router],
+          stubs: [
+            'BulkEditModal',
+            'EditAudiobookModal',
+            'CustomFilterModal',
+            'FiltersDropdown',
+            'CustomSelect',
+          ],
+        },
+      })
+      await new Promise((r) => setTimeout(r, 0))
+
+      const vm = getVm(wrapper)
+      // Per-grouping viewMode persistence: switch grouping first, then toggle
+      // that grouping's own mode (matches the real user flow).
+      await vm.setGroupBy?.(group)
+      vm.toggleViewMode?.()
+      await wrapper.vm.$nextTick()
+
+      expect(vm.viewMode).toBe('list')
+      const rows = wrapper.findAll('.collection-list-item')
+      expect(rows).toHaveLength(2)
+      // Grid-mode card markup should NOT be present when list mode is active.
+      expect(wrapper.find('.grouped-grid').exists()).toBe(false)
+
+      const names = rows.map((r) => r.find('.audiobook-title').text())
+      expect(names).toContain(firstName)
+      expect(names).toContain(secondName)
+    },
+  )
 })

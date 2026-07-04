@@ -245,7 +245,66 @@
 
     <!-- Grouped View -->
     <div v-else-if="groupBy !== 'books'" class="grouped-view">
-      <div class="grouped-grid">
+      <!-- List rendering for grouped collections (authors / series / narrators) -->
+      <div v-if="viewMode === 'list'" class="audiobooks-list collections-list">
+        <div
+          v-if="groupedCollections && groupedCollections.length > 0"
+          class="list-header collections-list-header"
+        >
+          <div class="col-cover">Cover</div>
+          <div class="col-title">
+            {{ groupBy === 'authors' ? 'Author' : groupBy === 'narrators' ? 'Narrator' : 'Series' }}
+          </div>
+          <div class="col-count">Books</div>
+        </div>
+        <div
+          v-for="collection in groupedCollections || []"
+          :key="`collection-list-${collection.name}`"
+          class="audiobook-list-item collection-list-item"
+          :class="{
+            'author-collection': groupBy === 'authors',
+            'series-collection': groupBy === 'series' || groupBy === 'narrators',
+          }"
+          tabindex="0"
+          role="button"
+          :aria-label="`Open ${collection.name}`"
+          @click="navigateToCollection(collection)"
+          @keydown="onCollectionRowKeydown(collection, $event)"
+        >
+          <img
+            class="list-thumb"
+            :src="
+              getProtectedImageSrc(
+                groupBy === 'authors'
+                  ? getAuthorImageUrl(collection)
+                  : collection.coverUrls && collection.coverUrls[0],
+                getPlaceholderUrl(),
+              )
+            "
+            :alt="collection.name"
+            loading="lazy"
+            decoding="async"
+            @error="handleImageError"
+          />
+          <div class="list-details">
+            <div class="audiobook-title">{{ collection.name }}</div>
+          </div>
+          <div class="collection-count">
+            <span
+              class="collection-have-count"
+              :class="{
+                'count-all-good':
+                  collection.readyCount > 0 && collection.qualityMismatchCount === 0,
+                'count-has-mismatch':
+                  collection.readyCount > 0 && collection.qualityMismatchCount > 0,
+              }"
+              >{{ collection.readyCount }}</span
+            >
+            / {{ collection.count }} book{{ collection.count !== 1 ? 's' : '' }}
+          </div>
+        </div>
+      </div>
+      <div v-else class="grouped-grid">
         <div
           v-for="collection in groupedCollections || []"
           :key="collection.name"
@@ -1706,13 +1765,47 @@ function getBookSeriesNames(book: Audiobook): string[] {
   return legacy ? [legacy] : []
 }
 
+const activeDownloadAudiobookIds = computed(() => {
+  const ids = new Set<number>()
+  for (const download of downloadsStore.activeDownloads || []) {
+    if (typeof download?.audiobookId === 'number') {
+      ids.add(download.audiobookId)
+    }
+  }
+  return ids
+})
+
+function computeAudiobookStatusRaw(audiobook: Audiobook): AudiobookStatus {
+  return computeAudiobookStatus(audiobook, activeDownloadAudiobookIds.value)
+}
+
+const audiobookStatusById = computed(() => {
+  const map = new Map<number, AudiobookStatus>()
+  for (const book of libraryStore.audiobooks || []) {
+    if (!book?.id) continue
+    map.set(book.id, computeAudiobookStatusRaw(book))
+  }
+  return map
+})
+
+function getAudiobookStatus(audiobook: Audiobook): AudiobookStatus {
+  return audiobookStatusById.value.get(audiobook.id) ?? computeAudiobookStatusRaw(audiobook)
+}
+
 const groupedCollections = computed(() => {
   if (groupBy.value === 'books') return []
 
   const books = filteredAndSortedAudiobooks.value
   const groups = new Map<
     string,
-    { name: string; count: number; coverUrl?: string; coverUrls?: string[] }
+    {
+      name: string
+      count: number
+      readyCount: number
+      qualityMismatchCount: number
+      coverUrl?: string
+      coverUrls?: string[]
+    }
   >()
 
   // Casing/punctuation variants of the same narrator merge into one card: the
@@ -1776,13 +1869,32 @@ const groupedCollections = computed(() => {
             } catch {}
           }
 
-          groups.set(key, { name: key, count: 0, coverUrl: cover })
+          groups.set(key, {
+            name: key,
+            count: 0,
+            readyCount: 0,
+            qualityMismatchCount: 0,
+            coverUrl: cover,
+          })
         } else {
-          groups.set(key, { name: key, count: 0, coverUrls: [] })
+          groups.set(key, {
+            name: key,
+            count: 0,
+            readyCount: 0,
+            qualityMismatchCount: 0,
+            coverUrls: [],
+          })
         }
       }
       const group = groups.get(key)!
       group.count++
+      // Ready = the book has usable audio (server-computed status); a mismatch
+      // still counts as ready but tints the list count as below-cutoff.
+      const status = getAudiobookStatus(book)
+      if (status === 'quality-match' || status === 'quality-mismatch') {
+        group.readyCount++
+        if (status === 'quality-mismatch') group.qualityMismatchCount++
+      }
       const bookCover = getBookImageUrl(book)
       if (groupBy.value === 'authors') {
         try {
@@ -1790,7 +1902,11 @@ const groupedCollections = computed(() => {
           if (authorAsin) group.coverUrl = buildApiPath(`/images/${encodeURIComponent(authorAsin)}`)
         } catch {}
       }
-      if (groupBy.value === 'series' && group.coverUrls && group.coverUrls.length < 8) {
+      if (
+        (groupBy.value === 'series' || groupBy.value === 'narrators') &&
+        group.coverUrls &&
+        group.coverUrls.length < 8
+      ) {
         if (bookCover && !group.coverUrls.includes(bookCover)) {
           group.coverUrls.push(bookCover)
         }
@@ -2196,32 +2312,7 @@ const showEditModal = ref(false)
 const editAudiobook = ref<Audiobook | null>(null)
 const lastClickedIndex = ref<number | null>(null)
 
-const activeDownloadAudiobookIds = computed(() => {
-  const ids = new Set<number>()
-  for (const download of downloadsStore.activeDownloads || []) {
-    if (typeof download?.audiobookId === 'number') {
-      ids.add(download.audiobookId)
-    }
-  }
-  return ids
-})
-
-function computeAudiobookStatusRaw(audiobook: Audiobook): AudiobookStatus {
-  return computeAudiobookStatus(audiobook, activeDownloadAudiobookIds.value)
-}
-
-const audiobookStatusById = computed(() => {
-  const map = new Map<number, AudiobookStatus>()
-  for (const book of libraryStore.audiobooks || []) {
-    if (!book?.id) continue
-    map.set(book.id, computeAudiobookStatusRaw(book))
-  }
-  return map
-})
-
-function getAudiobookStatus(audiobook: Audiobook): AudiobookStatus {
-  return audiobookStatusById.value.get(audiobook.id) ?? computeAudiobookStatusRaw(audiobook)
-}
+// (audiobook status helpers are declared above groupedCollections — they feed its ready counts)
 
 // Native loading="lazy" handles all image loading automatically - no custom code needed
 
@@ -2382,6 +2473,15 @@ function openStatusDetails(audiobook: Audiobook) {
 
 function navigateToDetail(id: number) {
   router.push(`/audiobooks/${id}`)
+}
+
+// Single keydown handler: two @keydown modifiers on one element compile to a
+// duplicate onKeydown key, which the pinned vue-tsc (3.x) rejects (TS1117).
+function onCollectionRowKeydown(collection: { name: string }, event: KeyboardEvent) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    navigateToCollection(collection)
+  }
 }
 
 function toggleViewMode() {
@@ -2814,6 +2914,8 @@ defineExpose({
   setGroupBy,
   groupedCollections,
   showItemDetails,
+  viewMode,
+  toggleViewMode,
 })
 </script>
 
@@ -4319,6 +4421,38 @@ defineExpose({
 }
 .list-header .col-actions {
   text-align: right;
+}
+
+/* Collection list rows (author / series / narrator grouping in list view) */
+.collections-list-header {
+  grid-template-columns: 64px 1fr auto;
+}
+
+.collections-list-header .col-count {
+  opacity: 0.9;
+  text-align: right;
+}
+
+.collection-list-item {
+  grid-template-columns: 64px 1fr auto;
+}
+
+.collection-list-item .collection-count {
+  font-size: 12px;
+  color: #ccc;
+  text-align: right;
+}
+
+.collection-have-count {
+  font-weight: 600;
+}
+
+.collection-have-count.count-all-good {
+  color: #2ecc71;
+}
+
+.collection-have-count.count-has-mismatch {
+  color: #f39c12;
 }
 
 /* Position badges between details and actions */
