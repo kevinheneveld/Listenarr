@@ -60,10 +60,24 @@
 
           <!-- Metadata -->
           <div class="form-group">
-            <label class="form-label" for="metadata-title">
-              <PhInfo></PhInfo>
-              Metadata
-            </label>
+            <div class="metadata-header">
+              <label class="form-label" for="metadata-title">
+                <PhInfo></PhInfo>
+                Metadata
+              </label>
+              <div class="fill-missing-actions">
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm fill-missing-btn"
+                  :disabled="!props.audiobook"
+                  title="Compare this book's metadata against Audible and pick which fields to overwrite."
+                  @click="openMetadataBackfill"
+                >
+                  <PhDownloadSimple :size="14" />
+                  Fill missing from online…
+                </button>
+              </div>
+            </div>
             <div class="form-control-card">
               <div class="metadata-grid">
                 <div class="metadata-field metadata-field--wide">
@@ -761,6 +775,13 @@
     @cancel="cancelMoveConfirm"
     @confirm="handleMoveConfirm"
   />
+
+  <MetadataBackfillModal
+    :visible="showMetadataBackfill"
+    :audiobook="baselineAudiobook"
+    @close="showMetadataBackfill = false"
+    @applied="onMetadataBackfillApplied"
+  />
 </template>
 
 <script setup lang="ts">
@@ -786,6 +807,7 @@ import {
   PhFolder,
   PhPlus,
   PhInfo,
+  PhDownloadSimple,
   PhEye,
   PhStar,
   PhTag,
@@ -800,6 +822,7 @@ import RadioCard from '@/components/settings/RadioCard.vue'
 import FolderBrowserModal from '@/components/feedback/FolderBrowserModal.vue'
 import { Modal, ModalHeader, ModalBody } from '@/components/feedback'
 import MoveAudiobookModal from '@/components/feedback/MoveAudiobookModal.vue'
+import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 // FormRow and CheckboxCard not used in this component script; UI uses local markup
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { usePathLengthCheck } from '@/composables/usePathLengthCheck'
@@ -872,6 +895,19 @@ const emit = defineEmits<{
   close: []
   saved: []
 }>()
+
+// Online metadata-backfill modal state. The modal applies changes directly
+// via PUT /library/{id} on its own; on `applied` we close this modal and
+// emit `saved` so the parent (detail view) refreshes the audiobook.
+const showMetadataBackfill = ref(false)
+function openMetadataBackfill() {
+  showMetadataBackfill.value = true
+}
+function onMetadataBackfillApplied() {
+  showMetadataBackfill.value = false
+  emit('saved')
+  emit('close')
+}
 
 const qualityProfiles = ref<QualityProfile[]>([])
 const configStore = useConfigurationStore()
@@ -3115,5 +3151,27 @@ function close() {
   flex: 1;
   width: 100%;
   min-width: 0;
+}
+.metadata-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.fill-missing-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.fill-missing-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 </style>

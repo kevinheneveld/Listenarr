@@ -256,6 +256,14 @@ vi.mock('@/services/signalr', () => ({
       void cb
       return () => {}
     },
+    onVerificationComplete: (cb?: (...args: unknown[]) => void) => {
+      void cb
+      return () => {}
+    },
+    onVerificationProgress: (cb?: (...args: unknown[]) => void) => {
+      void cb
+      return () => {}
+    },
   },
 }))
 

@@ -78,10 +78,22 @@
             <PhWaveform />
             <strong>{{ verification.unverifiable }}</strong> no spoken credits
           </RouterLink>
+          <button
+            v-if="inconclusiveIds.length > 0"
+            type="button"
+            class="health-chip scan"
+            :disabled="recheckPending"
+            title="Queue a fresh verification pass (with head-probe + model escalation) for every book the agent couldn't confidently match. Manually verified/rejected books are untouched."
+            @click="recheckInconclusive"
+          >
+            <PhSpinner v-if="recheckPending" class="ph-spin" />
+            <PhArrowClockwise v-else />
+            {{ recheckPending ? 'Queueing…' : `Re-check inconclusive (${inconclusiveIds.length})` }}
+          </button>
           <RouterLink
             class="health-chip ok"
             :class="{ zero: verification.verified === 0 }"
-            :to="{ path: '/audiobooks', query: { group: 'books' } }"
+            :to="{ path: '/audiobooks', query: { group: 'books', filter: 'verified' } }"
           >
             <PhShieldCheck />
             <strong>{{ verification.verified }}</strong> verified
@@ -228,6 +240,7 @@ import {
   PhXCircle,
   PhCopySimple,
   PhMagnifyingGlass,
+  PhArrowClockwise,
 } from '@phosphor-icons/vue'
 import { useLibraryStore } from '@/stores/library'
 import { useSearchActivityStore } from '@/stores/searchActivity'
@@ -258,6 +271,41 @@ const completeSeriesCount = computed(() => seriesRows.value.filter((s) => s.comp
 const incompleteSeries = computed(() => seriesRows.value.filter((s) => !s.complete))
 const visibleIncompleteSeries = computed(() => incompleteSeries.value.slice(0, seriesLimit.value))
 const verification = computed(() => verificationCounts(libraryStore.audiobooks))
+
+// Books worth a fresh verification pass: agent-flagged, agent-unverifiable,
+// and never-verified books that actually have audio. Manual verdicts are
+// sticky server-side, so they're excluded here AND skipped by the backend.
+const inconclusiveIds = computed(() =>
+  libraryStore.audiobooks
+    .filter(
+      (b) =>
+        b.verificationStatus === 'agentFlagged' ||
+        b.verificationStatus === 'agentUnverifiable' ||
+        ((b.verificationStatus === 'unverified' || !b.verificationStatus) &&
+          (b.fileCount ?? 0) > 0),
+    )
+    .map((b) => b.id),
+)
+const recheckPending = ref(false)
+
+async function recheckInconclusive() {
+  const ids = inconclusiveIds.value
+  if (ids.length === 0 || recheckPending.value) return
+  recheckPending.value = true
+  try {
+    // Single POST: the batch endpoint takes the full id list (a few hundred
+    // ints is trivial payload); the queue processes serially at idle priority.
+    await apiService.startLibraryVerification(ids)
+    toast.info(
+      'Re-check queued',
+      `${ids.length} book${ids.length === 1 ? '' : 's'} queued — the activity strip and badges update as verdicts land.`,
+    )
+  } catch (err) {
+    toast.error('Could not queue re-check', err instanceof Error ? err.message : 'Unknown error')
+  } finally {
+    recheckPending.value = false
+  }
+}
 
 async function scanDuplicates() {
   scanningDuplicates.value = true

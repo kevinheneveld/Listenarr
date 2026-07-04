@@ -120,6 +120,16 @@
           <PhFolderOpen />
           Organize Selected
         </button>
+        <button
+          v-if="selectedCount > 0"
+          class="toolbar-btn"
+          :disabled="verifyRequestPending"
+          title="Transcribe and re-check the selected books against their metadata (manually verified/rejected books are skipped)"
+          @click="verifySelected"
+        >
+          <PhShieldCheck />
+          Verify Selected ({{ selectedCount }})
+        </button>
         <button v-if="selectedCount > 0" class="toolbar-btn delete-btn" @click="confirmBulkDelete">
           <PhTrash />
           Delete Selected ({{ selectedCount }})
@@ -855,6 +865,8 @@ import { useConfigurationStore } from '@/stores/configuration'
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { useDownloadsStore } from '@/stores/downloads'
 import { apiService } from '@/services/api'
+import { signalRService } from '@/services/signalr'
+import { useToast } from '@/services/toastService'
 import { buildApiPath } from '@/services/apiBase'
 import { logger } from '@/utils/logger'
 import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
@@ -1107,6 +1119,16 @@ const filteredAndSortedAudiobooks = computed(() => {
     } else if (sid === 'no-spoken-credits') {
       // Neutral bucket: the audio never announces itself; browse separately.
       filtered = filtered.filter((b) => b.verificationStatus === 'agentUnverifiable')
+    } else if (sid === 'verified') {
+      // Confirmed one way or another: the agent matched it, or a human ruled it good.
+      filtered = filtered.filter(
+        (b) =>
+          b.verificationStatus === 'agentVerified' || b.verificationStatus === 'manuallyVerified',
+      )
+    } else if (sid === 'manually-verified') {
+      filtered = filtered.filter((b) => b.verificationStatus === 'manuallyVerified')
+    } else if (sid === 'rejected') {
+      filtered = filtered.filter((b) => b.verificationStatus === 'rejected')
     } else {
       // custom filter (supports grouping/parentheses)
       const cf = customFilters.value.find((x) => x.id === sid)
@@ -2011,6 +2033,7 @@ onUnmounted(() => {
     authorCardObserver?.disconnect()
   } catch {}
   document.removeEventListener('click', handleClickOutside)
+  unsubBulkVerifyComplete()
 })
 
 async function loadQualityProfiles() {
@@ -2248,6 +2271,59 @@ function getCoverStyle(index: number, count: number) {
     borderRadius: '6px',
   }
 }
+
+const toast = useToast()
+
+// Bulk audio re-verification (ADR-0001) for the current selection. Explicit
+// ids re-check agent-judged books too; manual states stay sticky and report
+// as "skipped". The walk runs server-side at idle priority — badges update
+// as verdicts land, and the list refreshes on the completion event.
+const verifyRequestPending = ref(false)
+let bulkVerifyJobId: string | null = null
+
+async function verifySelected() {
+  const ids = Array.from(libraryStore.selectedIds)
+  if (ids.length === 0 || verifyRequestPending.value) return
+  verifyRequestPending.value = true
+  try {
+    const result = await apiService.startLibraryVerification(ids)
+    bulkVerifyJobId = result.jobId
+    toast.info(
+      'Audio verification started',
+      `Re-checking ${ids.length} book${ids.length === 1 ? '' : 's'} — badges update as verdicts land.`,
+    )
+    libraryStore.clearSelection()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not start verification', message)
+  } finally {
+    verifyRequestPending.value = false
+  }
+}
+
+const unsubBulkVerifyComplete = signalRService.onVerificationComplete((payload) => {
+  if (!bulkVerifyJobId || payload.jobId !== bulkVerifyJobId) return
+  bulkVerifyJobId = null
+  if (payload.error) {
+    toast.error('Audio verification failed', payload.error)
+    return
+  }
+  const summary =
+    `${payload.verified} verified, ${payload.flagged} flagged` +
+    ((payload.unverifiable ?? 0) > 0 ? `, ${payload.unverifiable} unverifiable` : '') +
+    (payload.skipped > 0 ? `, ${payload.skipped} skipped` : '') +
+    (payload.failed > 0 ? `, ${payload.failed} failed` : '') +
+    '.'
+  if (payload.flagged > 0) {
+    toast.warning(
+      'Audio verification complete',
+      `${summary} Use the "Needs Review" filter to triage.`,
+    )
+  } else {
+    toast.success('Audio verification complete', summary)
+  }
+  void refreshLibrary()
+})
 
 async function refreshLibrary() {
   await libraryStore.fetchLibrary()

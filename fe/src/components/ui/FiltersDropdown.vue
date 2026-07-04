@@ -105,6 +105,9 @@ const builtInOptions = [
   { value: 'recent', label: 'Recently Added' },
   { value: 'needs-review', label: 'Needs Review (verification)' },
   { value: 'no-spoken-credits', label: 'No Spoken Credits (verification)' },
+  { value: 'verified', label: 'Verified (agent or manual)' },
+  { value: 'manually-verified', label: 'Manually Verified' },
+  { value: 'rejected', label: 'Rejected (verification)' },
 ]
 
 const customFilters = computed(() => props.customFilters || [])
