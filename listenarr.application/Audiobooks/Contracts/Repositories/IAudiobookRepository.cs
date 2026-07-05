@@ -47,6 +47,13 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         /// (live case: a verification reset reverted minutes after it was made).
         /// </summary>
         Task SetLastSearchTimeAsync(int audiobookId, DateTime lastSearchTimeUtc);
+
+        /// <summary>
+        /// Targeted single-column ImageUrl write. The cover-art sweep walks a
+        /// snapshot taken at sweep start; re-saving whole entities from it would
+        /// clobber concurrent edits (same rationale as SetLastSearchTimeAsync).
+        /// </summary>
+        Task SetImageUrlAsync(int audiobookId, string? imageUrl);
         Task<bool> DeleteAsync(Audiobook audiobook);
         Task<bool> DeleteByIdAsync(int id);
         Task<int> DeleteBulkAsync(List<int> ids);

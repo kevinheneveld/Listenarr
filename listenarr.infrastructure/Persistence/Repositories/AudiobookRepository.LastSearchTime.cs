@@ -49,5 +49,30 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 entry.State = EntityState.Detached;
             }
         }
+
+        public async Task SetImageUrlAsync(int audiobookId, string? imageUrl)
+        {
+            // Same detached-stub targeted write as SetLastSearchTimeAsync — the
+            // cover-art sweep must not re-save whole entities from its
+            // sweep-start snapshot over concurrent edits.
+            var tracked = _db.Audiobooks.Local.FirstOrDefault(a => a.Id == audiobookId);
+            if (tracked != null)
+            {
+                _db.Entry(tracked).State = EntityState.Detached;
+            }
+
+            var stub = new Audiobook { Id = audiobookId, ImageUrl = imageUrl };
+            var entry = _db.Entry(stub);
+            entry.Property(a => a.ImageUrl).IsModified = true;
+
+            try
+            {
+                await _db.SaveChangesAsync();
+            }
+            finally
+            {
+                entry.State = EntityState.Detached;
+            }
+        }
     }
 }

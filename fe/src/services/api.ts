@@ -1425,6 +1425,24 @@ class ApiService {
    * completed and failed jobs. Backs the in-modal and Maintenance-page
    * progress banner. `recentLimit` is clamped to [0, 200] server-side.
    */
+  // One-shot admin sweep: walks the whole library and downloads any
+  // remaining external http(s) cover URLs into local storage. Returns the
+  // counts so the caller can toast a summary. Idempotent on the backend —
+  // re-running after a successful sweep does nothing.
+  async cacheExternalCovers(): Promise<{
+    message: string
+    totalScanned: number
+    alreadyLocal: number
+    queued: number
+    succeeded: number
+    failed: number
+    durationMs: number
+  }> {
+    return this.request('/library/cache-external-covers', {
+      method: 'POST',
+    })
+  }
+
   async getMoveQueueSummary(recentLimit = 5): Promise<MoveQueueSummary> {
     return this.request<MoveQueueSummary>(
       `/library/move/summary?recentLimit=${encodeURIComponent(String(recentLimit))}`,

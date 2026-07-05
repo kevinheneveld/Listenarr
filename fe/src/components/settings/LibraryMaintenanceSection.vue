@@ -36,17 +36,67 @@
       </button>
     </div>
 
+    <div class="maintenance-action">
+      <div class="maintenance-action-text">
+        <strong>Cache external cover art</strong>
+        <small>
+          Downloads any audiobook cover still pointing at an external URL (e.g. an Amazon CDN link
+          from before this feature shipped) into local library storage. Safe to re-run — records
+          already cached locally are skipped.
+        </small>
+      </div>
+      <button type="button" class="action-button" :disabled="sweepRunning" @click="runCoverSweep">
+        <PhImages />
+        {{ sweepRunning ? 'Running…' : 'Run sweep' }}
+      </button>
+    </div>
+
     <OrganizeLibraryModal :visible="showOrganizeModal" @close="showOrganizeModal = false" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { PhWrench, PhFolderOpen } from '@phosphor-icons/vue'
+import { PhWrench, PhFolderOpen, PhImages } from '@phosphor-icons/vue'
 import OrganizeLibraryModal from '@/components/domain/organize/OrganizeLibraryModal.vue'
 import MoveQueueStatusBanner from '@/components/domain/organize/MoveQueueStatusBanner.vue'
+import { apiService } from '@/services/api'
+import { useToast } from '@/services/toastService'
 
 const showOrganizeModal = ref(false)
+
+// Cover-art sweep: one-shot, backend-idempotent. Button disables while running.
+const sweepRunning = ref(false)
+const toast = useToast()
+
+async function runCoverSweep() {
+  if (sweepRunning.value) return
+  sweepRunning.value = true
+  try {
+    const result = await apiService.cacheExternalCovers()
+    if (result.queued === 0) {
+      toast.success(
+        'Cover art sweep complete',
+        `Nothing to do — all ${result.totalScanned} covers were already cached locally.`,
+      )
+    } else if (result.failed === 0) {
+      toast.success(
+        'Cover art sweep complete',
+        `Cached ${result.succeeded} of ${result.queued} external covers (scanned ${result.totalScanned}).`,
+      )
+    } else {
+      toast.warning(
+        'Cover art sweep complete with failures',
+        `Cached ${result.succeeded}/${result.queued}, ${result.failed} failed, ${result.alreadyLocal} already local. Check logs for failed records.`,
+      )
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Cover art sweep failed', message)
+  } finally {
+    sweepRunning.value = false
+  }
+}
 </script>
 
 <style scoped>

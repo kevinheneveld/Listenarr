@@ -73,7 +73,8 @@ namespace Listenarr.Api.Features.Library
             LibraryDuplicatesWorkflow duplicatesWorkflow,
             LibraryFileStreamWorkflow fileStreamWorkflow,
             LibraryNotAudiobookWorkflow notAudiobookWorkflow,
-            LibraryEmbeddedMetadataWorkflow embeddedMetadataWorkflow)
+            LibraryEmbeddedMetadataWorkflow embeddedMetadataWorkflow,
+            Listenarr.Application.Common.Images.IExternalCoverArtSweepService? externalCoverArtSweepService = null)
         {
             _libraryListService = libraryListService;
             _addWorkflow = addWorkflow;
@@ -98,6 +99,7 @@ namespace Listenarr.Api.Features.Library
             _fileStreamWorkflow = fileStreamWorkflow;
             _notAudiobookWorkflow = notAudiobookWorkflow;
             _embeddedMetadataWorkflow = embeddedMetadataWorkflow;
+            _externalCoverArtSweepService = externalCoverArtSweepService;
         }
 
         /// <summary>
