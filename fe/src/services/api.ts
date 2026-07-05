@@ -62,6 +62,7 @@ import type {
   RenameOperation,
   RenameResult,
   SearchActivityResponse,
+  SeriesHealthResponse,
   EmbeddedFileMetadata,
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
@@ -1455,6 +1456,10 @@ class ApiService {
   // session cookie, so the browser's native <audio> element can play the URL.
   getFileStreamUrl(audiobookId: number, fileId: number): string {
     return buildApiRequestUrl(`/library/${audiobookId}/files/${fileId}/stream`)
+  }
+
+  async getSeriesHealth(): Promise<SeriesHealthResponse> {
+    return this.request<SeriesHealthResponse>(`/library/series/health`)
   }
 
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {

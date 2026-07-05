@@ -62,6 +62,35 @@ export interface SeriesHealthRow {
   missing: number
   total: number
   complete: boolean
+  /** Cached Audible catalog size; null/undefined = tracked-only knowledge. */
+  catalogTotal?: number | null
+}
+
+export interface SeriesBuckets {
+  /** Genuinely finished multi-book series. */
+  complete: number
+  /** "Series" of one book — trivially complete, split out of the headline. */
+  singleBook: number
+  gaps: number
+}
+
+/**
+ * Headline buckets. A series only counts as "complete" when it has more than
+ * one book (catalog size where known, tracked size otherwise) — one-book
+ * series are honest but uninteresting and get their own bucket.
+ */
+export function bucketSeriesRows(rows: SeriesHealthRow[]): SeriesBuckets {
+  const buckets: SeriesBuckets = { complete: 0, singleBook: 0, gaps: 0 }
+  for (const r of rows) {
+    if (!r.complete) {
+      buckets.gaps++
+      continue
+    }
+    const effectiveTotal = r.catalogTotal ?? r.total
+    if (effectiveTotal <= 1) buckets.singleBook++
+    else buckets.complete++
+  }
+  return buckets
 }
 
 /**

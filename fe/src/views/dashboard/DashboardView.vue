@@ -165,7 +165,8 @@
         <h2>
           Series
           <small class="h2-sub"
-            >{{ completeSeriesCount }} complete · {{ incompleteSeries.length }} with gaps</small
+            >{{ seriesBuckets.complete }} complete · {{ seriesBuckets.singleBook }} single-book ·
+            {{ seriesBuckets.gaps }} with gaps</small
           >
         </h2>
         <div v-if="incompleteSeries.length === 0" class="dash-empty">
@@ -188,6 +189,12 @@
             <span class="series-counts">
               <strong>{{ s.owned }}</strong
               >/{{ s.total }} <small>({{ s.missing }} missing)</small>
+              <small
+                v-if="s.catalogTotal == null"
+                class="series-hint"
+                title="No cached catalog for this series yet — counts reflect tracked records only. The background catalog sweep fills this in over time."
+                >tracked only</small
+              >
             </span>
           </RouterLink>
           <button
@@ -249,10 +256,12 @@ import { useToast } from '@/services/toastService'
 import {
   libraryGlance,
   seriesHealth,
+  bucketSeriesRows,
+  type SeriesHealthRow,
   verificationCounts,
   formatBytes,
 } from '@/utils/dashboardAggregates'
-import type { LibraryDuplicatesResponse, MoveQueueSummary } from '@/types'
+import type { LibraryDuplicatesResponse, MoveQueueSummary, SeriesHealthApiRow } from '@/types'
 
 const libraryStore = useLibraryStore()
 const searchActivity = useSearchActivityStore()
@@ -266,8 +275,27 @@ const showCopyList = ref(false)
 const seriesLimit = ref(15)
 
 const glance = computed(() => libraryGlance(libraryStore.audiobooks))
-const seriesRows = computed(() => seriesHealth(libraryStore.audiobooks))
-const completeSeriesCount = computed(() => seriesRows.value.filter((s) => s.complete).length)
+
+// Catalog-aware series health from the server; null until loaded (or on
+// failure), in which case the client-side tracked-only aggregation stands in.
+const serverSeries = ref<SeriesHealthApiRow[] | null>(null)
+const seriesRows = computed<SeriesHealthRow[]>(() => {
+  if (serverSeries.value) {
+    return serverSeries.value.map((r) => {
+      const total = r.catalogTotal ?? r.owned + r.missingTracked
+      return {
+        name: r.name,
+        owned: r.owned,
+        missing: Math.max(0, total - r.owned),
+        total,
+        complete: r.complete,
+        catalogTotal: r.catalogTotal,
+      }
+    })
+  }
+  return seriesHealth(libraryStore.audiobooks)
+})
+const seriesBuckets = computed(() => bucketSeriesRows(seriesRows.value))
 const incompleteSeries = computed(() => seriesRows.value.filter((s) => !s.complete))
 const visibleIncompleteSeries = computed(() => incompleteSeries.value.slice(0, seriesLimit.value))
 const verification = computed(() => verificationCounts(libraryStore.audiobooks))
@@ -322,6 +350,14 @@ async function scanDuplicates() {
 }
 
 onMounted(async () => {
+  void apiService
+    .getSeriesHealth()
+    .then((resp) => {
+      serverSeries.value = resp.rows
+    })
+    .catch(() => {
+      /* endpoint unavailable — client-side tracked-only aggregation stands in */
+    })
   try {
     if (libraryStore.audiobooks.length === 0) {
       await libraryStore.fetchLibrary()
@@ -549,6 +585,17 @@ onMounted(async () => {
   height: 100%;
   background: linear-gradient(90deg, #2ecc71, #27ae60);
   border-radius: 3px;
+}
+
+.series-hint {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid rgba(173, 181, 189, 0.3);
+  border-radius: 999px;
+  color: #868e96;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  cursor: help;
 }
 
 .series-counts {

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   libraryGlance,
   seriesHealth,
+  bucketSeriesRows,
   verificationCounts,
   formatBytes,
 } from '@/utils/dashboardAggregates'
@@ -64,5 +65,37 @@ describe('formatBytes', () => {
     expect(formatBytes(0)).toBe('0 B')
     expect(formatBytes(1536)).toBe('1.5 KB')
     expect(formatBytes(3.2 * 1024 ** 4)).toBe('3.2 TB')
+  })
+})
+
+describe('bucketSeriesRows', () => {
+  const row = (over: Partial<Parameters<typeof bucketSeriesRows>[0][number]>) => ({
+    name: 'S',
+    owned: 1,
+    missing: 0,
+    total: 1,
+    complete: true,
+    ...over,
+  })
+
+  it('splits single-book series out of the complete headline', () => {
+    const buckets = bucketSeriesRows([
+      row({ total: 1, complete: true }), // tracked-only single
+      row({ total: 3, owned: 3, complete: true }), // real complete
+      row({ total: 3, owned: 1, missing: 2, complete: false }), // gaps
+    ])
+    expect(buckets).toEqual({ complete: 1, singleBook: 1, gaps: 1 })
+  })
+
+  it('uses catalog total over tracked total when known', () => {
+    const buckets = bucketSeriesRows([
+      // one tracked book, and the catalog agrees the series has 1 book: single
+      row({ total: 1, catalogTotal: 1, complete: true }),
+      // one tracked book, catalog says 4 and endpoint marked incomplete: gaps
+      row({ total: 4, owned: 1, missing: 3, catalogTotal: 4, complete: false }),
+      // catalog-confirmed full trilogy: complete
+      row({ total: 3, owned: 3, catalogTotal: 3, complete: true }),
+    ])
+    expect(buckets).toEqual({ complete: 1, singleBook: 1, gaps: 1 })
   })
 })

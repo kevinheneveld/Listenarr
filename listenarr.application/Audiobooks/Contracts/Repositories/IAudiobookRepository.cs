@@ -36,6 +36,15 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<SeriesCacheEntry?> GetCachedSeriesByNameAsync(string name, string region);
         Task<SeriesCacheEntry?> GetCachedSeriesByAsinAsync(string asin, string region);
         Task<SeriesCacheEntry> UpsertCachedSeriesAsync(SeriesCacheEntry seriesCacheEntry);
+
+        /// <summary>
+        /// Cached Audible catalog sizes for the given series names, keyed by the
+        /// caller's own (raw) name. Names are normalized internally with the same
+        /// rules the cache rows were written with, so callers never need to know
+        /// the normalization. Only series with a cached catalog of at least one
+        /// book appear in the result; the freshest cache row wins per name.
+        /// </summary>
+        Task<Dictionary<string, int>> GetSeriesCatalogTotalsAsync(IReadOnlyCollection<string> seriesNames, string region, CancellationToken ct = default);
         Task<Audiobook> AddAsync(Audiobook audiobook);
         Task<bool> UpdateAsync(Audiobook audiobook);
 

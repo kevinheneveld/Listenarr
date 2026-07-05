@@ -1223,6 +1223,21 @@ export interface EmbeddedFileMetadata {
   format?: string
 }
 
+/** One row from GET /library/series/health — catalog-aware series completeness. */
+export interface SeriesHealthApiRow {
+  name: string
+  owned: number
+  missingTracked: number
+  catalogTotal: number | null
+  monitored: boolean
+  complete: boolean
+}
+
+export interface SeriesHealthResponse {
+  region: string
+  rows: SeriesHealthApiRow[]
+}
+
 export interface SearchActivityResponse {
   current: SearchActivityEvent | null
   recent: SearchActivityEvent[]

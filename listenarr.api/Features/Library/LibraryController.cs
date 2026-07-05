@@ -49,6 +49,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryMoveSummaryWorkflow _moveSummaryWorkflow;
         private readonly LibraryDuplicatesWorkflow _duplicatesWorkflow;
         private readonly LibraryFileStreamWorkflow _fileStreamWorkflow;
+        private readonly LibrarySeriesHealthWorkflow _seriesHealthWorkflow;
         /// <summary>Initializes the library transport façade.</summary>
         public LibraryController(
             ILibraryListService libraryListService,
@@ -74,6 +75,7 @@ namespace Listenarr.Api.Features.Library
             LibraryFileStreamWorkflow fileStreamWorkflow,
             LibraryNotAudiobookWorkflow notAudiobookWorkflow,
             LibraryEmbeddedMetadataWorkflow embeddedMetadataWorkflow,
+            LibrarySeriesHealthWorkflow seriesHealthWorkflow,
             Listenarr.Application.Common.Images.IExternalCoverArtSweepService? externalCoverArtSweepService = null)
         {
             _libraryListService = libraryListService;
@@ -97,6 +99,7 @@ namespace Listenarr.Api.Features.Library
             _moveSummaryWorkflow = moveSummaryWorkflow;
             _duplicatesWorkflow = duplicatesWorkflow;
             _fileStreamWorkflow = fileStreamWorkflow;
+            _seriesHealthWorkflow = seriesHealthWorkflow;
             _notAudiobookWorkflow = notAudiobookWorkflow;
             _embeddedMetadataWorkflow = embeddedMetadataWorkflow;
             _externalCoverArtSweepService = externalCoverArtSweepService;
@@ -140,6 +143,17 @@ namespace Listenarr.Api.Features.Library
         public async Task<IActionResult> GetDuplicates(CancellationToken ct)
         {
             return await _duplicatesWorkflow.GetDuplicatesAsync(ct);
+        }
+
+        /// <summary>
+        /// Catalog-aware series health: tracked books grouped by series, joined
+        /// with cached Audible catalog totals. Backs the dashboard's series panel.
+        /// </summary>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpGet("series/health")]
+        public async Task<IActionResult> GetSeriesHealth(CancellationToken ct)
+        {
+            return await _seriesHealthWorkflow.HealthAsync(ct);
         }
 
         /// <summary>
