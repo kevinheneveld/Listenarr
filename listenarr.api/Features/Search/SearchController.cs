@@ -38,6 +38,7 @@ namespace Listenarr.Api.Features.Search
         private readonly IDownloadReferenceService? _downloadReferenceService;
         private readonly IConfigurationService? _configurationService;
         private readonly ISearchActivityTracker? _searchActivityTracker;
+        private readonly Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? _automaticSearchInvoker;
 
         public SearchController(
             ISearchService searchService,
@@ -51,7 +52,8 @@ namespace Listenarr.Api.Features.Search
             SearchByTitleWorkflow? searchByTitleWorkflow = null,
             IDownloadReferenceService? downloadReferenceService = null,
             IConfigurationService? configurationService = null,
-            ISearchActivityTracker? searchActivityTracker = null)
+            ISearchActivityTracker? searchActivityTracker = null,
+            Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? automaticSearchInvoker = null)
         {
             _searchService = searchService;
             _logger = logger;
@@ -81,6 +83,7 @@ namespace Listenarr.Api.Features.Search
                 configurationService);
             _downloadReferenceService = downloadReferenceService;
             _searchActivityTracker = searchActivityTracker;
+            _automaticSearchInvoker = automaticSearchInvoker;
         }
 
         /// <summary>

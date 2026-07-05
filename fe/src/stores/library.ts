@@ -78,7 +78,11 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function removeFromLibrary(
     id: number,
-    options?: { deleteFiles?: boolean; deleteFolder?: boolean; excludeFromAuthorMonitoring?: boolean },
+    options?: {
+      deleteFiles?: boolean
+      deleteFolder?: boolean
+      excludeFromAuthorMonitoring?: boolean
+    },
   ) {
     try {
       await apiService.removeFromLibrary(id, options)
@@ -256,7 +260,15 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
-  function selectAll() {
+  // Select the given ids — callers pass their VISIBLE (filtered) set so
+  // "Select All" never silently selects books the active filter is hiding
+  // (a filter showing 49 books once armed "Delete Selected (3608)").
+  // Falls back to the whole library only when no ids are provided.
+  function selectAll(ids?: number[]) {
+    if (ids) {
+      ids.forEach((id) => selectedIds.value.add(id))
+      return
+    }
     audiobooks.value.forEach((book) => selectedIds.value.add(book.id))
   }
 

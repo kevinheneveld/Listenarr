@@ -131,10 +131,11 @@
         <button
           v-if="audiobooks.length > 0 && selectedCount === 0"
           class="toolbar-btn"
-          @click="libraryStore.selectAll()"
+          :title="`Select the ${audiobooks.length} book${audiobooks.length === 1 ? '' : 's'} currently shown`"
+          @click="libraryStore.selectAll(audiobooks.map((b) => b.id))"
         >
           <PhCheckSquare />
-          Select All
+          Select All ({{ audiobooks.length }})
         </button>
         <button v-if="selectedCount > 0" class="toolbar-btn edit-btn" @click="showBulkEdit">
           <PhPencil />

@@ -84,6 +84,10 @@ namespace Listenarr.Api.Features.Library
 
             TryExtractPublishYear(request);
 
+            // Serialize the fallback dedup-check + insert by ASIN — same race as
+            // the service path: two concurrent adds must not both pass the check.
+            using var asinAddLock = await Listenarr.Application.Audiobooks.AudiobookAddLockManager.AcquireAsync(metadata.Asin);
+
             if (!string.IsNullOrEmpty(metadata.Asin))
             {
                 var existingByAsin = await _repo.GetByAsinAsync(metadata.Asin);

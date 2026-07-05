@@ -326,6 +326,28 @@ class ApiService {
    * Current background automatic-search activity + recent outcomes, for hydrating
    * the live indicator (sidebar) on page load before SignalR streams.
    */
+  // On-demand "Search now" for a set of audiobooks, bypassing the sweep throttle. Runs the
+  // same per-book logic as the background automatic-search cycle, so it skips already-satisfied
+  // books and only grabs genuine upgrades. Returns a summary.
+  async searchNow(audiobookIds: number[]): Promise<{
+    requested: number
+    queued: number
+    skipped: number
+    failed: number
+    results: Array<{
+      audiobookId: number
+      title: string
+      success: boolean
+      downloadsQueued: number
+      message?: string
+    }>
+  }> {
+    return this.request('/search/now', {
+      method: 'POST',
+      body: JSON.stringify({ audiobookIds }),
+    })
+  }
+
   async getSearchActivity(): Promise<SearchActivityResponse> {
     return this.request<SearchActivityResponse>(`/search/activity`)
   }

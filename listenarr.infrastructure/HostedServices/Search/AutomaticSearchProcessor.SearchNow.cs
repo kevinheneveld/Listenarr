@@ -62,8 +62,10 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                     blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
                     filterPipeline: scope.ServiceProvider.GetService<SearchResultFilterPipeline>());
 
+                // Targeted write for the same reason as the cycle loop: never
+                // re-save the whole entity just to bump the timestamp.
                 audiobook.LastSearchTime = DateTime.UtcNow;
-                await audiobookRepository.UpdateAsync(audiobook);
+                await audiobookRepository.SetLastSearchTimeAsync(audiobook.Id, audiobook.LastSearchTime.Value);
 
                 return new AutomaticSearchBookResult
                 {

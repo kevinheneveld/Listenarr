@@ -372,6 +372,17 @@
               <PhPlus />
               Add missing ({{ missingWorks.length }})
             </button>
+            <button
+              v-if="searchableCollectionBookIds.length > 0"
+              class="toolbar-btn series-search-btn"
+              :disabled="seriesSearchBusy"
+              @click="searchSeriesNow"
+              :title="`Search now for missing or upgradable books in this series (${searchableCollectionBookIds.length} monitored)`"
+            >
+              <PhArrowClockwise v-if="seriesSearchBusy" class="spin-icon" />
+              <PhMagnifyingGlass v-else />
+              Search now
+            </button>
           </div>
         </div>
         <div class="toolbar-filters">
@@ -839,6 +850,7 @@ import {
   PhCheckSquare,
   PhX,
   PhArrowClockwise,
+  PhMagnifyingGlass,
   PhInfo,
   PhBookOpen,
   PhWarningCircle,
@@ -1387,6 +1399,47 @@ const totalAddedAudiobooks = computed(() => audiobooks.value.filter((book) => bo
 const totalNotAddedAudiobooks = computed(() => audiobooks.value.filter((book) => !book.inLibrary))
 const authorLibraryCount = computed(() => totalAddedAudiobooks.value.length)
 const authorNotAddedCount = computed(() => totalNotAddedAudiobooks.value.length)
+
+// Owned, monitored books in this collection — the candidates for "Search now". The backend
+// per-book gates (active-download / quality-cutoff) decide which actually get a search/grab.
+const searchableCollectionBookIds = computed(() =>
+  libraryCollectionAudiobooks.value
+    .filter((book) => book.monitored && typeof book.id === 'number' && book.id > 0)
+    .map((book) => book.id as number),
+)
+
+const seriesSearchBusy = ref(false)
+
+async function searchSeriesNow() {
+  if (seriesSearchBusy.value) return
+  const ids = searchableCollectionBookIds.value
+  if (ids.length === 0) {
+    toast.info('Nothing to search', 'No monitored books in this series to search for right now.')
+    return
+  }
+  seriesSearchBusy.value = true
+  try {
+    const summary = await apiService.searchNow(ids)
+    const parts: string[] = []
+    if (summary.queued > 0) parts.push(`${summary.queued} queued`)
+    if (summary.skipped > 0) parts.push(`${summary.skipped} already satisfied`)
+    if (summary.failed > 0) parts.push(`${summary.failed} failed`)
+    toast.success(
+      'Search complete',
+      `Searched ${summary.requested} book${summary.requested === 1 ? '' : 's'}${
+        parts.length ? ': ' + parts.join(', ') : ''
+      }.`,
+    )
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'CollectionView',
+      operation: 'searchSeriesNow',
+    })
+    toast.error('Search failed', err instanceof Error ? err.message : 'Unknown error')
+  } finally {
+    seriesSearchBusy.value = false
+  }
+}
 
 // --- Bulk-add missing books ---------------------------------------------------------
 const showAddMissingModal = ref(false)

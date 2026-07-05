@@ -151,9 +151,13 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                         await searchProgressReporter.BroadcastAutomaticAsync(outcomeMessage, outcomeStage, audiobook.Id, audiobook.Asin);
                     }
 
-                    // Update last search time
+                    // Update last search time — TARGETED write only. This loop walks
+                    // a snapshot loaded at cycle start, sometimes for a long time;
+                    // saving the whole stale entity here clobbered every concurrent
+                    // change to the row (live case: a verification reset reverted
+                    // minutes after the user made it).
                     audiobook.LastSearchTime = DateTime.UtcNow;
-                    await audiobookRepository.UpdateAsync(audiobook);
+                    await audiobookRepository.SetLastSearchTimeAsync(audiobook.Id, audiobook.LastSearchTime.Value);
 
                     _logger.LogInformation("Processed audiobook '{Title}' - queued {QueuedCount} downloads",
                         audiobook.Title, downloadsQueuedForBook);
