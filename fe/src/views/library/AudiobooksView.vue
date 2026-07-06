@@ -163,6 +163,15 @@
       <div class="toolbar-right">
         <!-- Sort / Filter controls -->
         <div class="toolbar-filters">
+          <button
+            v-if="libraryStore.idSetFilter"
+            type="button"
+            class="toolbar-btn idset-chip"
+            :title="`Showing ${libraryStore.idSetFilter.ids.length} book(s) — click to clear`"
+            @click="libraryStore.clearIdSetFilter()"
+          >
+            {{ libraryStore.idSetFilter.label }} ✕
+          </button>
           <FiltersDropdown
             :customFilters="customFilters"
             v-model="selectedFilterId"
@@ -325,7 +334,17 @@
                 :data-author-name="collection.name"
                 :data-author-has-cover="authorHasSpecificCoverMap[collection.name] ? '1' : ''"
               >
-                <div class="series-count-badge">{{ collection.count }}</div>
+                <div
+                  class="series-count-badge"
+                  :class="{
+                    'count-all-good':
+                      collection.readyCount > 0 && collection.qualityMismatchCount === 0,
+                    'count-has-mismatch':
+                      collection.readyCount > 0 && collection.qualityMismatchCount > 0,
+                  }"
+                >
+                  {{ collection.readyCount }}/{{ collection.count }}
+                </div>
                 <div
                   class="author-placeholder"
                   :class="{ loaded: authorImageLoaded[collection.name] }"
@@ -459,8 +478,16 @@
                   </template>
                 </div>
                 <!-- Book count counter -->
-                <div class="series-count-badge">
-                  {{ collection.count }}
+                <div
+                  class="series-count-badge"
+                  :class="{
+                    'count-all-good':
+                      collection.readyCount > 0 && collection.qualityMismatchCount === 0,
+                    'count-has-mismatch':
+                      collection.readyCount > 0 && collection.qualityMismatchCount > 0,
+                  }"
+                >
+                  {{ collection.readyCount }}/{{ collection.count }}
                 </div>
                 <!-- Hover overlay (use same status-overlay as books; show only series name) -->
                 <div class="status-overlay hover-overlay">
@@ -1329,6 +1356,12 @@ const filteredAndSortedAudiobooks = computed(() => {
       year.includes(q)
     )
   })
+
+  // Transient id-set filter from dashboard drill-downs (e.g. "missing narrators")
+  if (libraryStore.idSetFilter) {
+    const idSet = new Set(libraryStore.idSetFilter.ids)
+    filtered = filtered.filter((b) => idSet.has(b.id))
+  }
 
   // Apply selected filter (built-in or custom)
   if (selectedFilterId.value) {
@@ -4664,5 +4697,11 @@ defineExpose({
   .list-narrow-only-inline {
     display: inline;
   }
+}
+
+.idset-chip {
+  background: rgba(77, 171, 247, 0.12);
+  border: 1px solid rgba(77, 171, 247, 0.4);
+  color: #4dabf7;
 }
 </style>

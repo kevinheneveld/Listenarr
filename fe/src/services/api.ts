@@ -62,6 +62,9 @@ import type {
   RenamePreview,
   RenameOperation,
   RenameResult,
+  ActivityCategory,
+  ActivityResponse,
+  DashboardStatsResponse,
   SearchActivityResponse,
   SeriesHealthResponse,
   VerificationQueueStatus,
@@ -791,6 +794,21 @@ class ApiService {
   // Downloads API
   async getDownloads(): Promise<Download[]> {
     return this.request<Download[]>('/downloads')
+  }
+
+  async getActivity(options?: {
+    category?: ActivityCategory
+    windowHours?: number
+    page?: number
+    pageSize?: number
+  }): Promise<ActivityResponse> {
+    const params = new URLSearchParams()
+    if (options?.category) params.set('category', options.category)
+    if (options?.windowHours != null) params.set('windowHours', String(options.windowHours))
+    if (options?.page != null) params.set('page', String(options.page))
+    if (options?.pageSize != null) params.set('pageSize', String(options.pageSize))
+    const qs = params.toString()
+    return this.request<ActivityResponse>(`/downloads/activity${qs ? `?${qs}` : ''}`)
   }
 
   async getDownload(id: string): Promise<Download> {
@@ -1565,6 +1583,16 @@ class ApiService {
 
   async getMusicCandidates(): Promise<MusicCandidatesResponse> {
     return this.request<MusicCandidatesResponse>(`/library/music-candidates`)
+  }
+
+  async getDashboardStats(): Promise<DashboardStatsResponse> {
+    return this.request<DashboardStatsResponse>(`/library/dashboard/stats`)
+  }
+
+  async getMissingFieldIds(
+    field: 'CoverArt' | 'Description' | 'Narrators' | 'SeriesPosition',
+  ): Promise<{ field: string; ids: number[] }> {
+    return this.request<{ field: string; ids: number[] }>(`/library/dashboard/missing/${field}/ids`)
   }
 
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {

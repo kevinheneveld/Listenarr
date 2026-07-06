@@ -23,7 +23,7 @@ namespace Listenarr.Api.Features.Downloads;
 [ApiController]
 [Route("api/v{version:apiVersion}/downloads")]
 [Tags("Downloads")]
-public class DownloadsController : ControllerBase
+public partial class DownloadsController : ControllerBase
 {
     private readonly IDownloadRepository _downloadRepository;
     private readonly IDownloadService _downloadService;

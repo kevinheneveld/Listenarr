@@ -53,6 +53,7 @@
           <div class="stat-card total">
             <span class="stat-value">{{ glance.total }}</span>
             <span class="stat-label">total records</span>
+            <small>{{ recentlyImported7d }} imported this week</small>
             <small>{{ seriesRows.length }} series tracked</small>
           </div>
         </div>
@@ -101,7 +102,7 @@
           <RouterLink
             class="health-chip moves"
             :class="{ zero: (moveSummary?.queued ?? 0) + (moveSummary?.processing ?? 0) === 0 }"
-            to="/settings"
+            to="/settings?section=maintenance"
           >
             <PhTruck />
             <strong>{{ (moveSummary?.queued ?? 0) + (moveSummary?.processing ?? 0) }}</strong>
@@ -110,7 +111,7 @@
           <RouterLink
             v-if="(moveSummary?.failed ?? 0) > 0"
             class="health-chip failed"
-            to="/settings"
+            to="/settings?section=maintenance"
           >
             <PhXCircle />
             <strong>{{ moveSummary?.failed }}</strong> moves failed
@@ -131,7 +132,7 @@
             <RouterLink
               class="health-chip duplicates"
               :class="{ zero: duplicates.duplicateGroups.length === 0 }"
-              to="/settings"
+              to="/settings?section=duplicates"
             >
               <PhCopySimple />
               <strong>{{ duplicates.duplicateGroups.length }}</strong> duplicate records
@@ -327,13 +328,60 @@
           </div>
         </div>
       </section>
+
+      <!-- Quality distribution -->
+      <section class="dash-section" v-if="stats">
+        <h2>Quality</h2>
+        <div class="stats-panels">
+          <div class="stats-panel">
+            <h3>By codec</h3>
+            <div v-for="c in stats.quality.byCodec" :key="c.codec" class="stat-row">
+              <span class="stat-row-label">{{ c.codec }}</span>
+              <span class="stat-row-count">{{ c.count }}</span>
+            </div>
+            <div v-if="stats.quality.byCodec.length === 0" class="dash-empty">
+              No files tracked.
+            </div>
+          </div>
+          <div class="stats-panel">
+            <h3>By bitrate</h3>
+            <div v-for="b in stats.quality.byBitrate" :key="b.label" class="stat-row">
+              <span class="stat-row-label">{{ b.label }}</span>
+              <span class="stat-row-count">{{ b.count }}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Metadata gaps -->
+      <section class="dash-section" v-if="stats">
+        <h2>Metadata gaps</h2>
+        <div class="stats-panel">
+          <button
+            v-for="g in metadataGapRows"
+            :key="g.field"
+            type="button"
+            class="stat-row stat-row-click"
+            :disabled="g.count === 0"
+            :title="
+              g.count === 0
+                ? 'No gaps'
+                : `Show the ${g.count} book(s) missing ${g.label.toLowerCase()}`
+            "
+            @click="openMissing(g.field, g.label, g.count)"
+          >
+            <span class="stat-row-label">{{ g.label }}</span>
+            <span class="stat-row-count" :class="{ zero: g.count === 0 }">{{ g.count }}</span>
+          </button>
+        </div>
+      </section>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import {
   PhSpinner,
   PhWarning,
@@ -369,8 +417,10 @@ import type {
   MusicCandidate,
   SeriesHealthApiRow,
   VerificationQueueStatus,
+  DashboardStatsResponse,
 } from '@/types'
 
+const router = useRouter()
 const libraryStore = useLibraryStore()
 const searchActivity = useSearchActivityStore()
 const toast = useToast()
@@ -383,6 +433,43 @@ const showCopyList = ref(false)
 const seriesLimit = ref(15)
 
 const glance = computed(() => libraryGlance(libraryStore.audiobooks))
+
+// Quality + metadata-gap stats (secondary panel; failure hides it).
+const stats = ref<DashboardStatsResponse | null>(null)
+
+const recentlyImported7d = computed(() => {
+  const cutoff = Date.now() - 7 * 24 * 3600 * 1000
+  return libraryStore.audiobooks.filter((b) => {
+    const t = b.importedAt ? Date.parse(b.importedAt) : NaN
+    return Number.isFinite(t) && t >= cutoff
+  }).length
+})
+
+const metadataGapRows = computed(() => {
+  const c = stats.value?.completeness
+  if (!c) return []
+  return [
+    { field: 'CoverArt' as const, label: 'Cover art', count: c.missingCoverArt },
+    { field: 'Description' as const, label: 'Description', count: c.missingDescription },
+    { field: 'Narrators' as const, label: 'Narrators', count: c.missingNarrators },
+    { field: 'SeriesPosition' as const, label: 'Series position', count: c.missingSeriesPosition },
+  ]
+})
+
+async function openMissing(
+  field: 'CoverArt' | 'Description' | 'Narrators' | 'SeriesPosition',
+  label: string,
+  count: number,
+) {
+  if (count === 0) return
+  try {
+    const resp = await apiService.getMissingFieldIds(field)
+    libraryStore.setIdSetFilter(resp.ids, `Missing ${label.toLowerCase()}`)
+    void router.push('/audiobooks')
+  } catch {
+    toast.error('Could not load list', `Failed to fetch the books missing ${label.toLowerCase()}.`)
+  }
+}
 
 // Catalog-aware series health from the server; null until loaded (or on
 // failure), in which case the client-side tracked-only aggregation stands in.
@@ -547,6 +634,10 @@ onMounted(async () => {
   void apiService
     .getMoveQueueSummary(3)
     .then((s) => (moveSummary.value = s))
+    .catch(() => {})
+  void apiService
+    .getDashboardStats()
+    .then((r) => (stats.value = r))
     .catch(() => {})
   void refreshQueueStatus()
   queuePollTimer = setInterval(() => void refreshQueueStatus(), 30_000)
@@ -886,5 +977,60 @@ onMounted(async () => {
 .backfill-now-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.stats-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.75rem;
+}
+
+.stats-panel {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.stats-panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #8a93a0;
+  font-weight: 500;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 0.3rem 0;
+  color: #d8dee6;
+  font-size: 0.9rem;
+  background: none;
+  border: none;
+  text-align: left;
+}
+
+.stat-row-click {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.stat-row-click:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.stat-row-click:disabled {
+  cursor: default;
+}
+
+.stat-row-count {
+  font-weight: 600;
+  color: #f0c674;
+}
+
+.stat-row-count.zero {
+  color: #51cf66;
 }
 </style>

@@ -134,6 +134,78 @@ export interface SearchResult extends BaseSearchResult {
   publishDate?: string
 }
 
+export interface DashboardStatsResponse {
+  quality: {
+    byCodec: { codec: string; count: number }[]
+    byBitrate: { label: string; count: number }[]
+  }
+  completeness: {
+    totalBooks: number
+    missingCoverArt: number
+    missingDescription: number
+    missingNarrators: number
+    missingSeriesPosition: number
+  }
+}
+
+export type ActivityCategory = 'InProgress' | 'Blocked' | 'Imported' | 'Failed' | 'Stalled'
+
+export interface ActivityItem {
+  id: string
+  audiobookId?: number
+  title: string
+  artist: string
+  series?: string
+  category: ActivityCategory
+  status: string
+  progress: number
+  totalSize: number
+  downloadedSize: number
+  startedAt: string
+  completedAt?: string
+  // CompletedAt ?? StartedAt — the sort/window key
+  activityAt: string
+  reason?: string
+  // How many download records collapsed into this row (repeated grab attempts)
+  attemptCount: number
+  downloadClientId: string
+  downloadClientName?: string
+  // Download client implementation ("qbittorrent", "nzbget", "DDL", ...) for the client-type indicator.
+  downloadClientType?: string
+  // Per-attempt breakdown of the grab attempts that collapsed into this row, newest-first.
+  attempts?: ActivityAttempt[]
+}
+
+// One historical grab attempt for a book (GET /downloads/activity).
+export interface ActivityAttempt {
+  category: ActivityCategory
+  status: string
+  at: string
+  reason?: string
+  downloadClientName?: string
+}
+
+export interface ActivityReasonCount {
+  reason: string
+  count: number
+}
+
+export interface ActivitySummaryCounts {
+  inProgress: number
+  blocked: number
+  imported: number
+  failed: number
+  stalled: number
+  windowHours: number
+  failureReasons: ActivityReasonCount[]
+}
+
+export interface ActivityResponse {
+  summary: ActivitySummaryCounts
+  items: ActivityItem[]
+  totalItems: number
+}
+
 export interface Download {
   id: string
   title: string

@@ -491,6 +491,20 @@ function scrollTabs(direction = 1) {
 
 let tabsResizeObserver: ResizeObserver | null = null
 onMounted(async () => {
+  // Dashboard deep-links: /settings?section=duplicates|maintenance activates
+  // the General tab and scrolls to the section once it renders.
+  const section = typeof route.query.section === 'string' ? route.query.section : null
+  if (section) {
+    activeTab.value = 'general'
+    void nextTick(() => {
+      setTimeout(() => {
+        document
+          .getElementById(`settings-section-${section}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 250)
+    })
+  }
+
   // Wait until DOM is fully painted (fonts, icons) so measurements are accurate
   await nextTick()
   updateTabOverflow()

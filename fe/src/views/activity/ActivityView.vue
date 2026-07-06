@@ -42,6 +42,41 @@
       </div>
     </div>
 
+    <!-- Summary chips: counts per category; click to filter the list -->
+    <div class="activity-summary">
+      <button
+        v-for="chip in summaryChips"
+        :key="chip.key"
+        type="button"
+        :class="['summary-chip', `chip-${chip.key}`, { active: activeCategory === chip.category }]"
+        :title="
+          chip.windowed
+            ? `${chip.label} in the last ${windowHours}h — click to show only these`
+            : `${chip.label} — click to show only these`
+        "
+        @click="selectCategory(chip.category)"
+      >
+        <span class="chip-count">{{ chip.count }}</span>
+        <span class="chip-label"
+          >{{ chip.label
+          }}<span v-if="chip.windowed" class="chip-window"> · {{ windowHours }}h</span></span
+        >
+      </button>
+    </div>
+
+    <!-- Failure-reason breakdown, shown when drilled into Failed or Stalled -->
+    <div
+      v-if="
+        (activeCategory === 'Failed' || activeCategory === 'Stalled') && failureReasons.length > 0
+      "
+      class="failure-reasons"
+    >
+      <span class="failure-reasons-label">Reasons:</span>
+      <span v-for="r in failureReasons" :key="r.reason" class="failure-reason-pill">
+        {{ r.reason }} <strong>{{ r.count }}</strong>
+      </span>
+    </div>
+
     <div v-if="queueHealthClients.length > 0" class="queue-health-banner">
       <PhWarningCircle />
       <div class="queue-health-copy">
@@ -60,7 +95,7 @@
       <div class="queue-header">
         <div class="col-title">Title</div>
         <div class="col-quality">Quality</div>
-        <div class="col-language">Language</div>
+        <div class="col-when">When</div>
         <div class="col-progress">Progress</div>
         <div class="col-eta">ETA</div>
         <div class="col-status">Status</div>
@@ -82,13 +117,28 @@
           >
             <div class="col-title">
               <div class="title-cell">
-                <RouterLink
-                  v-if="item.audiobookId"
-                  :to="`/audiobooks/${item.audiobookId}`"
-                  class="title-link"
-                  >{{ getDisplayTitle(item) }}</RouterLink
-                >
-                <span v-else class="title-text">{{ getDisplayTitle(item) }}</span>
+                <div class="title-main">
+                  <div class="title-row">
+                    <RouterLink
+                      v-if="item.audiobookId"
+                      :to="`/audiobooks/${item.audiobookId}`"
+                      class="title-link"
+                      >{{ getDisplayTitle(item) }}</RouterLink
+                    >
+                    <span v-else class="title-text">{{ getDisplayTitle(item) }}</span>
+                    <span
+                      v-if="item.downloadClient"
+                      class="client-chip"
+                      :title="clientTooltip(item)"
+                    >
+                      <component :is="clientIcon(item)" class="client-icon" />
+                      {{ item.downloadClient }}
+                    </span>
+                  </div>
+                  <span v-if="item.reason" class="title-reason" :title="item.reason">{{
+                    item.reason
+                  }}</span>
+                </div>
               </div>
             </div>
             <div class="col-quality">
@@ -97,9 +147,19 @@
               }}</span>
               <span v-else class="muted">-</span>
             </div>
-            <div class="col-language">
-              <span v-if="item.language" class="language-text">{{ item.language }}</span>
-              <span v-else class="muted">-</span>
+            <div class="col-when">
+              <span class="when-text" :title="formatWhenTitle(item)">{{
+                formatWhen(item.whenIso)
+              }}</span>
+              <button
+                v-if="item.attemptCount > 1"
+                type="button"
+                class="attempts-badge"
+                :title="`${item.attemptCount} attempts — click to see what happened`"
+                @click="openAttempts(item)"
+              >
+                ×{{ item.attemptCount }}
+              </button>
             </div>
             <div class="col-progress">
               <div class="progress-cell">
@@ -120,15 +180,8 @@
               <span v-else class="muted">-</span>
             </div>
             <div class="col-status">
-              <span :class="['status-badge', item.status]">
+              <span :class="['status-badge', item.status]" :title="statusTooltip(item)">
                 {{ formatStatus(item.status) }}
-              </span>
-              <span
-                v-if="item.isStaleSnapshot"
-                class="stale-badge"
-                :title="getSnapshotStatusTitle(item)"
-              >
-                Cached
               </span>
             </div>
             <div class="col-actions">
@@ -224,11 +277,56 @@
         </div>
       </div>
     </div>
+
+    <!-- Attempt-history modal: what each of the ×N grab attempts was and why it failed -->
+    <div v-if="showAttemptsModal" class="modal-overlay" @click="closeAttempts">
+      <div class="modal-content attempts-modal" @click.stop>
+        <div class="modal-header">
+          <h3>
+            <PhClockCounterClockwise />
+            Attempt History
+          </h3>
+          <button class="modal-close" @click="closeAttempts">
+            <PhX />
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="attempts-subtitle">
+            {{ attemptsItem ? getDisplayTitle(attemptsItem) : '' }} —
+            <strong>{{ attemptsItem?.attempts.length ?? 0 }}</strong> attempts, newest first
+          </p>
+          <ol class="attempts-list">
+            <li
+              v-for="(attempt, idx) in attemptsItem?.attempts ?? []"
+              :key="idx"
+              class="attempt-row"
+            >
+              <div class="attempt-head">
+                <span :class="['status-badge', attemptBadgeClass(attempt)]">{{
+                  formatStatus(attempt.status.toLowerCase())
+                }}</span>
+                <span class="attempt-when" :title="new Date(attempt.at).toLocaleString()">{{
+                  formatWhen(attempt.at)
+                }}</span>
+                <span v-if="attempt.downloadClientName" class="attempt-client">{{
+                  attempt.downloadClientName
+                }}</span>
+              </div>
+              <p v-if="attempt.reason" class="attempt-reason">{{ attempt.reason }}</p>
+              <p v-else class="attempt-reason muted">No error recorded for this attempt.</p>
+            </li>
+          </ol>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" @click="closeAttempts">Close</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, unref } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import {
   PhActivity,
   PhSpinner,
@@ -241,30 +339,45 @@ import {
   PhChartBar,
   PhTrash,
   PhMagnifyingGlass,
+  PhClockCounterClockwise,
+  PhMagnet,
+  PhCloudArrowDown,
+  PhGlobe,
+  PhHardDrives,
 } from '@phosphor-icons/vue'
+import type { Component } from 'vue'
 import { useToast } from '@/services/toastService'
 import { errorTracking } from '@/services/errorTracking'
 import { apiService } from '@/services/api'
 import { signalRService } from '@/services/signalr'
-import { useDownloadsStore } from '@/stores/downloads'
 import { useLibraryStore } from '@/stores/library'
 import { EmptyState, LoadingState, ProgressBar } from '@/components/base'
-import { useConfigurationStore } from '@/stores/configuration'
-import type { QueueClientStatus, QueueItem, QueueUpdatePayload, Download } from '@/types'
+import type {
+  QueueClientStatus,
+  QueueItem,
+  QueueUpdatePayload,
+  ActivityResponse,
+  ActivityItem,
+  ActivityAttempt,
+  ActivityCategory,
+} from '@/types'
 import { normalizeQueueSnapshot } from '@/utils/queueSnapshot'
 
-const downloadsStore = useDownloadsStore()
 const libraryStore = useLibraryStore()
-const configStore = useConfigurationStore()
 
 const filterText = ref('')
 const queue = ref<QueueItem[]>([])
 const queueClientStatuses = ref<QueueClientStatus[]>([])
+const activity = ref<ActivityResponse | null>(null)
+// null = default view (in-progress + blocked); otherwise drill into a single category.
+const activeCategory = ref<ActivityCategory | null>(null)
 const loading = ref(false)
 const showRemoveModal = ref(false)
 const clientHasQueueEntry = ref<boolean | null>(null)
-const itemToRemove = ref<QueueItem | null>(null)
+const itemToRemove = ref<ActivityRow | null>(null)
 const removing = ref(false)
+const showAttemptsModal = ref(false)
+const attemptsItem = ref<ActivityRow | null>(null)
 let unsubscribeQueue: (() => void) | null = null
 let queueRefreshInterval: ReturnType<typeof setInterval> | null = null
 
@@ -286,18 +399,6 @@ const formatSnapshotReason = (reason?: string): string => {
   if (reason === 'timeout') return 'a timeout'
   if (reason === 'canceled') return 'a canceled request'
   return 'a client error'
-}
-
-const getSnapshotStatusTitle = (item: QueueItem): string => {
-  if (!item.isStaleSnapshot) return ''
-
-  const parts = ['Showing cached queue data']
-  if (item.downloadClient) parts.push(`for ${item.downloadClient}`)
-  if (item.snapshotAgeSeconds != null)
-    parts.push(`captured ${formatSnapshotAge(item.snapshotAgeSeconds)}`)
-  if (item.snapshotFailureReason)
-    parts.push(`after ${formatSnapshotReason(item.snapshotFailureReason)}`)
-  return parts.join(' ')
 }
 
 const queueHealthClients = computed(() => {
@@ -440,116 +541,139 @@ const handleViewportResize = () => {
   void syncActivityLayout()
 }
 
-// Convert Download to QueueItem format for unified display
-const convertDownloadToQueueItem = (download: Download): QueueItem => {
-  const statusMap: Record<string, string> = {
-    Queued: 'queued',
-    Downloading: 'downloading',
-    Paused: 'paused',
-    Processing: 'processing',
-    Completed: 'completed',
-    Ready: 'completed',
-    ImportPending: 'importpending',
-    ImportBlocked: 'importblocked',
-    Moved: 'imported',
-    Failed: 'failed',
-  }
-  const status = statusMap[download.status] ?? 'downloading'
+// A rendered Activity row: a collapsed-per-book item from the activity endpoint, with live
+// download progress overlaid from the SignalR queue snapshot. Crucially, the row's *status*
+// always comes from the authoritative DB record (the activity endpoint) — never from the live
+// queue — so a finished-but-blocked torrent that is still seeding no longer flips the row
+// between "downloading" and "import blocked".
+interface ActivityRow {
+  id: string
+  audiobookId?: number
+  title: string
+  quality: string
+  language?: string
+  status: string // badge class: downloading/queued/importblocked/imported/failed/stalled/...
+  category: ActivityCategory
+  progress: number
+  size: number
+  downloaded: number
+  downloadSpeed: number
+  eta?: number
+  reason?: string
+  attemptCount: number
+  whenIso: string
+  completedIso?: string
+  downloadClient: string
+  downloadClientId: string
+  downloadClientType: string
+  attempts: ActivityAttempt[]
+  canRemove: boolean
+  isStaleSnapshot?: boolean
+}
 
-  const clientName = (download as unknown as Record<string, unknown>)['downloadClientName'] as
-    | string
-    | undefined
-  return {
-    id: download.id,
-    title: download.title,
-    audiobookId: download.audiobookId,
-    status: status,
-    progress: download.progress,
-    size: download.totalSize,
-    downloaded: download.downloadedSize,
-    downloadSpeed: 0,
-    eta: undefined,
-    quality: '',
-    downloadClient: clientName ?? download.downloadClientId ?? 'Unknown Client',
-    downloadClientId: download.downloadClientId,
-    downloadClientType:
-      (download.downloadClientId || '').toString().toUpperCase() === 'DDL' ? 'DDL' : 'external',
-    addedAt: download.startedAt,
-    canPause: false,
-    canRemove: true,
+// Maps a download's authoritative category + status to the existing status-badge CSS classes.
+const badgeClassFor = (item: ActivityItem): string => {
+  switch (item.category) {
+    case 'Blocked':
+      return 'importblocked'
+    case 'Imported':
+      return 'imported'
+    case 'Failed':
+      return 'failed'
+    case 'Stalled':
+      return 'stalled'
+    case 'InProgress':
+    default:
+      // Preserve the specific in-flight state for the badge (downloading/queued/processing/...).
+      return (item.status || 'downloading').toLowerCase()
   }
 }
 
-// Read user preference from configuration store
-const showCompletedExternalDownloads = computed(
-  () => configStore.applicationSettings?.showCompletedExternalDownloads ?? false,
+// Live progress overlay keyed by download id, taken from the SignalR queue snapshot.
+const liveProgressById = computed(() => {
+  const map = new Map<string, QueueItem>()
+  for (const q of queue.value) map.set(q.id, q)
+  return map
+})
+
+const toActivityRow = (item: ActivityItem): ActivityRow => {
+  const live = item.category === 'InProgress' ? liveProgressById.value.get(item.id) : undefined
+  const isDdl = (item.downloadClientId || '').toString().toUpperCase() === 'DDL'
+  return {
+    id: item.id,
+    audiobookId: item.audiobookId,
+    title: item.title,
+    quality: '',
+    language: item.series,
+    status: badgeClassFor(item),
+    category: item.category,
+    progress: live?.progress ?? item.progress,
+    size: live?.size ?? item.totalSize,
+    downloaded: live?.downloaded ?? item.downloadedSize,
+    downloadSpeed: live?.downloadSpeed ?? 0,
+    eta: live?.eta,
+    reason: item.reason,
+    attemptCount: item.attemptCount,
+    whenIso: item.activityAt,
+    completedIso: item.completedAt,
+    downloadClient: item.downloadClientName ?? item.downloadClientId ?? 'Unknown Client',
+    downloadClientId: item.downloadClientId,
+    downloadClientType: item.downloadClientType ?? (isDdl ? 'DDL' : 'external'),
+    attempts: item.attempts ?? [],
+    canRemove: item.category === 'InProgress' || item.category === 'Blocked',
+  }
+}
+
+const allActivityItems = computed<ActivityRow[]>(() =>
+  (activity.value?.items ?? []).map(toActivityRow),
 )
 
-// All activity items — unified list of queue + downloads
-const allActivityItems = computed(() => {
-  const queueItems = [...queue.value]
-  const trackedQueueIds = new Set(queueItems.map((item) => item.id))
+// Summary chip definitions, in display order. `category: null` is the default (in-progress + blocked) view.
+interface SummaryChip {
+  key: string
+  label: string
+  category: ActivityCategory | null
+  count: number
+  windowed: boolean
+}
 
-  const activeDownloadsList = unref(downloadsStore.activeDownloads || [])
-  const failedDownloadsList = unref(downloadsStore.failedDownloads || [])
-
-  const ddlDownloadItems = activeDownloadsList
-    .filter((d) => (d.downloadClientId || '').toString().toUpperCase() === 'DDL')
-    .map(convertDownloadToQueueItem)
-
-  const failedDDLItems = failedDownloadsList.map(convertDownloadToQueueItem)
-
-  const externalActiveDownloads = activeDownloadsList
-    .filter(
-      (d) => d.downloadClientId && (d.downloadClientId || '').toString().toUpperCase() !== 'DDL',
-    )
-    .filter((d) => !trackedQueueIds.has(d.id))
-    .map(convertDownloadToQueueItem)
-
-  let combined = [...queueItems, ...ddlDownloadItems, ...failedDDLItems, ...externalActiveDownloads]
-
-  if (showCompletedExternalDownloads.value) {
-    const completedExternal = (downloadsStore.completedDownloads || [])
-      .filter(
-        (d) => d.downloadClientId && (d.downloadClientId || '').toString().toUpperCase() !== 'DDL',
-      )
-      .map(convertDownloadToQueueItem)
-
-    const map = new Map<string, QueueItem>()
-    for (const it of combined) map.set(it.id, it)
-    for (const it of completedExternal) {
-      if (!map.has(it.id)) map.set(it.id, it)
-    }
-
-    combined = Array.from(map.values())
-  } else {
-    combined = combined.filter((it) => {
-      if (
-        (it.downloadClientType || '').toString().toLowerCase() !== 'ddl' &&
-        it.status === 'completed'
-      )
-        return false
-      return true
-    })
-  }
-
-  // Also include completed external downloads from the downloads store
-  // so completed items are visible in the unified table
-  const completedExternal = (downloadsStore.completedDownloads || [])
-    .filter(
-      (d) => d.downloadClientId && (d.downloadClientId || '').toString().toUpperCase() !== 'DDL',
-    )
-    .map(convertDownloadToQueueItem)
-
-  const failedFromDownloads = (downloadsStore.failedDownloads || []).map(convertDownloadToQueueItem)
-
-  const finalMap = new Map<string, QueueItem>()
-  for (const it of combined) finalMap.set(it.id, it)
-  for (const it of completedExternal) if (!finalMap.has(it.id)) finalMap.set(it.id, it)
-  for (const it of failedFromDownloads) if (!finalMap.has(it.id)) finalMap.set(it.id, it)
-
-  return Array.from(finalMap.values())
+const summaryChips = computed<SummaryChip[]>(() => {
+  const s = activity.value?.summary
+  return [
+    {
+      key: 'inprogress',
+      label: 'In progress',
+      category: 'InProgress',
+      count: s?.inProgress ?? 0,
+      windowed: false,
+    },
+    {
+      key: 'blocked',
+      label: 'Blocked',
+      category: 'Blocked',
+      count: s?.blocked ?? 0,
+      windowed: false,
+    },
+    {
+      key: 'imported',
+      label: 'Imported',
+      category: 'Imported',
+      count: s?.imported ?? 0,
+      windowed: true,
+    },
+    { key: 'failed', label: 'Failed', category: 'Failed', count: s?.failed ?? 0, windowed: true },
+    {
+      key: 'stalled',
+      label: 'Stalled',
+      category: 'Stalled',
+      count: s?.stalled ?? 0,
+      windowed: true,
+    },
+  ]
 })
+
+const windowHours = computed(() => activity.value?.summary.windowHours ?? 24)
+const failureReasons = computed(() => activity.value?.summary.failureReasons ?? [])
 
 // Build a lookup map from audiobook ID -> title for resolving friendly names
 const audiobookTitleMap = computed(() => {
@@ -560,7 +684,7 @@ const audiobookTitleMap = computed(() => {
   return map
 })
 
-const getDisplayTitle = (item: QueueItem): string => {
+const getDisplayTitle = (item: { audiobookId?: number; title: string }): string => {
   if (item.audiobookId) {
     const abTitle = audiobookTitleMap.value.get(item.audiobookId)
     if (abTitle) return abTitle
@@ -580,19 +704,41 @@ const filteredQueue = computed(() => {
       (item.title && item.title.toLowerCase().includes(text)) ||
       (item.downloadClient && item.downloadClient.toLowerCase().includes(text)) ||
       (item.status && item.status.toLowerCase().includes(text)) ||
-      (item.quality && item.quality.toLowerCase().includes(text))
+      (item.reason && item.reason.toLowerCase().includes(text))
     )
   })
 })
 
+// Load the activity summary + collapsed list for the currently selected category.
+const loadActivity = async () => {
+  try {
+    activity.value = await apiService.getActivity({
+      category: activeCategory.value ?? undefined,
+    })
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'ActivityView',
+      operation: 'loadActivity',
+    })
+  }
+}
+
+const selectCategory = (category: ActivityCategory | null) => {
+  // Clicking the active chip returns to the default view.
+  activeCategory.value = activeCategory.value === category ? null : category
+  void refreshQueue()
+}
+
 const refreshQueue = async () => {
+  // Intentionally does NOT call apiService.getQueue(): that endpoint runs the full, expensive
+  // DownloadQueueService pipeline (path translation + metadata enrichment + orphan reconciliation
+  // over thousands of records, ~10-30s) on every call. Live progress for in-progress rows already
+  // arrives via the SignalR `QueueUpdate` subscription (see onMounted), and getActivity() carries
+  // DB progress. Polling getQueue here every 30s was the source of the CPU spike while the
+  // Activity tab is open.
   loading.value = true
   try {
-    const [queueSnapshot] = await Promise.all([
-      apiService.getQueue(),
-      downloadsStore.loadDownloads(),
-    ])
-    applyQueueSnapshot(queueSnapshot)
+    await loadActivity()
   } catch (err) {
     errorTracking.captureException(err as Error, {
       component: 'ActivityView',
@@ -603,7 +749,7 @@ const refreshQueue = async () => {
   }
 }
 
-const removeFromQueue = async (item: QueueItem) => {
+const removeFromQueue = async (item: ActivityRow) => {
   itemToRemove.value = item
 
   if (
@@ -630,11 +776,11 @@ const confirmRemove = async () => {
       (itemToRemove.value.downloadClientType || '').toString().toUpperCase() === 'DDL'
     ) {
       await apiService.cancelDownload(itemToRemove.value.id)
-      await downloadsStore.loadDownloads()
+      await refreshQueue()
     } else {
       if (clientHasQueueEntry.value === false) {
         await apiService.cancelDownload(itemToRemove.value.id)
-        await downloadsStore.loadDownloads()
+        await refreshQueue()
       } else {
         await apiService.removeFromQueue(itemToRemove.value.id, itemToRemove.value.downloadClientId)
         await refreshQueue()
@@ -667,8 +813,124 @@ const formatStatus = (status: string): string => {
     importpending: 'Importing',
     importblocked: 'Import Blocked',
     imported: 'Imported',
+    stalled: 'Stalled',
+    // Raw DownloadStatus names that map to the Imported category (used in the attempt-history modal).
+    moved: 'Imported',
+    ready: 'Imported',
   }
   return labels[status] ?? status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+// Maps a download-client implementation type to an icon. Torrent clients get a magnet, usenet
+// clients a cloud-download, direct downloads a globe; anything unknown falls back to a drive.
+const clientIcon = (item: ActivityRow): Component => {
+  const type = (item.downloadClientType || '').toLowerCase()
+  if (type === 'ddl') return PhGlobe
+  if (['qbittorrent', 'transmission', 'deluge', 'rtorrent', 'utorrent'].includes(type))
+    return PhMagnet
+  if (['sabnzbd', 'nzbget'].includes(type)) return PhCloudArrowDown
+  return PhHardDrives
+}
+
+// Human label for the client implementation, used in the client chip's tooltip.
+const clientKindLabel = (type: string): string => {
+  const t = (type || '').toLowerCase()
+  if (t === 'ddl') return 'direct download'
+  if (['qbittorrent', 'transmission', 'deluge', 'rtorrent', 'utorrent'].includes(t))
+    return 'torrent client'
+  if (['sabnzbd', 'nzbget'].includes(t)) return 'usenet client'
+  return 'download client'
+}
+
+const clientTooltip = (item: ActivityRow): string => {
+  const where = item.downloadClient || 'an unknown client'
+  return `Downloading via ${where} (${clientKindLabel(item.downloadClientType)})`
+}
+
+// Explains what a status means — and, crucially, why a row can read ~100% yet still show
+// Downloading/Processing: the progress bar tracks downloaded bytes, the badge tracks pipeline stage.
+const statusTooltip = (item: ActivityRow): string => {
+  const nearDone = item.progress >= 99.5
+  switch (item.status) {
+    case 'downloading':
+      return nearDone
+        ? 'Bytes are fully downloaded, but the client is still active (e.g. seeding) or Listenarr has not yet detected completion.'
+        : 'Actively downloading from the client.'
+    case 'processing':
+      return nearDone
+        ? 'Download finished; Listenarr is now importing and moving the files into your library.'
+        : 'Listenarr is processing the completed download (importing / moving files).'
+    case 'queued':
+      return 'Waiting in the download client queue to start.'
+    case 'paused':
+      return 'Download is paused in the client.'
+    case 'importpending':
+      return 'Waiting on import completion or manual interaction before the files land in the library.'
+    case 'importblocked':
+      return 'Finished downloading, but the import needs attention. Retryable from the item.'
+    case 'imported':
+      return 'The files made it into your library.'
+    case 'completed':
+      return 'Download completed.'
+    case 'stalled':
+      return 'Made no download progress and was reaped by the stall timer.'
+    case 'failed':
+      return 'The download failed. See the reason for details.'
+    default:
+      return formatStatus(item.status)
+  }
+}
+
+// Reuses the row badge mapping for a single historical attempt (category drives the colour/class).
+const attemptBadgeClass = (attempt: ActivityAttempt): string => {
+  switch (attempt.category) {
+    case 'Blocked':
+      return 'importblocked'
+    case 'Imported':
+      return 'imported'
+    case 'Failed':
+      return 'failed'
+    case 'Stalled':
+      return 'stalled'
+    case 'InProgress':
+    default:
+      return (attempt.status || 'downloading').toLowerCase()
+  }
+}
+
+const openAttempts = (item: ActivityRow) => {
+  attemptsItem.value = item
+  showAttemptsModal.value = true
+}
+
+const closeAttempts = () => {
+  showAttemptsModal.value = false
+  attemptsItem.value = null
+}
+
+// Relative "when" label for the activity timestamp (e.g. "5m ago", "3h ago", "Jun 5").
+const formatWhen = (iso?: string): string => {
+  if (!iso) return '-'
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return '-'
+  const diffMs = Date.now() - then
+  const sec = Math.floor(diffMs / 1000)
+  if (sec < 45) return 'just now'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  if (day < 7) return `${day}d ago`
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+const formatWhenTitle = (row: ActivityRow): string => {
+  const parts: string[] = []
+  if (row.whenIso) parts.push(`Added ${new Date(row.whenIso).toLocaleString()}`)
+  if (row.completedIso) parts.push(`Finished ${new Date(row.completedIso).toLocaleString()}`)
+  if (row.attemptCount > 1) parts.push(`${row.attemptCount} attempts`)
+  return parts.join(' · ')
 }
 
 const formatEta = (seconds: number): string => {
@@ -684,9 +946,6 @@ onMounted(async () => {
   if (typeof window !== 'undefined') {
     window.addEventListener('resize', handleViewportResize, { passive: true })
   }
-
-  await downloadsStore.loadDownloads()
-  await configStore.loadApplicationSettings()
 
   unsubscribeQueue = signalRService.onQueueUpdate((updatedQueue) => {
     applyQueueSnapshot(updatedQueue)
@@ -756,6 +1015,100 @@ onUnmounted(() => {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+}
+
+/* Summary chips */
+.activity-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.summary-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: #252525;
+  color: #adb5bd;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.summary-chip:hover {
+  background: #2c2c2c;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.summary-chip.active {
+  border-color: #4dabf7;
+  background: rgba(77, 171, 247, 0.12);
+  color: #fff;
+}
+
+.chip-count {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.chip-label {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.chip-window {
+  color: #868e96;
+  font-size: 0.72rem;
+}
+
+/* Per-category count accents */
+.chip-inprogress .chip-count {
+  color: #4dabf7;
+}
+.chip-blocked .chip-count {
+  color: #fab005;
+}
+.chip-imported .chip-count {
+  color: #20c997;
+}
+.chip-failed .chip-count {
+  color: #fa5252;
+}
+.chip-stalled .chip-count {
+  color: #fd7e14;
+}
+
+/* Failure-reason breakdown */
+.failure-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #868e96;
+}
+
+.failure-reasons-label {
+  font-weight: 600;
+}
+
+.failure-reason-pill {
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(250, 82, 82, 0.1);
+  color: #e0867f;
+}
+
+.failure-reason-pill strong {
+  color: #fff;
 }
 
 .filter-input-wrapper {
@@ -957,6 +1310,47 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+.title-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.title-reason {
+  color: #868e96;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.client-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  color: #adb5bd;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+  white-space: nowrap;
+}
+
+.client-icon {
+  width: 12px;
+  height: 12px;
+  color: #868e96;
+}
+
 .title-text,
 .title-link {
   color: white;
@@ -964,6 +1358,9 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Shrink within the flex title row so the client chip stays visible and the title ellipsizes. */
+  min-width: 0;
+  flex: 0 1 auto;
 }
 
 .title-link {
@@ -984,10 +1381,31 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
-/* Language cell */
-.language-text {
+/* When cell */
+.when-text {
   color: #adb5bd;
   font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.attempts-badge {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.3rem;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #868e96;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+
+.attempts-badge:hover {
+  background: rgba(77, 171, 247, 0.18);
+  color: #4dabf7;
 }
 
 /* Progress cell */
@@ -1082,14 +1500,21 @@ onUnmounted(() => {
   color: #ff922b;
 }
 
+/* Blocked = needs action (amber), distinct from a hard failure (red) */
 .status-badge.importblocked {
-  background-color: rgba(250, 82, 82, 0.15);
-  color: #fa5252;
+  background-color: rgba(250, 176, 5, 0.18);
+  color: #fab005;
 }
 
 .status-badge.imported {
   background-color: rgba(32, 201, 151, 0.15);
   color: #20c997;
+}
+
+/* Stalled = reaped for no progress; muted orange, between blocked and failed */
+.status-badge.stalled {
+  background-color: rgba(253, 126, 20, 0.15);
+  color: #fd7e14;
 }
 
 .stale-badge {
@@ -1319,6 +1744,70 @@ onUnmounted(() => {
   height: 16px;
 }
 
+/* Attempt-history modal */
+.attempts-modal {
+  max-width: 560px;
+}
+
+.attempts-subtitle {
+  color: #adb5bd;
+  font-size: 0.9rem;
+  margin: 0 0 1rem 0;
+}
+
+.attempts-subtitle strong {
+  color: #fff;
+}
+
+.attempts-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.attempt-row {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+}
+
+.attempt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.attempt-when {
+  color: #adb5bd;
+  font-size: 0.78rem;
+}
+
+.attempt-client {
+  color: #868e96;
+  font-size: 0.72rem;
+  margin-left: auto;
+}
+
+.attempt-reason {
+  margin: 0.4rem 0 0 0;
+  color: #ced4da;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.attempt-reason.muted {
+  color: #6c757d;
+  font-style: italic;
+}
+
 /* Mobile responsive */
 @media (max-width: 768px) {
   .page-header {
@@ -1388,9 +1877,16 @@ onUnmounted(() => {
 
   /* Hide columns that don't fit mobile */
   .queue-row .col-quality,
-  .queue-row .col-language,
   .queue-row .col-eta {
     display: none;
+  }
+
+  /* When: small, under the title row */
+  .queue-row .col-when {
+    grid-column: 1;
+    grid-row: 3;
+    font-size: 0.72rem;
+    color: #868e96;
   }
 
   /* Row 1: Title (left) + Status badge (right) */

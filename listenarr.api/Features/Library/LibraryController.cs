@@ -43,6 +43,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryTransferFilesWorkflow _transferFilesWorkflow;
         private readonly LibraryFileDeleteWorkflow _fileDeleteWorkflow;
         private readonly LibrarySplitPreviewWorkflow _splitPreviewWorkflow;
+        private readonly LibraryDashboardStatsWorkflow _dashboardStatsWorkflow;
         private readonly LibraryNotAudiobookWorkflow _notAudiobookWorkflow;
         private readonly LibraryEmbeddedMetadataWorkflow _embeddedMetadataWorkflow;
         private readonly LibraryOrganizeSweepWorkflow _organizeSweepWorkflow;
@@ -85,6 +86,7 @@ namespace Listenarr.Api.Features.Library
             LibrarySeriesBackfillWorkflow seriesBackfillWorkflow,
             LibraryDuplicatesMergeWorkflow duplicatesMergeWorkflow,
             LibraryMusicCandidatesWorkflow musicCandidatesWorkflow,
+            LibraryDashboardStatsWorkflow dashboardStatsWorkflow,
             Listenarr.Application.Common.Images.IExternalCoverArtSweepService? externalCoverArtSweepService = null,
             Listenarr.Application.Audiobooks.Contracts.IFileExtractionService? fileExtractionService = null)
         {
@@ -114,6 +116,7 @@ namespace Listenarr.Api.Features.Library
             _seriesBackfillWorkflow = seriesBackfillWorkflow;
             _duplicatesMergeWorkflow = duplicatesMergeWorkflow;
             _musicCandidatesWorkflow = musicCandidatesWorkflow;
+            _dashboardStatsWorkflow = dashboardStatsWorkflow;
             _notAudiobookWorkflow = notAudiobookWorkflow;
             _embeddedMetadataWorkflow = embeddedMetadataWorkflow;
             _externalCoverArtSweepService = externalCoverArtSweepService;

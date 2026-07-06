@@ -18,32 +18,98 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
-type ActivityItem = {
+type ActivityCategory = 'InProgress' | 'Blocked' | 'Imported' | 'Failed' | 'Stalled'
+
+type Row = {
   id: string
   title?: string
   status?: string
+  category?: ActivityCategory
+  progress?: number
+  reason?: string
+  attemptCount?: number
+  attempts?: Array<Record<string, unknown>>
   downloadClientId?: string
   downloadClient?: string
   downloadClientType?: string
-  progress?: number
   canRemove?: boolean
 }
 
 type ActivityViewVm = {
-  allActivityItems: ActivityItem[]
-  filteredQueue: ActivityItem[]
+  allActivityItems: Row[]
+  filteredQueue: Row[]
   filterText: string
+  activeCategory: ActivityCategory | null
+  selectCategory: (c: ActivityCategory | null) => void
+  summaryChips: Array<{
+    key: string
+    label: string
+    count: number
+    category: ActivityCategory | null
+  }>
   showRemoveModal: boolean
   clientHasQueueEntry: boolean | null
   queueHealthClients: Array<{ name: string; isUnavailable?: boolean }>
-  removeFromQueue: (item: ActivityItem) => Promise<void> | void
+  removeFromQueue: (item: Row) => Promise<void> | void
   confirmRemove: () => Promise<void>
+  showAttemptsModal: boolean
+  attemptsItem: Row | null
+  openAttempts: (item: Row) => void
+  statusTooltip: (item: Row) => string
+  clientTooltip: (item: Row) => string
 }
 
+// --- builders for the activity endpoint payload ---------------------------------
+
+const makeItem = (over: Partial<Record<string, unknown>> = {}) => ({
+  id: 'item-1',
+  title: 'A Book',
+  artist: '',
+  category: 'InProgress' as ActivityCategory,
+  status: 'Downloading',
+  progress: 0,
+  totalSize: 1000,
+  downloadedSize: 0,
+  startedAt: new Date().toISOString(),
+  activityAt: new Date().toISOString(),
+  completedAt: undefined,
+  reason: undefined,
+  attemptCount: 1,
+  downloadClientId: 'qbit',
+  downloadClientName: 'qBittorrent',
+  ...over,
+})
+
+const makeResponse = (
+  items: Array<Record<string, unknown>>,
+  summary: Partial<Record<string, unknown>> = {},
+) => ({
+  summary: {
+    inProgress: 0,
+    blocked: 0,
+    imported: 0,
+    failed: 0,
+    stalled: 0,
+    windowHours: 24,
+    failureReasons: [],
+    ...summary,
+  },
+  items,
+  totalItems: items.length,
+})
+
+// Captures the Activity view's SignalR queue-update handler so tests can push a live snapshot
+// (the view relies on SignalR for live progress, not on polling getQueue).
+let queueUpdateHandler: ((payload: unknown) => void) | null = null
+
 const mockSignalR = () => {
+  queueUpdateHandler = null
   vi.doMock('@/services/signalr', () => ({
     signalRService: {
-      onQueueUpdate: vi.fn(() => () => undefined),
+      onQueueUpdate: vi.fn((cb: (payload: unknown) => void) => {
+        queueUpdateHandler = cb
+        return () => undefined
+      }),
     },
   }))
 }
@@ -51,49 +117,20 @@ const mockSignalR = () => {
 const mockApi = (overrides: Record<string, unknown> = {}) => {
   const apiService = {
     getQueue: vi.fn(async () => []),
+    getActivity: vi.fn(async () => makeResponse([])),
     removeFromQueue: vi.fn(async () => undefined),
     cancelDownload: vi.fn(async () => undefined),
     ...overrides,
   }
 
-  vi.doMock('@/services/api', () => ({
-    apiService,
-  }))
-
+  vi.doMock('@/services/api', () => ({ apiService }))
   return apiService
-}
-
-const mockConfigurationStore = (showCompletedExternalDownloads = false) => {
-  vi.doMock('@/stores/configuration', () => ({
-    useConfigurationStore: () => ({
-      applicationSettings: { showCompletedExternalDownloads },
-      loadApplicationSettings: vi.fn(async () => undefined),
-    }),
-  }))
 }
 
 const mockLibraryStore = (audiobooks: Array<{ id: number; title: string }> = []) => {
   vi.doMock('@/stores/library', () => ({
-    useLibraryStore: () => ({
-      audiobooks,
-    }),
+    useLibraryStore: () => ({ audiobooks }),
   }))
-}
-
-const mockDownloadsStore = (overrides: Record<string, unknown> = {}) => {
-  const store = {
-    activeDownloads: [],
-    completedDownloads: [],
-    failedDownloads: [],
-    loadDownloads: vi.fn(async () => undefined),
-    ...overrides,
-  }
-
-  vi.doMock('@/stores/downloads', () => ({
-    useDownloadsStore: () => store,
-  }))
-
-  return store
 }
 
 const mountActivityView = async () => {
@@ -126,94 +163,98 @@ describe('ActivityView', () => {
     vi.restoreAllMocks()
   })
 
-  it('includes completed external downloads from the downloads store in the unified list', async () => {
+  it('maps activity items to rows with category-derived status badges', async () => {
     mockSignalR()
-    mockApi()
-    mockConfigurationStore(false)
-    mockLibraryStore()
-    mockDownloadsStore({
-      completedDownloads: [
-        {
-          id: 'd1',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'SABnzbd',
-          startedAt: new Date().toISOString(),
-          title: 'One',
-          downloadedSize: 1000,
-          totalSize: 1000,
-        },
-        {
-          id: 'd2',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'qbittorrent',
-          startedAt: new Date().toISOString(),
-          title: 'Two',
-          downloadedSize: 2000,
-          totalSize: 2000,
-        },
-        {
-          id: 'd3',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'transmission',
-          startedAt: new Date().toISOString(),
-          title: 'Three',
-          downloadedSize: 3000,
-          totalSize: 3000,
-        },
-        {
-          id: 'd4',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'nzbget',
-          startedAt: new Date().toISOString(),
-          title: 'Four',
-          downloadedSize: 4000,
-          totalSize: 4000,
-        },
-      ],
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({ id: 'a', category: 'InProgress', status: 'ImportPending' }),
+          makeItem({ id: 'b', category: 'Blocked', status: 'ImportBlocked' }),
+          makeItem({ id: 'c', category: 'Imported', status: 'Moved' }),
+          makeItem({ id: 'd', category: 'Failed', status: 'Failed' }),
+          makeItem({ id: 'e', category: 'Stalled', status: 'Failed' }),
+        ]),
+      ),
     })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+    const byId = (id: string) => vm.allActivityItems.find((i) => i.id === id)
+
+    expect(byId('a')?.status).toBe('importpending') // InProgress keeps the specific in-flight state
+    expect(byId('b')?.status).toBe('importblocked')
+    expect(byId('c')?.status).toBe('imported')
+    expect(byId('d')?.status).toBe('failed')
+    expect(byId('e')?.status).toBe('stalled')
+  })
+
+  it('keeps the authoritative DB status even when the live queue says downloading (no bounce)', async () => {
+    // The DB record is ImportBlocked, but the still-seeding torrent shows up in the live queue
+    // snapshot as "downloading". The row must stay blocked, not flip.
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({ id: 'seed', category: 'Blocked', status: 'ImportBlocked', progress: 100 }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
 
-    expect(vm.allActivityItems.map((item) => item.id)).toEqual(
-      expect.arrayContaining(['d1', 'd2', 'd3', 'd4']),
-    )
-    expect(vm.filteredQueue).toHaveLength(4)
+    // Live queue (via SignalR) reports the still-seeding torrent as "downloading"...
+    queueUpdateHandler?.([
+      {
+        id: 'seed',
+        title: 'A Book',
+        status: 'downloading',
+        progress: 100,
+        downloadClientId: 'qbit',
+      },
+    ])
+    await flushPromises()
+
+    // ...but the row keeps the authoritative DB status.
+    expect(vm.allActivityItems.find((i) => i.id === 'seed')?.status).toBe('importblocked')
   })
 
-  it('filters the unified activity list by text', async () => {
+  it('overlays live download progress onto in-progress rows', async () => {
     mockSignalR()
-    mockApi()
-    mockConfigurationStore(true)
-    mockLibraryStore()
-    mockDownloadsStore({
-      completedDownloads: [
-        {
-          id: 'd1',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'SABnzbd',
-          startedAt: new Date().toISOString(),
-          title: 'One',
-          downloadedSize: 1000,
-          totalSize: 1000,
-        },
-        {
-          id: 'd2',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'qbittorrent',
-          startedAt: new Date().toISOString(),
-          title: 'Two',
-          downloadedSize: 2000,
-          totalSize: 2000,
-        },
-      ],
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({ id: 'dl', category: 'InProgress', status: 'Downloading', progress: 10 }),
+        ]),
+      ),
     })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // Live progress arrives over SignalR (not a getQueue poll).
+    queueUpdateHandler?.([
+      { id: 'dl', title: 'A Book', status: 'downloading', progress: 82, downloadClientId: 'qbit' },
+    ])
+    await flushPromises()
+
+    expect(vm.allActivityItems.find((i) => i.id === 'dl')?.progress).toBe(82)
+  })
+
+  it('filters the activity list by text across title, status and reason', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({ id: 'one', title: 'One', category: 'InProgress' }),
+          makeItem({ id: 'two', title: 'Two', category: 'Blocked', status: 'ImportBlocked' }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
@@ -222,34 +263,149 @@ describe('ActivityView', () => {
     await flushPromises()
 
     expect(vm.filteredQueue).toHaveLength(1)
-    expect(vm.filteredQueue[0]?.id).toBe('d2')
+    expect(vm.filteredQueue[0]?.id).toBe('two')
   })
 
-  it('removes a queue-backed item from the client', async () => {
-    const queueItem = {
-      id: 'q1',
-      title: 'Queue Item',
-      status: 'downloading',
-      progress: 50,
-      size: 1000,
-      downloaded: 500,
-      downloadClientId: 'qbittorrent',
-      downloadClient: 'qbittorrent',
-      canRemove: true,
-    }
-
+  it('exposes summary counts and drills into a category on chip click', async () => {
     mockSignalR()
     const apiService = mockApi({
-      getQueue: vi.fn(async () => [queueItem]),
+      getActivity: vi.fn(async () =>
+        makeResponse([makeItem({ id: 'one', category: 'InProgress' })], {
+          inProgress: 3,
+          failed: 2,
+        }),
+      ),
     })
-    mockConfigurationStore(false)
     mockLibraryStore()
-    mockDownloadsStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
-    const item = vm.allActivityItems.find((entry) => entry.id === 'q1')
 
+    expect(vm.summaryChips.find((c) => c.key === 'inprogress')?.count).toBe(3)
+    expect(vm.summaryChips.find((c) => c.key === 'failed')?.count).toBe(2)
+
+    vm.selectCategory('Failed')
+    await flushPromises()
+    expect(vm.activeCategory).toBe('Failed')
+    expect(apiService.getActivity).toHaveBeenLastCalledWith({ category: 'Failed' })
+
+    // Clicking the active chip returns to the default view.
+    vm.selectCategory('Failed')
+    await flushPromises()
+    expect(vm.activeCategory).toBeNull()
+    expect(apiService.getActivity).toHaveBeenLastCalledWith({ category: undefined })
+  })
+
+  it('surfaces the attempt count for collapsed rows', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([makeItem({ id: 'collapsed', attemptCount: 4 })]),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+
+    expect(vm.allActivityItems.find((i) => i.id === 'collapsed')?.attemptCount).toBe(4)
+  })
+
+  it('opens the attempt-history modal with the per-attempt breakdown', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({
+            id: 'multi',
+            attemptCount: 2,
+            attempts: [
+              {
+                category: 'Imported',
+                status: 'Moved',
+                at: new Date().toISOString(),
+                reason: undefined,
+              },
+              {
+                category: 'Failed',
+                status: 'Failed',
+                at: new Date().toISOString(),
+                reason: 'qBittorrent state: missingFiles',
+                downloadClientName: 'qBittorrent',
+              },
+            ],
+          }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+    const item = vm.allActivityItems.find((i) => i.id === 'multi')!
+
+    vm.openAttempts(item)
+    await flushPromises()
+
+    expect(vm.showAttemptsModal).toBe(true)
+    expect(vm.attemptsItem?.attempts).toHaveLength(2)
+    expect(wrapper.text()).toContain('qBittorrent state: missingFiles')
+    expect(wrapper.text()).toContain('No error recorded for this attempt.')
+  })
+
+  it('explains a 100%-but-downloading row and surfaces the download client', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({
+            id: 'seed',
+            category: 'InProgress',
+            status: 'Downloading',
+            progress: 100,
+            downloadClientName: 'qBittorrent',
+            downloadClientType: 'qbittorrent',
+          }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+    const item = vm.allActivityItems.find((i) => i.id === 'seed')!
+
+    expect(vm.statusTooltip(item)).toContain('still active')
+    expect(vm.clientTooltip(item)).toBe('Downloading via qBittorrent (torrent client)')
+  })
+
+  it('removes a queue-backed item through the client', async () => {
+    mockSignalR()
+    const apiService = mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({ id: 'q1', category: 'InProgress', downloadClientId: 'qbittorrent' }),
+        ]),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // The item is present in the live client queue (delivered via SignalR).
+    queueUpdateHandler?.([
+      {
+        id: 'q1',
+        title: 'A Book',
+        status: 'downloading',
+        progress: 50,
+        downloadClientId: 'qbittorrent',
+      },
+    ])
+    await flushPromises()
+
+    const item = vm.allActivityItems.find((i) => i.id === 'q1')
     expect(item).toBeDefined()
 
     await vm.removeFromQueue(item!)
@@ -260,32 +416,26 @@ describe('ActivityView', () => {
     expect(apiService.removeFromQueue).toHaveBeenCalledWith('q1', 'qbittorrent')
   })
 
-  it('offers Listenarr-only removal when an external item is no longer in the client queue', async () => {
+  it('offers Listenarr-only removal when the item is no longer in the client queue', async () => {
     mockSignalR()
     const apiService = mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse([
+          makeItem({
+            id: 'gone',
+            category: 'Blocked',
+            status: 'ImportBlocked',
+            downloadClientId: 'SABnzbd',
+          }),
+        ]),
+      ),
       getQueue: vi.fn(async () => []),
     })
-    mockConfigurationStore(false)
     mockLibraryStore()
-    const downloadsStore = mockDownloadsStore({
-      completedDownloads: [
-        {
-          id: 'ext-1',
-          status: 'Completed',
-          progress: 100,
-          downloadClientId: 'SABnzbd',
-          startedAt: new Date().toISOString(),
-          title: 'Completed External',
-          downloadedSize: 100,
-          totalSize: 100,
-        },
-      ],
-    })
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
-    const item = vm.allActivityItems.find((entry) => entry.id === 'ext-1')
-
+    const item = vm.allActivityItems.find((i) => i.id === 'gone')
     expect(item).toBeDefined()
 
     await vm.removeFromQueue(item!)
@@ -293,203 +443,41 @@ describe('ActivityView', () => {
     expect(vm.clientHasQueueEntry).toBe(false)
 
     await vm.confirmRemove()
-    expect(apiService.cancelDownload).toHaveBeenCalledWith('ext-1')
-    expect(downloadsStore.loadDownloads).toHaveBeenCalled()
-  })
-
-  it('deduplicates failed queue items against failed download records', async () => {
-    const queueFailed = {
-      id: 'q1',
-      title: 'Queue Failed',
-      status: 'failed',
-      progress: 0,
-      size: 0,
-      downloaded: 0,
-      downloadClientId: 'qbittorrent',
-      downloadClient: 'qbittorrent',
-    }
-
-    mockSignalR()
-    mockApi({
-      getQueue: vi.fn(async () => [queueFailed]),
-    })
-    mockConfigurationStore(false)
-    mockLibraryStore()
-    mockDownloadsStore({
-      failedDownloads: [
-        {
-          id: 'q1',
-          status: 'Failed',
-          progress: 0,
-          downloadClientId: 'qbittorrent',
-          title: 'Queue Failed (DB copy)',
-        },
-        { id: 'd1', status: 'Failed', progress: 0, downloadClientId: 'DDL', title: 'DDL Failed' },
-      ],
-    })
-
-    const wrapper = await mountActivityView()
-    const vm = wrapper.vm as unknown as ActivityViewVm
-
-    expect(vm.allActivityItems).toHaveLength(2)
-    expect(vm.allActivityItems.filter((item) => item.id === 'q1')).toHaveLength(1)
-    expect(vm.allActivityItems.some((item) => item.id === 'd1')).toBe(true)
-  })
-
-  it('removes a failed DDL download through Listenarr cancellation', async () => {
-    mockSignalR()
-    const apiService = mockApi()
-    mockConfigurationStore(false)
-    mockLibraryStore()
-    const downloadsStore = mockDownloadsStore({
-      failedDownloads: [
-        { id: 'd1', status: 'Failed', progress: 0, downloadClientId: 'DDL', title: 'DDL Failed' },
-      ],
-    })
-
-    const wrapper = await mountActivityView()
-    const vm = wrapper.vm as unknown as ActivityViewVm
-    const item = vm.allActivityItems.find((entry) => entry.id === 'd1')
-
-    expect(item).toBeDefined()
-
-    await vm.removeFromQueue(item!)
-    expect(vm.clientHasQueueEntry).toBe(true)
-
-    await vm.confirmRemove()
-    expect(apiService.cancelDownload).toHaveBeenCalledWith('d1')
-    expect(downloadsStore.loadDownloads).toHaveBeenCalled()
-  })
-
-  it('maps ImportPending and ImportBlocked downloads to activity rows', async () => {
-    mockSignalR()
-    mockApi()
-    mockConfigurationStore(false)
-    mockLibraryStore()
-    mockDownloadsStore({
-      activeDownloads: [
-        {
-          id: 'd-importpending',
-          title: 'Import Pending',
-          status: 'ImportPending',
-          progress: 99,
-          totalSize: 1000,
-          downloadedSize: 990,
-          downloadClientId: 'qbittorrent',
-          startedAt: new Date().toISOString(),
-        },
-      ],
-      failedDownloads: [
-        {
-          id: 'd-importblocked',
-          title: 'Import Blocked',
-          status: 'ImportBlocked',
-          progress: 100,
-          totalSize: 1000,
-          downloadedSize: 1000,
-          downloadClientId: 'qbittorrent',
-          startedAt: new Date().toISOString(),
-        },
-      ],
-    })
-
-    const wrapper = await mountActivityView()
-    const vm = wrapper.vm as unknown as ActivityViewVm
-
-    expect(vm.allActivityItems.find((item) => item.id === 'd-importpending')?.status).toBe(
-      'importpending',
-    )
-    expect(vm.allActivityItems.find((item) => item.id === 'd-importblocked')?.status).toBe(
-      'importblocked',
-    )
+    expect(apiService.cancelDownload).toHaveBeenCalledWith('gone')
   })
 
   it('shows unavailable client health even when no queue items are returned', async () => {
     mockSignalR()
-    mockApi({
-      getQueue: vi.fn(async () => ({
-        items: [],
-        clients: [
-          {
-            clientId: 'qb-1',
-            clientName: 'qBittorrent',
-            clientType: 'qbittorrent',
-            snapshotState: 'unavailable',
-            isStaleSnapshot: false,
-            isUnavailable: true,
-            snapshotFailureReason: 'timeout',
-            itemCount: 0,
-          },
-        ],
-        generatedAt: new Date().toISOString(),
-        hasStaleData: false,
-        hasUnavailableClients: true,
-      })),
-    })
-    mockConfigurationStore(false)
+    mockApi()
     mockLibraryStore()
-    mockDownloadsStore()
 
     const wrapper = await mountActivityView()
     const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // Client-health state arrives with the live snapshot over SignalR.
+    queueUpdateHandler?.({
+      items: [],
+      clients: [
+        {
+          clientId: 'qb-1',
+          clientName: 'qBittorrent',
+          clientType: 'qbittorrent',
+          snapshotState: 'unavailable',
+          isStaleSnapshot: false,
+          isUnavailable: true,
+          snapshotFailureReason: 'timeout',
+          itemCount: 0,
+        },
+      ],
+      generatedAt: new Date().toISOString(),
+      hasStaleData: false,
+      hasUnavailableClients: true,
+    })
+    await flushPromises()
 
     expect(vm.queueHealthClients).toHaveLength(1)
     expect(vm.queueHealthClients[0]?.name).toBe('qBittorrent')
     expect(wrapper.text()).toContain('Some queue data is unavailable')
     expect(wrapper.text()).toContain('qBittorrent unavailable after a timeout')
-  })
-
-  it('prefers the queue snapshot over an external active download with the same tracked id', async () => {
-    mockSignalR()
-    mockApi({
-      getQueue: vi.fn(async () => ({
-        items: [
-          {
-            id: 'tracked-artemis',
-            title: 'Artemis',
-            status: 'completed',
-            progress: 100,
-            size: 489100000,
-            downloaded: 489100000,
-            downloadSpeed: 77300,
-            quality: 'Unknown',
-            downloadClient: 'QBIT',
-            downloadClientId: 'qb-1',
-            downloadClientType: 'qbittorrent',
-            addedAt: new Date().toISOString(),
-            canPause: false,
-            canRemove: true,
-          },
-        ],
-        clients: [],
-        generatedAt: new Date().toISOString(),
-        hasStaleData: false,
-        hasUnavailableClients: false,
-      })),
-    })
-    mockConfigurationStore(true)
-    mockLibraryStore()
-    mockDownloadsStore({
-      activeDownloads: [
-        {
-          id: 'tracked-artemis',
-          title: 'Artemis',
-          status: 'Downloading',
-          progress: 100,
-          totalSize: 489100000,
-          downloadedSize: 489100000,
-          downloadClientId: 'qb-1',
-          startedAt: new Date().toISOString(),
-        },
-      ],
-    })
-
-    const wrapper = await mountActivityView()
-    const vm = wrapper.vm as unknown as ActivityViewVm
-
-    expect(vm.allActivityItems).toHaveLength(1)
-    expect(vm.allActivityItems[0]?.id).toBe('tracked-artemis')
-    expect(vm.allActivityItems[0]?.status).toBe('completed')
-    expect(vm.allActivityItems[0]?.title).toBe('Artemis')
   })
 })

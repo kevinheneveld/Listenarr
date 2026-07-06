@@ -276,51 +276,39 @@ vi.mock('@/services/api', () => {
   }
 })
 
-vi.mock('@/services/signalr', () => ({
-  signalRService: {
-    connect: () => {},
-    onDownloadsList: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onSearchProgress: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onQueueUpdate: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onDownloadUpdate: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onFilesRemoved: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onAudiobookUpdate: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onNotification: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onToast: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onVerificationComplete: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-    onVerificationProgress: (cb?: (...args: unknown[]) => void) => {
-      void cb
-      return () => {}
-    },
-  },
-}))
+vi.mock('@/services/signalr', () => {
+  // Self-populating mock: any signalRService method resolves to a no-op that
+  // returns an unsubscribe no-op — new SignalR events can never break specs by
+  // missing from a fixed method list. Methods are memoized onto the target and
+  // the traps support defineProperty/set so vi.spyOn keeps working.
+  const target: Record<string | symbol, unknown> = {}
+  const ensure = (prop: string | symbol) => {
+    if (!(prop in target)) {
+      target[prop] = () => () => {}
+    }
+    return target[prop]
+  }
+  return {
+    signalRService: new Proxy(target, {
+      get: (_t, prop) => ensure(prop),
+      has: () => true,
+      getOwnPropertyDescriptor: (_t, prop) => ({
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: ensure(prop),
+      }),
+      set: (_t, prop, value) => {
+        target[prop] = value
+        return true
+      },
+      defineProperty: (_t, prop, desc) => {
+        Object.defineProperty(target, prop, desc)
+        return true
+      },
+    }),
+  }
+})
 
 // Ensure global WebSocket exists for code that references it
 if (typeof (globalThis as unknown as { WebSocket?: unknown }).WebSocket === 'undefined') {

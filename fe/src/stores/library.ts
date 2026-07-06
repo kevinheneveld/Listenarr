@@ -25,6 +25,15 @@ import { buildApiPath } from '@/services/apiBase'
 
 export const useLibraryStore = defineStore('library', () => {
   const audiobooks = ref<Audiobook[]>([])
+  // Transient id-set filter: set by dashboard drill-downs (e.g. "books missing
+  // narrators"), consumed by AudiobooksView, cleared on dismiss. Not persisted.
+  const idSetFilter = ref<{ ids: number[]; label: string } | null>(null)
+  function setIdSetFilter(ids: number[], label: string) {
+    idSetFilter.value = { ids, label }
+  }
+  function clearIdSetFilter() {
+    idSetFilter.value = null
+  }
   const loading = ref(false)
   const error = ref<string | null>(null)
   const selectedIds = ref<Set<number>>(new Set())
@@ -282,6 +291,9 @@ export const useLibraryStore = defineStore('library', () => {
 
   return {
     audiobooks,
+    idSetFilter,
+    setIdSetFilter,
+    clearIdSetFilter,
     loading,
     error,
     selectedIds,

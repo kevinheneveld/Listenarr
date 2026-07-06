@@ -59,13 +59,13 @@
 
         <AuthorMonitoringExclusionsSection />
 
-        <LibraryMaintenanceSection />
+        <div id="settings-section-maintenance"><LibraryMaintenanceSection /></div>
 
         <VerificationSettingsSection
           :settings="localSettings"
           @update:settings="(val) => Object.assign(localSettings, val)"
         ></VerificationSettingsSection>
-        <DuplicatesSection />
+        <div id="settings-section-duplicates"><DuplicatesSection /></div>
       </div>
       <!-- settings-form -->
     </div>
