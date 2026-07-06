@@ -53,9 +53,21 @@ namespace Listenarr.Infrastructure.HostedServices.Catalog
         }
     }
 
+    public sealed record SeriesBackfillRunResult(int TotalSeries, int AlreadyCached, int Fetched, int Failed)
+    {
+        public int Remaining => Math.Max(0, TotalSeries - AlreadyCached - Fetched);
+    }
+
     public interface ISeriesCatalogBackfillProcessor
     {
         Task RunCycleAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// One immediate backfill pass with an explicit fetch cap — the
+        /// dashboard's "Backfill now" trigger. Ignores the periodic service's
+        /// env-disable: an explicit user action outranks the automation toggle.
+        /// </summary>
+        Task<SeriesBackfillRunResult> RunOnceAsync(int maxFetches, CancellationToken cancellationToken);
     }
 
     public class SeriesCatalogBackfillProcessor : ISeriesCatalogBackfillProcessor
@@ -130,6 +142,11 @@ namespace Listenarr.Infrastructure.HostedServices.Catalog
                 return;
             }
 
+            await RunOnceAsync(MaxFetchesPerCycle, stoppingToken);
+        }
+
+        public async Task<SeriesBackfillRunResult> RunOnceAsync(int maxFetches, CancellationToken stoppingToken)
+        {
             using var scope = _serviceScopeFactory.CreateScope();
             var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
             var catalogService = scope.ServiceProvider.GetRequiredService<ISeriesCatalogService>();
@@ -165,11 +182,12 @@ namespace Listenarr.Infrastructure.HostedServices.Catalog
 
             var fetched = 0;
             var skipped = 0;
+            var failed = 0;
             foreach (var name in shuffled)
             {
                 stoppingToken.ThrowIfCancellationRequested();
 
-                if (fetched >= MaxFetchesPerCycle)
+                if (fetched >= maxFetches)
                 {
                     break;
                 }
@@ -188,6 +206,7 @@ namespace Listenarr.Infrastructure.HostedServices.Catalog
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                 {
+                    failed++;
                     _logger.LogWarning(ex, "Failed to cache series catalog for {Series}", name);
                 }
 
@@ -204,6 +223,8 @@ namespace Listenarr.Infrastructure.HostedServices.Catalog
             _logger.LogInformation(
                 "SeriesCatalogBackfill cycle complete: {Total} library series, {Skipped} already cached, {Fetched} catalogs fetched",
                 seriesNames.Count, skipped, fetched);
+
+            return new SeriesBackfillRunResult(seriesNames.Count, skipped, fetched, failed);
         }
     }
 }

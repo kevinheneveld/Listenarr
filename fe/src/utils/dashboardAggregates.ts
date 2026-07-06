@@ -164,6 +164,19 @@ export function verificationCounts(items: Audiobook[]): VerificationCounts {
   return counts
 }
 
+/**
+ * Human ETA for the background-activity panel: "~2h 15m", "~45m", "<1m".
+ * Null/zero/negative → empty string (caller hides the ETA).
+ */
+export function formatEta(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0) return ''
+  if (seconds < 60) return '<1m'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.round((seconds % 3600) / 60)
+  if (h > 0) return m > 0 ? `~${h}h ${m}m` : `~${h}h`
+  return `~${m}m`
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']

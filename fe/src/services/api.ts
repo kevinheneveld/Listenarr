@@ -63,6 +63,8 @@ import type {
   RenameResult,
   SearchActivityResponse,
   SeriesHealthResponse,
+  VerificationQueueStatus,
+  SeriesBackfillRunResult,
   EmbeddedFileMetadata,
   ExtractFileRequest,
   ExtractFileResult,
@@ -1466,6 +1468,16 @@ class ApiService {
 
   async getSeriesHealth(): Promise<SeriesHealthResponse> {
     return this.request<SeriesHealthResponse>(`/library/series/health`)
+  }
+
+  async getVerificationQueueStatus(): Promise<VerificationQueueStatus> {
+    return this.request<VerificationQueueStatus>(`/verification/queue-status`)
+  }
+
+  async runSeriesCatalogBackfill(): Promise<SeriesBackfillRunResult> {
+    return this.request<SeriesBackfillRunResult>(`/library/series/catalog-backfill`, {
+      method: 'POST',
+    })
   }
 
   async mergeDuplicates(merges: DuplicatesMergePair[]): Promise<MergeDuplicatesResult> {

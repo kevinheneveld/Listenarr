@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Listenarr.Api.Features.Verification;
 using Listenarr.Application.Common;
 using Listenarr.Application.Search.Filters;
 using Listenarr.Application.Search.Strategies;
@@ -92,6 +93,8 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryFileDeleteWorkflow>();
         services.AddScoped<LibrarySplitPreviewWorkflow>();
         services.AddScoped<LibraryMaintenanceWorkflow>();
+        services.AddScoped<LibrarySeriesBackfillWorkflow>();
+        services.AddScoped<VerificationQueueStatusWorkflow>();
         services.AddScoped<LibraryDuplicatesMergeWorkflow>();
         services.AddScoped<LibraryOrganizeSweepWorkflow>();
         services.AddScoped<LibraryMoveSummaryWorkflow>();

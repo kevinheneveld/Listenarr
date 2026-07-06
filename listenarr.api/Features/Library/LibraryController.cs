@@ -51,6 +51,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryFileStreamWorkflow _fileStreamWorkflow;
         private readonly LibrarySeriesHealthWorkflow _seriesHealthWorkflow;
         private readonly LibraryMaintenanceWorkflow _maintenanceWorkflow;
+        private readonly LibrarySeriesBackfillWorkflow _seriesBackfillWorkflow;
         private readonly LibraryDuplicatesMergeWorkflow _duplicatesMergeWorkflow;
         private readonly Listenarr.Application.Audiobooks.Contracts.IFileExtractionService? _fileExtractionService;
         /// <summary>Initializes the library transport façade.</summary>
@@ -80,6 +81,7 @@ namespace Listenarr.Api.Features.Library
             LibraryEmbeddedMetadataWorkflow embeddedMetadataWorkflow,
             LibrarySeriesHealthWorkflow seriesHealthWorkflow,
             LibraryMaintenanceWorkflow maintenanceWorkflow,
+            LibrarySeriesBackfillWorkflow seriesBackfillWorkflow,
             LibraryDuplicatesMergeWorkflow duplicatesMergeWorkflow,
             Listenarr.Application.Common.Images.IExternalCoverArtSweepService? externalCoverArtSweepService = null,
             Listenarr.Application.Audiobooks.Contracts.IFileExtractionService? fileExtractionService = null)
@@ -107,6 +109,7 @@ namespace Listenarr.Api.Features.Library
             _fileStreamWorkflow = fileStreamWorkflow;
             _seriesHealthWorkflow = seriesHealthWorkflow;
             _maintenanceWorkflow = maintenanceWorkflow;
+            _seriesBackfillWorkflow = seriesBackfillWorkflow;
             _duplicatesMergeWorkflow = duplicatesMergeWorkflow;
             _notAudiobookWorkflow = notAudiobookWorkflow;
             _embeddedMetadataWorkflow = embeddedMetadataWorkflow;

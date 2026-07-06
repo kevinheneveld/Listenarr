@@ -212,6 +212,75 @@
       <section class="dash-section">
         <h2>Activity</h2>
         <div class="activity-strip">
+          <!-- Background work: what the nice-priority CPU is actually doing and
+               how much is left — days of invisible whisper grinding looked like
+               a hang until this row existed. -->
+          <div v-if="queueStatus?.verification?.processing" class="activity-current live">
+            <PhWaveform />
+            <span>
+              Verifying:
+              <RouterLink
+                v-if="queueStatus.verification.processing.audiobookId"
+                :to="`/audiobooks/${queueStatus.verification.processing.audiobookId}`"
+                >{{ queueStatus.verification.processing.title || 'unknown book' }}</RouterLink
+              >
+              <template v-else>{{ queueStatus.verification.processing.title || '…' }}</template>
+              · {{ queueStatus.verification.queuedBooks
+              }}{{ queueStatus.verification.hasUnknownSizedJobs ? '+' : '' }} book{{
+                queueStatus.verification.queuedBooks === 1 ? '' : 's'
+              }}
+              left
+              <template v-if="verificationEta"> · {{ verificationEta }}</template>
+              · {{ queueStatus.verification.completedBooksToday }} done today
+            </span>
+          </div>
+          <div
+            v-else-if="queueStatus && queueStatus.verification.queuedBooks > 0"
+            class="activity-current"
+          >
+            <PhWaveform />
+            <span>
+              Verification queued: {{ queueStatus.verification.queuedBooks }} book{{
+                queueStatus.verification.queuedBooks === 1 ? '' : 's'
+              }}
+              <template v-if="verificationEta"> · {{ verificationEta }}</template>
+            </span>
+          </div>
+          <div
+            v-if="queueStatus && queueStatus.seriesBackfill.totalMultiBook > 0"
+            class="activity-current"
+          >
+            <PhBooks />
+            <span>
+              Series catalogs: {{ queueStatus.seriesBackfill.cached }}/{{
+                queueStatus.seriesBackfill.totalMultiBook
+              }}
+              cached
+            </span>
+            <button
+              v-if="queueStatus.seriesBackfill.cached < queueStatus.seriesBackfill.totalMultiBook"
+              type="button"
+              class="backfill-now-btn"
+              :disabled="backfillRunning"
+              title="Fetch up to 100 missing series catalogs now instead of waiting for the background cycles"
+              @click="runBackfillNow"
+            >
+              {{ backfillRunning ? 'Backfilling…' : 'Backfill now' }}
+            </button>
+          </div>
+          <div
+            v-if="
+              queueStatus &&
+              !queueStatus.verification.processing &&
+              queueStatus.verification.queuedBooks === 0 &&
+              !moveSummary?.currentlyProcessing?.length &&
+              !searchActivity.isSearching
+            "
+            class="activity-current"
+          >
+            <PhCheckCircle />
+            <span>All quiet — no background work running</span>
+          </div>
           <div class="activity-current" :class="{ live: searchActivity.isSearching }">
             <PhMagnifyingGlass />
             <span>{{ searchActivity.current?.message || 'Search idle' }}</span>
@@ -236,7 +305,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import {
   PhSpinner,
@@ -248,10 +317,13 @@ import {
   PhCopySimple,
   PhMagnifyingGlass,
   PhArrowClockwise,
+  PhBooks,
+  PhCheckCircle,
 } from '@phosphor-icons/vue'
 import { useLibraryStore } from '@/stores/library'
 import { useSearchActivityStore } from '@/stores/searchActivity'
 import { apiService } from '@/services/api'
+import { signalRService } from '@/services/signalr'
 import { useToast } from '@/services/toastService'
 import {
   libraryGlance,
@@ -260,8 +332,14 @@ import {
   type SeriesHealthRow,
   verificationCounts,
   formatBytes,
+  formatEta,
 } from '@/utils/dashboardAggregates'
-import type { LibraryDuplicatesResponse, MoveQueueSummary, SeriesHealthApiRow } from '@/types'
+import type {
+  LibraryDuplicatesResponse,
+  MoveQueueSummary,
+  SeriesHealthApiRow,
+  VerificationQueueStatus,
+} from '@/types'
 
 const libraryStore = useLibraryStore()
 const searchActivity = useSearchActivityStore()
@@ -349,6 +427,48 @@ async function scanDuplicates() {
   }
 }
 
+// --- Background activity (verification queue + series backfill) -------------
+const queueStatus = ref<VerificationQueueStatus | null>(null)
+const backfillRunning = ref(false)
+let queuePollTimer: ReturnType<typeof setInterval> | null = null
+let unsubscribeVerification: (() => void) | null = null
+
+const verificationEta = computed(() => formatEta(queueStatus.value?.verification?.etaSeconds))
+
+async function refreshQueueStatus() {
+  try {
+    queueStatus.value = await apiService.getVerificationQueueStatus()
+  } catch {
+    /* endpoint unavailable — the panel simply hides */
+  }
+}
+
+async function runBackfillNow() {
+  backfillRunning.value = true
+  try {
+    const result = await apiService.runSeriesCatalogBackfill()
+    toast.success('Series backfill', result.message)
+    void refreshQueueStatus()
+    // Newly cached catalogs change series-health rows too.
+    void apiService
+      .getSeriesHealth()
+      .then((resp) => (serverSeries.value = resp.rows))
+      .catch(() => {})
+  } catch (err) {
+    toast.error(
+      'Backfill failed',
+      err instanceof Error ? err.message : 'Could not run the series backfill.',
+    )
+  } finally {
+    backfillRunning.value = false
+  }
+}
+
+onUnmounted(() => {
+  if (queuePollTimer) clearInterval(queuePollTimer)
+  unsubscribeVerification?.()
+})
+
 onMounted(async () => {
   void apiService
     .getSeriesHealth()
@@ -371,6 +491,9 @@ onMounted(async () => {
     .getMoveQueueSummary(3)
     .then((s) => (moveSummary.value = s))
     .catch(() => {})
+  void refreshQueueStatus()
+  queuePollTimer = setInterval(() => void refreshQueueStatus(), 30_000)
+  unsubscribeVerification = signalRService.onVerificationComplete(() => void refreshQueueStatus())
 })
 </script>
 
@@ -690,5 +813,21 @@ onMounted(async () => {
 
 .activity-stage.stage-searching {
   color: #4dabf7;
+}
+.backfill-now-btn {
+  margin-left: auto;
+  padding: 0.25rem 0.7rem;
+  background-color: rgba(var(--brand-rgb), 0.1);
+  border: 1px solid var(--brand-500);
+  border-radius: 5px;
+  color: var(--brand-500);
+  font-size: 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.backfill-now-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 </style>

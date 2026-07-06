@@ -55,6 +55,24 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .ToListAsync(ct);
         }
 
+        public async Task<List<VerificationJobRecord>> GetRecentCompletedAsync(int take, CancellationToken ct = default)
+        {
+            return await _db.VerificationJobs
+                .AsNoTracking()
+                .Where(r => r.Status == "Completed" && r.CompletedAt != null)
+                .OrderByDescending(r => r.CompletedAt)
+                .Take(take)
+                .ToListAsync(ct);
+        }
+
+        public async Task<List<VerificationJobRecord>> GetCompletedSinceAsync(DateTime sinceUtc, CancellationToken ct = default)
+        {
+            return await _db.VerificationJobs
+                .AsNoTracking()
+                .Where(r => r.Status == "Completed" && r.CompletedAt != null && r.CompletedAt >= sinceUtc)
+                .ToListAsync(ct);
+        }
+
         public async Task DeleteFinishedOlderThanAsync(DateTime cutoffUtc, CancellationToken ct = default)
         {
             var stale = await _db.VerificationJobs

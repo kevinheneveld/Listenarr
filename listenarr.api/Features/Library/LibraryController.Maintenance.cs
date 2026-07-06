@@ -32,6 +32,17 @@ namespace Listenarr.Api.Features.Library
         /// Enqueue a force-metadata-refresh scan for every audiobook (backfills blank
         /// fields from file tags; never overwrites existing values).
         /// </summary>
+        /// <summary>
+        /// Run one immediate series-catalog backfill pass (higher cap than the
+        /// background cycle) — the dashboard's "Backfill now" trigger.
+        /// </summary>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpPost("series/catalog-backfill")]
+        public async Task<IActionResult> RunSeriesCatalogBackfill(CancellationToken ct)
+        {
+            return await _seriesBackfillWorkflow.RunAsync(ct);
+        }
+
         [HttpPost("backfill-metadata")]
         public async Task<IActionResult> BackfillMetadata(CancellationToken ct)
         {

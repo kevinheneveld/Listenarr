@@ -42,6 +42,10 @@ namespace Listenarr.Application.Audiobooks.Verification
         public DateTime? CompletedAt { get; set; }
         public string Status { get; set; } = "Queued";
         public string? Error { get; set; }
+
+        /// <summary>Book the worker is transcribing right now (null between books / when queued).</summary>
+        public int? CurrentAudiobookId { get; set; }
+        public string? CurrentAudiobookTitle { get; set; }
         /// <summary>
         /// Cooperative cancellation for this job. The worker links it with its own
         /// stopping token, so a cancel takes effect mid-transcription, not just
@@ -79,6 +83,8 @@ namespace Listenarr.Application.Audiobooks.Verification
         /// job is unknown, expired, or already finished.
         /// </summary>
         bool TryCancel(Guid id);
+        /// <summary>Point-in-time view of all known jobs (queued, running, finished-within-TTL) for status displays.</summary>
+        IReadOnlyList<VerificationJob> SnapshotJobs();
         ChannelReader<VerificationJob> Reader { get; }
     }
 
@@ -142,6 +148,8 @@ namespace Listenarr.Application.Audiobooks.Verification
         }
 
         public bool TryGetJob(Guid id, out VerificationJob? job) => _jobs.TryGetValue(id, out job);
+
+        public IReadOnlyList<VerificationJob> SnapshotJobs() => _jobs.Values.ToList();
 
         public bool TryCancel(Guid id)
         {

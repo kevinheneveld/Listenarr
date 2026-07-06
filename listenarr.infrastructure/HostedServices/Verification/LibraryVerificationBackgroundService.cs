@@ -243,6 +243,10 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                 // Re-load with files per book: a whole-library walk can run for
                 // hours and stale tracked entities would clobber concurrent edits.
                 var audiobook = (await audiobookRepository.GetByIdsWithFilesAsync(new[] { id }, ct)).FirstOrDefault();
+                // Surface what the worker is chewing on for the dashboard's
+                // background-activity panel.
+                job.CurrentAudiobookId = audiobook?.Id;
+                job.CurrentAudiobookTitle = audiobook?.Title;
                 if (audiobook == null || !ShouldVerify(audiobook, explicitRequest))
                 {
                     job.Processed++;
@@ -295,6 +299,9 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                     job.Processed++;
                 }
             }
+
+            job.CurrentAudiobookId = null;
+            job.CurrentAudiobookTitle = null;
         }
 
         /// <summary>

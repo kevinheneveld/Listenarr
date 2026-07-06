@@ -55,6 +55,16 @@ namespace Listenarr.Tests.Features.Api.Features.Library
                 .WithFormat("m4b")
                 .Build());
 
+            // Second tracked file: fileSize must report the SUM of tracked files,
+            // not the legacy single-file column (which is null on most records —
+            // the dashboard's "0 B on disk" bug).
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(book)
+                .WithPath(FileUtils.GetAbsolutePath("library", "Slim Book", "book-pt2.m4b"))
+                .WithSize(55)
+                .WithFormat("m4b")
+                .Build());
+
             await _downloadRepository.AddAsync(new DownloadBuilder()
                 .WithAudiobookId(book.Id)
                 .WithTitle(book.Title ?? string.Empty)
@@ -85,8 +95,8 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal("OL123", openLibraryId.GetString());
             Assert.Equal(book.BasePath, item.GetProperty("basePath").GetString());
             Assert.Equal(book.FilePath, item.GetProperty("filePath").GetString());
-            Assert.Equal(book.FileSize, item.GetProperty("fileSize").GetInt64());
-            Assert.Equal(1, item.GetProperty("fileCount").GetInt32());
+            Assert.Equal((book.FileSize ?? 0) + 55, item.GetProperty("fileSize").GetInt64());
+            Assert.Equal(2, item.GetProperty("fileCount").GetInt32());
 
             Assert.False(item.TryGetProperty("files", out _));
             Assert.False(item.TryGetProperty("description", out _));

@@ -185,5 +185,14 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .Select(g => new { AudiobookId = g.Key, Count = g.Count() })
                 .ToDictionaryAsync(r => r.AudiobookId, r => r.Count, ct);
         }
+
+        public async Task<Dictionary<int, long>> GetSizeSumsByAudiobookIdAsync(CancellationToken ct = default)
+        {
+            return await _db.AudiobookFiles
+                .AsNoTracking()
+                .GroupBy(f => f.AudiobookId)
+                .Select(g => new { AudiobookId = g.Key, Size = g.Sum(f => f.Size ?? 0) })
+                .ToDictionaryAsync(r => r.AudiobookId, r => r.Size, ct);
+        }
     }
 }

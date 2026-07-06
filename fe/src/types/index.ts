@@ -1243,6 +1243,38 @@ export interface SearchActivityResponse {
   recent: SearchActivityEvent[]
 }
 
+/** GET /verification/queue-status — the dashboard's background-activity panel. */
+export interface VerificationQueueStatus {
+  verification: {
+    queuedJobs: number
+    queuedBooks: number
+    hasUnknownSizedJobs: boolean
+    processing: {
+      jobId: string
+      audiobookId?: number | null
+      title?: string | null
+      processed: number
+      total: number
+    } | null
+    completedBooksToday: number
+    avgSecondsPerBook: number
+    etaSeconds?: number | null
+  }
+  seriesBackfill: {
+    cached: number
+    totalMultiBook: number
+  }
+}
+
+export interface SeriesBackfillRunResult {
+  message: string
+  totalSeries: number
+  alreadyCached: number
+  fetched: number
+  failed: number
+  remaining: number
+}
+
 /**
  * One audiobook in the organize-library preview. The server has bucketed
  * each row into one of `already_canonical` / `will_move` / `collision` /

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  formatEta,
   libraryGlance,
   seriesHealth,
   bucketSeriesRows,
@@ -97,5 +98,26 @@ describe('bucketSeriesRows', () => {
       row({ total: 3, owned: 3, catalogTotal: 3, complete: true }),
     ])
     expect(buckets).toEqual({ complete: 1, singleBook: 1, gaps: 1 })
+  })
+})
+
+describe('formatEta', () => {
+  it('hides null/zero/negative', () => {
+    expect(formatEta(null)).toBe('')
+    expect(formatEta(undefined)).toBe('')
+    expect(formatEta(0)).toBe('')
+    expect(formatEta(-5)).toBe('')
+  })
+  it('sub-minute reads <1m', () => {
+    expect(formatEta(45)).toBe('<1m')
+  })
+  it('minutes only', () => {
+    expect(formatEta(45 * 60)).toBe('~45m')
+  })
+  it('hours and minutes', () => {
+    expect(formatEta(2 * 3600 + 15 * 60)).toBe('~2h 15m')
+  })
+  it('whole hours drop the minutes part', () => {
+    expect(formatEta(3 * 3600)).toBe('~3h')
   })
 })

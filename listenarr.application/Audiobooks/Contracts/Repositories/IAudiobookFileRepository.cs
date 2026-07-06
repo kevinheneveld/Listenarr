@@ -41,6 +41,9 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<List<AudiobookFormatSummary>> GetFormatSummariesAsync(CancellationToken ct = default);
         Task<Dictionary<int, int>> GetCountsByAudiobookIdAsync(CancellationToken ct = default);
 
+        /// <summary>Total tracked-file bytes per audiobook — the real on-disk footprint (the legacy Audiobook.FileSize column is single-file-era and null for most records).</summary>
+        Task<Dictionary<int, long>> GetSizeSumsByAudiobookIdAsync(CancellationToken ct = default);
+
         /// <summary>
         /// The most recent file <see cref="AudiobookFile.CreatedAt"/> per audiobook — i.e. when the
         /// book most recently had a file imported into the library. Backs the "Recently Imported" view.

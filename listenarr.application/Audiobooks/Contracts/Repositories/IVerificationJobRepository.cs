@@ -26,5 +26,11 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<List<VerificationJobRecord>> GetPendingAsync(CancellationToken ct = default);
         /// <summary>Housekeeping: drop finished rows older than the cutoff.</summary>
         Task DeleteFinishedOlderThanAsync(DateTime cutoffUtc, CancellationToken ct = default);
+
+        /// <summary>Most recently completed rows, newest first — the ETA sample window.</summary>
+        Task<List<VerificationJobRecord>> GetRecentCompletedAsync(int take, CancellationToken ct = default);
+
+        /// <summary>Completed rows whose CompletedAt is at/after the cutoff (e.g. "today").</summary>
+        Task<List<VerificationJobRecord>> GetCompletedSinceAsync(DateTime sinceUtc, CancellationToken ct = default);
     }
 }

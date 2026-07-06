@@ -31,22 +31,25 @@ namespace Listenarr.Api.Features.Verification
 
     [Route("api/v{version:apiVersion}/verification")]
     [Tags("Verification")]
-    public class VerificationController : ControllerBase
+    public partial class VerificationController : ControllerBase
     {
         public record BatchVerifyRequest(List<int>? AudiobookIds);
         public record ManualVerificationRequest(string Action);
 
         private readonly ILibraryVerificationQueueService _queue;
         private readonly IAudiobookRepository _audiobookRepository;
+        private readonly VerificationQueueStatusWorkflow _queueStatusWorkflow;
         private readonly ILogger<VerificationController> _logger;
 
         public VerificationController(
             ILibraryVerificationQueueService queue,
             IAudiobookRepository audiobookRepository,
+            VerificationQueueStatusWorkflow queueStatusWorkflow,
             ILogger<VerificationController> logger)
         {
             _queue = queue;
             _audiobookRepository = audiobookRepository;
+            _queueStatusWorkflow = queueStatusWorkflow;
             _logger = logger;
         }
 

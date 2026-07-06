@@ -1,3 +1,4 @@
+using Listenarr.Api.Features.Verification;
 using Listenarr.Application.Search.Filters;
 using Listenarr.Application.Search.Strategies;
 using Listenarr.Infrastructure.DependencyInjection;
@@ -212,6 +213,8 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryFileDeleteWorkflow>();
             services.AddSingleton<LibrarySplitPreviewWorkflow>();
             services.AddSingleton<LibraryMaintenanceWorkflow>();
+            services.AddSingleton<LibrarySeriesBackfillWorkflow>();
+            services.AddSingleton<VerificationQueueStatusWorkflow>();
             services.AddSingleton<Listenarr.Infrastructure.Downloads.Cleanup.DownloadHistoryRetentionService>();
             services.AddSingleton<LibraryDuplicatesMergeWorkflow>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Organizing.ILibraryRecoveryFilesystem, Listenarr.Infrastructure.Library.Organizing.LibraryRecoveryFilesystem>();

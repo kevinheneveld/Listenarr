@@ -69,6 +69,7 @@ namespace Listenarr.Application.Audiobooks.Catalog
             // was started on this context instance" under real database latency.
             var fileSummaryRows = await _audiobookFileRepository.GetFormatSummariesAsync();
             var fileCountById = await _audiobookFileRepository.GetCountsByAudiobookIdAsync();
+            var fileSizeById = await _audiobookFileRepository.GetSizeSumsByAudiobookIdAsync();
             var importedAtById = await _audiobookFileRepository.GetMaxCreatedAtByAudiobookIdAsync();
             var membershipsByAudiobookId = await _audiobookRepository.GetAllSeriesMembershipsGroupedByAudiobookIdAsync();
             var filesByAudiobookId = fileSummaryRows
@@ -136,7 +137,11 @@ namespace Listenarr.Application.Audiobooks.Catalog
                     Monitored = a.Monitored,
                     BasePath = a.BasePath,
                     FilePath = a.FilePath,
-                    FileSize = a.FileSize,
+                    // Real on-disk bytes from tracked files; the legacy single-file
+                    // column is null for most records (dashboard showed "0 B on disk").
+                    FileSize = fileSizeById.TryGetValue(a.Id, out var trueSize) && trueSize > 0
+                        ? trueSize
+                        : a.FileSize,
                     FileCount = fileCountById.TryGetValue(a.Id, out var trueCount) ? trueCount : 0,
                     Quality = a.Quality,
                     QualityProfileId = a.QualityProfileId,
