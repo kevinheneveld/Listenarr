@@ -73,6 +73,7 @@ import type {
   OrganizeFlattenResult,
   MoveQueueSummary,
   LibraryDuplicatesResponse,
+  MusicCandidatesResponse,
   DuplicatesMergePair,
   MergeDuplicatesResult,
   RecoveryRunResult,
@@ -1518,6 +1519,10 @@ class ApiService {
     return this.request<{ message: string; total: number }>(`/library/backfill-metadata`, {
       method: 'POST',
     })
+  }
+
+  async getMusicCandidates(): Promise<MusicCandidatesResponse> {
+    return this.request<MusicCandidatesResponse>(`/library/music-candidates`)
   }
 
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {

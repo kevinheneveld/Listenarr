@@ -46,11 +46,21 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Theory]
+        [InlineData(VerificationTriggers.Import)]
         [InlineData(VerificationTriggers.Manual)]
+        public void Rejects_OnQualifyingTriggers(string trigger)
+        {
+            // Manual covers the batch endpoints too (POST /verification/batch and
+            // the dashboard Re-check enqueue use the default Manual trigger).
+            Assert.True(Decide(trigger: trigger));
+        }
+
+        [Theory]
         [InlineData(VerificationTriggers.Transfer)]
         [InlineData(VerificationTriggers.Metadata)]
+        [InlineData("someday-new-trigger")]
         [InlineData(null)]
-        public void NeverRejects_OffImportTriggers(string? trigger)
+        public void NeverRejects_OnNonQualifyingTriggers(string? trigger)
         {
             Assert.False(Decide(trigger: trigger));
         }

@@ -146,7 +146,34 @@
               <strong>{{ duplicates.duplicateCopyBooks.length }}</strong> duplicate copies
             </button>
           </template>
+
+          <button
+            v-if="musicCandidates === null"
+            type="button"
+            class="health-chip scan"
+            :disabled="scanningMusic"
+            @click="scanMusic"
+          >
+            <PhSpinner v-if="scanningMusic" class="ph-spin" />
+            <PhMusicNotes v-else />
+            {{ scanningMusic ? 'Scanning…' : 'Scan for music' }}
+          </button>
+          <button
+            v-else
+            type="button"
+            class="health-chip duplicates"
+            :class="{ zero: musicCandidates.length === 0 }"
+            @click="showMusicList = !showMusicList"
+          >
+            <PhMusicNotes />
+            <strong>{{ musicCandidates.length }}</strong> likely music
+          </button>
         </div>
+        <MusicReviewList
+          v-if="showMusicList && musicCandidates?.length"
+          :rows="musicCandidates"
+          @swept="onMusicSwept"
+        />
         <div v-if="showCopyList && duplicates?.duplicateCopyBooks.length" class="copy-list">
           <RouterLink
             v-for="c in duplicates.duplicateCopyBooks"
@@ -319,12 +346,14 @@ import {
   PhArrowClockwise,
   PhBooks,
   PhCheckCircle,
+  PhMusicNotes,
 } from '@phosphor-icons/vue'
 import { useLibraryStore } from '@/stores/library'
 import { useSearchActivityStore } from '@/stores/searchActivity'
 import { apiService } from '@/services/api'
 import { signalRService } from '@/services/signalr'
 import { useToast } from '@/services/toastService'
+import MusicReviewList from '@/components/dashboard/MusicReviewList.vue'
 import {
   libraryGlance,
   seriesHealth,
@@ -337,6 +366,7 @@ import {
 import type {
   LibraryDuplicatesResponse,
   MoveQueueSummary,
+  MusicCandidate,
   SeriesHealthApiRow,
   VerificationQueueStatus,
 } from '@/types'
@@ -411,6 +441,33 @@ async function recheckInconclusive() {
   } finally {
     recheckPending.value = false
   }
+}
+
+const musicCandidates = ref<MusicCandidate[] | null>(null)
+const scanningMusic = ref(false)
+const showMusicList = ref(false)
+
+async function scanMusic() {
+  scanningMusic.value = true
+  try {
+    musicCandidates.value = (await apiService.getMusicCandidates()).candidates
+    showMusicList.value = true
+  } catch (err) {
+    toast.error(
+      'Music scan failed',
+      err instanceof Error ? err.message : 'Could not scan the library.',
+    )
+  } finally {
+    scanningMusic.value = false
+  }
+}
+
+function onMusicSwept(ids: number[]) {
+  if (!musicCandidates.value) return
+  const swept = new Set(ids)
+  musicCandidates.value = musicCandidates.value.filter((c) => !swept.has(c.id))
+  // Swept books changed verification/library state — refresh the glance data.
+  void libraryStore.fetchLibrary()
 }
 
 async function scanDuplicates() {

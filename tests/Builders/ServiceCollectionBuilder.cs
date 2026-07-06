@@ -217,6 +217,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<VerificationQueueStatusWorkflow>();
             services.AddSingleton<Listenarr.Infrastructure.Downloads.Cleanup.DownloadHistoryRetentionService>();
             services.AddSingleton<LibraryDuplicatesMergeWorkflow>();
+            services.AddSingleton<LibraryMusicCandidatesWorkflow>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Organizing.ILibraryRecoveryFilesystem, Listenarr.Infrastructure.Library.Organizing.LibraryRecoveryFilesystem>();
             services.AddSingleton<LibraryOrganizeSweepWorkflow>();
             services.AddSingleton<LibraryMoveSummaryWorkflow>();

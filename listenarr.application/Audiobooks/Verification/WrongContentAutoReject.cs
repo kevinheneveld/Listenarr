@@ -31,11 +31,11 @@ namespace Listenarr.Application.Audiobooks.Verification
     }
 
     /// <summary>
-    /// Decision predicate for auto-rejecting a freshly imported book based on its
-    /// verification verdict. Deliberately the highest-precision case ONLY: the
-    /// audio must ANNOUNCE a different book (credit evidence), not merely fail to
-    /// match. NoSpokenCredits and Uncertain never auto-reject — absence of
-    /// evidence is a human's call.
+    /// Decision predicate for auto-rejecting a book based on its verification
+    /// verdict. Deliberately the highest-precision case ONLY: the audio must
+    /// ANNOUNCE a different book (credit evidence), not merely fail to match.
+    /// NoSpokenCredits and Uncertain never auto-reject — absence of evidence is
+    /// a human's call.
     /// </summary>
     public static class WrongContentAutoReject
     {
@@ -52,9 +52,17 @@ namespace Listenarr.Application.Audiobooks.Verification
         {
             if (!settingEnabled) return false;
 
-            // Only freshly imported content — a library walk over old files must
-            // never mass-delete; those verdicts go to the review queue instead.
-            if (!string.Equals(trigger, VerificationTriggers.Import, StringComparison.OrdinalIgnoreCase)) return false;
+            // Fresh imports and explicit user-requested sweeps (manual / batch /
+            // Re-check inconclusive) qualify: the evidence bar below is identical
+            // either way. Excluded on purpose:
+            //  - Transfer: files just moved onto the book by a human mid-workflow —
+            //    those deserve eyes, not deletion.
+            //  - Metadata: the user just changed the book's identity; a mismatch
+            //    there more likely means the edit was wrong than the files are junk.
+            var qualifying =
+                string.Equals(trigger, VerificationTriggers.Import, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(trigger, VerificationTriggers.Manual, StringComparison.OrdinalIgnoreCase);
+            if (!qualifying) return false;
 
             if (outcome != VerificationOutcome.Mismatch) return false;
 

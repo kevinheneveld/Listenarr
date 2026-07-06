@@ -1243,6 +1243,21 @@ export interface SearchActivityResponse {
   recent: SearchActivityEvent[]
 }
 
+/** One row from GET /library/music-candidates — a book that "smells like music". */
+export interface MusicCandidate {
+  id: number
+  title: string | null
+  /** 0..1 detector score; >= 0.5 surfaced for review. */
+  score: number
+  reasons: string[]
+  fileCount: number
+  medianDurationSeconds: number
+}
+
+export interface MusicCandidatesResponse {
+  candidates: MusicCandidate[]
+}
+
 /** GET /verification/queue-status — the dashboard's background-activity panel. */
 export interface VerificationQueueStatus {
   verification: {

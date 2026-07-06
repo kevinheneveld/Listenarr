@@ -159,6 +159,14 @@ vi.mock('@/services/api', () => {
     getStartupConfig: vi.fn(async () => ({})),
     getApplicationSettings: vi.fn(async () => ({})),
     getLibrary: vi.fn(async () => []),
+    getMusicCandidates: vi.fn(async () => ({ candidates: [] })),
+    rejectNotAudiobook: vi.fn(async () => ({
+      message: '',
+      id: 0,
+      filesRemoved: 0,
+      searchStarted: true,
+      warnings: [],
+    })),
     getVerificationQueueStatus: vi.fn(async () => ({
       verification: {
         queuedJobs: 0,
