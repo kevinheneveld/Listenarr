@@ -16,7 +16,6 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Application.Configuration.Contracts.Repositories;
 using Microsoft.AspNetCore.Mvc;
 
@@ -77,9 +76,11 @@ namespace Listenarr.Api.Features.Verification
             var recentCompleted = await _jobRepository.GetRecentCompletedAsync(20, ct);
             var avgSecondsPerBook = VerificationEtaMath.ComputeAvgSecondsPerBook(recentCompleted);
 
-            var completedToday = await _jobRepository.GetCompletedSinceAsync(DateTime.UtcNow.Date, ct);
-            var completedBooksToday = completedToday
-                .Sum(r => VerificationEtaMath.CountBooks(r.AudiobookIdsJson) ?? 0);
+            // Books actually verified today (VerifiedAt is stamped per book for
+            // every outcome, including manual verdicts) — NOT completed job rows:
+            // a still-Processing mega-job would report zero for days and then
+            // jump by a thousand when its single durable row finally completed.
+            var completedBooksToday = await _audiobookRepository.CountVerifiedSinceAsync(DateTime.UtcNow.Date, ct);
 
             // --- Series-catalog backfill progress ---
             var (cachedSeries, totalMultiBookSeries) = await ComputeSeriesBackfillProgressAsync(ct);

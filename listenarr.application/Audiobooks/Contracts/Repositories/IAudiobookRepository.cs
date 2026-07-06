@@ -69,6 +69,16 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         /// clobber concurrent edits (same rationale as SetLastSearchTimeAsync).
         /// </summary>
         Task SetImageUrlAsync(int audiobookId, string? imageUrl);
+
+        /// <summary>
+        /// How many audiobooks carry a verification verdict stamped at or after
+        /// <paramref name="sinceUtc"/>. Every processed book gets
+        /// <see cref="Audiobook.VerifiedAt"/> stamped regardless of outcome (and
+        /// manual verdicts stamp it too), so this counts books actually checked —
+        /// the dashboard's "done today" figure. Counting durable job rows instead
+        /// made a still-running mega-job report zero until it finished.
+        /// </summary>
+        Task<int> CountVerifiedSinceAsync(DateTime sinceUtc, CancellationToken ct = default);
         Task<bool> DeleteAsync(Audiobook audiobook);
         Task<bool> DeleteByIdAsync(int id);
         Task<int> DeleteBulkAsync(List<int> ids);

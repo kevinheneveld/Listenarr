@@ -67,32 +67,51 @@ namespace Listenarr.Tests.Features.Api.Features.Verification
         }
 
         [Fact]
-        public async Task CompletedToday_CountsBooksFromDurableRows()
+        public async Task CompletedToday_CountsBooksVerifiedToday()
         {
-            var jobRepo = _provider.GetRequiredService<IVerificationJobRepository>();
-            await jobRepo.AddAsync(new VerificationJobRecord
-            {
-                Id = Guid.NewGuid(),
-                AudiobookIdsJson = "[1,2,3]",
-                Status = "Completed",
-                EnqueuedAt = DateTime.UtcNow.AddMinutes(-10),
-                CompletedAt = DateTime.UtcNow
-            });
-            // Yesterday's row must not count toward "today".
-            await jobRepo.AddAsync(new VerificationJobRecord
-            {
-                Id = Guid.NewGuid(),
-                AudiobookIdsJson = "[4,5]",
-                Status = "Completed",
-                EnqueuedAt = DateTime.UtcNow.AddDays(-1).AddMinutes(-10),
-                CompletedAt = DateTime.UtcNow.AddDays(-1)
-            });
+            // Two books verified today, one yesterday — only today's count.
+            // Anchored to UTC midnight (not relative offsets) so a test run just
+            // after 00:00 UTC can't have "an hour ago" land on yesterday.
+            await AddBookVerifiedAtAsync("Today A", DateTime.UtcNow);
+            await AddBookVerifiedAtAsync("Today B", DateTime.UtcNow.Date.AddSeconds(1));
+            await AddBookVerifiedAtAsync("Yesterday", DateTime.UtcNow.Date.AddHours(-2));
 
             var controller = _provider.GetRequiredService<Listenarr.Api.Features.Verification.VerificationController>();
             var result = await controller.GetQueueStatus(CancellationToken.None);
 
             var payload = ToJson(Assert.IsType<OkObjectResult>(result).Value);
-            Assert.Equal(3, payload.GetProperty("verification").GetProperty("completedBooksToday").GetInt32());
+            Assert.Equal(2, payload.GetProperty("verification").GetProperty("completedBooksToday").GetInt32());
+        }
+
+        [Fact]
+        public async Task CompletedToday_CountsBooksInsideStillProcessingJob()
+        {
+            // The live bug: a 1,000-book job grinding for days reported zero
+            // "done today" because only COMPLETED durable rows were counted.
+            // Books get VerifiedAt stamped one by one as the job runs — the
+            // metric must reflect that even while the job row says Processing.
+            var jobRepo = _provider.GetRequiredService<IVerificationJobRepository>();
+            await jobRepo.AddAsync(new VerificationJobRecord
+            {
+                Id = Guid.NewGuid(),
+                AudiobookIdsJson = null, // whole-library job
+                Status = "Processing",
+                EnqueuedAt = DateTime.UtcNow.AddDays(-2)
+            });
+            await AddBookVerifiedAtAsync("Verified mid-job", DateTime.UtcNow);
+
+            var controller = _provider.GetRequiredService<Listenarr.Api.Features.Verification.VerificationController>();
+            var result = await controller.GetQueueStatus(CancellationToken.None);
+
+            var payload = ToJson(Assert.IsType<OkObjectResult>(result).Value);
+            Assert.Equal(1, payload.GetProperty("verification").GetProperty("completedBooksToday").GetInt32());
+        }
+
+        private async Task AddBookVerifiedAtAsync(string title, DateTime verifiedAtUtc)
+        {
+            var book = new Listenarr.Tests.Builders.AudiobookBuilder().WithTitle(title).Build();
+            book.VerifiedAt = verifiedAtUtc;
+            await _audiobookRepository.AddAsync(book);
         }
     }
 }
