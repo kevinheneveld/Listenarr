@@ -27,6 +27,54 @@ namespace Listenarr.Application.Audiobooks.Contracts
             string? language = null,
             bool forceRefresh = false,
             CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Returns candidate series for a name so the user can correct a wrong or
+        /// ambiguous resolution. Owned-book-derived candidates rank first.
+        /// </summary>
+        Task<SeriesCandidateResult> GetSeriesCandidatesAsync(
+            string name,
+            string region = "us",
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Resolves a series catalog by an explicitly-chosen ASIN and persists it
+        /// under the original name's cache slot so the choice sticks on later loads.
+        /// </summary>
+        Task<SeriesCatalogFetchResult?> GetCatalogByAsinAsync(
+            string name,
+            string asin,
+            string region = "us",
+            int limit = 250,
+            string? language = null,
+            CancellationToken cancellationToken = default);
+    }
+
+    /// <summary>A single pickable series candidate.</summary>
+    public sealed class SeriesCandidate
+    {
+        public string Asin { get; set; } = string.Empty;
+
+        public string? Name { get; set; }
+
+        public string? Image { get; set; }
+
+        public int? BookCount { get; set; }
+
+        /// <summary>"library" when derived from a book the user owns, otherwise "audible".</summary>
+        public string Source { get; set; } = "audible";
+
+        /// <summary>How many owned books in the collection point at this series.</summary>
+        public int OwnedMatchCount { get; set; }
+    }
+
+    public sealed class SeriesCandidateResult
+    {
+        public string Query { get; set; } = string.Empty;
+
+        public string? BestGuessAsin { get; set; }
+
+        public List<SeriesCandidate> Candidates { get; set; } = new();
     }
 
     public sealed class SeriesCatalogFetchResult

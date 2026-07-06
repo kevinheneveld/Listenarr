@@ -30,6 +30,13 @@ namespace Listenarr.Domain.Audiobooks
 
         public string? SeriesAsin { get; set; }
 
+        /// <summary>
+        /// True when the user explicitly chose this series ASIN (via the "Wrong
+        /// series?" picker). A pinned ASIN is authoritative: name-based catalog
+        /// resolution must never overwrite it.
+        /// </summary>
+        public bool AsinPinned { get; set; }
+
         public string Region { get; set; } = "us";
 
         public string Language { get; set; } = "all";

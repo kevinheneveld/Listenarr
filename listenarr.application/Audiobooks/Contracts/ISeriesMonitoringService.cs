@@ -32,6 +32,16 @@ namespace Listenarr.Application.Audiobooks.Contracts
 
         Task<bool> UnmonitorSeriesAsync(int id, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// Pins an explicit series ASIN onto an existing monitored series and immediately re-syncs
+        /// using it. Used by the "Wrong series?" picker to correct a mis-resolved series.
+        /// Returns null when no monitored series with <paramref name="id"/> exists.
+        /// </summary>
+        Task<MonitorSeriesOperationResult?> RepointSeriesAsync(
+            int id,
+            string asin,
+            CancellationToken cancellationToken = default);
+
         Task<MonitorSeriesSyncResult> SyncSeriesAsync(int id, CancellationToken cancellationToken = default);
 
         Task<int> SyncDueSeriesAsync(CancellationToken cancellationToken = default);
@@ -53,6 +63,12 @@ namespace Listenarr.Application.Audiobooks.Contracts
         public MonitoredSeries? MonitoredSeries { get; set; }
 
         public MonitorSeriesSyncResult SyncResult { get; set; } = new();
+
+        /// <summary>
+        /// True when a repoint collapsed the source series into an already-existing monitored series
+        /// for the same ASIN (the redundant source row was deleted and the survivor is returned).
+        /// </summary>
+        public bool Merged { get; set; }
     }
 
     public sealed class MonitorSeriesSyncResult

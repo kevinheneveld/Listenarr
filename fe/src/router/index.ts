@@ -40,6 +40,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/search',
+    name: 'search',
+    component: () => import('../views/library/LibrarySearchView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/audiobooks',
     name: 'audiobooks',
     component: () => import('../views/library/AudiobooksView.vue'),

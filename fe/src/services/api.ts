@@ -46,6 +46,7 @@ import type {
   MonitorAuthorResponse,
   AuthorMonitoringExclusion,
   MonitorSeriesResponse,
+  SeriesCandidatesResponse,
   SeriesMonitoringStatusResponse,
   SeriesCatalogResponse,
   SeriesLookupResponse,
@@ -588,6 +589,47 @@ class ApiService {
     return this.request<SeriesMonitoringStatusResponse>(
       `/series/monitoring/status?${params.toString()}`,
     )
+  }
+
+  // Candidate series for a name — backs the "Wrong series?" picker.
+  async getSeriesCandidates(
+    name: string,
+    region: string = 'us',
+  ): Promise<SeriesCandidatesResponse | null> {
+    try {
+      const params = new URLSearchParams({ name, region })
+      return await this.request<SeriesCandidatesResponse>(
+        `/metadata/series/candidates?${params.toString()}`,
+      )
+    } catch {
+      return null
+    }
+  }
+
+  // Persist the user's explicitly-chosen series for a name (overwrites a prior wrong
+  // resolution) and return its catalog.
+  async selectSeries(
+    name: string,
+    asin: string,
+    region: string = 'us',
+  ): Promise<SeriesCatalogResponse | null> {
+    try {
+      return await this.request<SeriesCatalogResponse>('/metadata/series/select', {
+        method: 'POST',
+        body: JSON.stringify({ name, asin, region, limit: 250 }),
+      })
+    } catch (err) {
+      if ((err as ErrorWithStatus)?.status === 404) return null
+      throw err
+    }
+  }
+
+  // Pin an explicit series ASIN onto a monitored series and re-sync using it.
+  async repointSeries(id: number, asin: string): Promise<MonitorSeriesResponse> {
+    return this.request<MonitorSeriesResponse>(`/series/monitoring/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ asin }),
+    })
   }
 
   async monitorSeries(payload: {

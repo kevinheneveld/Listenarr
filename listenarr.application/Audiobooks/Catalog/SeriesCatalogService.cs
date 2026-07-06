@@ -19,7 +19,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Audiobooks.Catalog
 {
-    public class SeriesCatalogService : ISeriesCatalogService
+    public partial class SeriesCatalogService : ISeriesCatalogService
     {
         private static readonly Dictionary<string, string> LanguageAliases = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -59,6 +59,10 @@ namespace Listenarr.Application.Audiobooks.Catalog
             ["ru-ru"] = "russian",
             ["all"] = "all"
         };
+
+        // Cap how many owned books we probe against Audible when recovering a series ASIN,
+        // so a large library can't fan out into many metadata calls on a cache miss.
+        private const int MaxOwnedBookResolutionAttempts = 3;
 
         private readonly AudibleService _audibleService;
         private readonly IAudiobookRepository _audiobookRepository;

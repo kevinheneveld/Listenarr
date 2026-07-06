@@ -592,6 +592,15 @@
                     : 'Add to Library'
                 }}
               </button>
+              <button
+                v-if="resultSeriesName(audibleResult)"
+                class="btn btn-secondary"
+                @click="addSeries(audibleResult)"
+                :title="`Bulk-add every book in '${resultSeriesName(audibleResult)}'`"
+              >
+                <PhStack />
+                Add series
+              </button>
             </div>
           </div>
         </div>
@@ -883,6 +892,15 @@
                     : 'Add to Library'
                 }}
               </button>
+              <button
+                v-if="resultSeriesName(book)"
+                class="btn btn-secondary"
+                @click="addSeries(book)"
+                :title="`Bulk-add every book in '${resultSeriesName(book)}'`"
+              >
+                <PhStack />
+                Add series
+              </button>
             </div>
           </div>
         </div>
@@ -947,6 +965,16 @@
     @added="handleLibraryAdded"
   />
 
+  <!-- Add Series Modal -->
+  <AddSeriesModal
+    :visible="showAddSeriesModal"
+    :series-name="seriesModalContext.name"
+    :series-asin="seriesModalContext.asin"
+    :region="seriesModalContext.region"
+    @close="closeAddSeriesModal"
+    @added="handleSeriesAdded"
+  />
+
   <!-- Confirm dialog removed: using centralized showConfirm service mounted in App.vue -->
 </template>
 
@@ -962,6 +990,7 @@ import {
   PhGlobe,
   PhCheck,
   PhPlus,
+  PhStack,
   PhBook,
   PhArrowLeft,
   PhArrowClockwise,
@@ -1003,6 +1032,7 @@ import { useConfigurationStore } from '@/stores/configuration'
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { useLibraryStore } from '@/stores/library'
 import AddLibraryModal from '@/components/domain/audiobook/AddLibraryModal.vue'
+import AddSeriesModal from '@/components/domain/audiobook/AddSeriesModal.vue'
 import { useToast } from '@/services/toastService'
 import { safeText } from '@/utils/textUtils'
 import { logger } from '@/utils/logger'
@@ -2974,6 +3004,82 @@ const addToLibrary = async (book: AudibleBookMetadata) => {
 
 const closeAddLibraryModal = () => {
   showAddLibraryModal.value = false
+}
+
+// Whole-series add: launched from a result card that carries a series name; the
+// modal needs to fetch the catalog.
+const showAddSeriesModal = ref(false)
+const seriesModalContext = ref<{ name: string; asin?: string; region?: string }>({
+  name: '',
+})
+
+interface SeriesBearingResult {
+  series?: string
+  seriesList?: string[]
+  seriesAsin?: string
+  searchResult?: {
+    series?: string
+    seriesList?: string[]
+    seriesAsin?: string
+  }
+}
+
+function resultSeriesName(result: SeriesBearingResult | undefined | null): string | null {
+  if (!result) return null
+  const candidates: Array<string | undefined> = [
+    result.seriesList?.[0],
+    result.series,
+    result.searchResult?.series,
+    result.searchResult?.seriesList?.[0],
+  ]
+  for (const c of candidates) {
+    if (c && c.trim().length > 0) return c.trim()
+  }
+  return null
+}
+
+function resultSeriesAsin(result: SeriesBearingResult | undefined | null): string | undefined {
+  return result?.seriesAsin || result?.searchResult?.seriesAsin || undefined
+}
+
+const addSeries = (result: SeriesBearingResult) => {
+  // Same root-folder gate as the single-add path — having a destination is
+  // required before any add can succeed.
+  if (rootFoldersStore.folders.length === 0 && !configStore.applicationSettings?.outputPath) {
+    toast.warning(
+      'Root folder not configured',
+      'Please configure the root folder in Settings before adding audiobooks.',
+    )
+    router.push('/settings')
+    return
+  }
+
+  const name = resultSeriesName(result)
+  if (!name) return
+  seriesModalContext.value = {
+    name,
+    asin: resultSeriesAsin(result),
+    region: 'us',
+  }
+  showAddSeriesModal.value = true
+}
+
+const closeAddSeriesModal = () => {
+  showAddSeriesModal.value = false
+}
+
+const handleSeriesAdded = (summary: {
+  addedCount: number
+  failedCount: number
+  addedBooks: Audiobook[]
+}) => {
+  // Mark added ASINs in the UI so the result cards reflect "Added" state.
+  for (const book of summary.addedBooks) {
+    if (book.asin) addedAsins.value.add(book.asin)
+    if (book.openLibraryId) addedOpenLibraryIds.value.add(book.openLibraryId)
+  }
+  // Refresh the library so the dashboard/series sections see the new books.
+  void libraryStore.fetchLibrary()
 }
 
 const handleLibraryAdded = (audiobook: Audiobook) => {

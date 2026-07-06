@@ -562,6 +562,8 @@ export interface MonitoredSeries {
   id: number
   seriesName: string
   seriesAsin?: string
+  /** True when the user pinned this ASIN via the "Wrong series?" picker. */
+  asinPinned?: boolean
   region: string
   language: string
   createdAt: string
@@ -578,11 +580,29 @@ export interface SeriesMonitoringStatusResponse {
 
 export interface MonitorSeriesResponse {
   message: string
+  /** True when a repoint collapsed this series into an existing monitored entry. */
+  merged?: boolean
   monitoredSeries: MonitoredSeries
   addedCount: number
   existingCount: number
   failedCount: number
   errorMessage?: string
+}
+
+export interface SeriesCandidate {
+  asin: string
+  name?: string
+  image?: string
+  bookCount?: number
+  /** "library" when derived from a book you own, otherwise "audible". */
+  source: 'library' | 'audible'
+  ownedMatchCount: number
+}
+
+export interface SeriesCandidatesResponse {
+  query: string
+  bestGuessAsin?: string
+  candidates: SeriesCandidate[]
 }
 
 export type AudiobookExternalIdentifierType = 'Asin' | 'Isbn' | 'OpenLibraryId'

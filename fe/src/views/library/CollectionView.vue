@@ -364,6 +364,15 @@
               {{ isCurrentSeriesMonitored ? 'Monitoring Series' : 'Monitor Series' }}
             </button>
             <button
+              class="toolbar-btn series-pick-btn"
+              :disabled="seriesMetadataRefreshBusy"
+              @click="showSeriesPicker = true"
+              title="This isn't the right series? Pick the correct one"
+            >
+              <PhSwap />
+              Wrong series?
+            </button>
+            <button
               v-if="missingWorks.length > 0"
               class="toolbar-btn series-addmissing-btn"
               @click="showAddMissingModal = true"
@@ -394,6 +403,17 @@
           />
         </div>
       </div>
+    </div>
+
+    <!-- Low-confidence resolution hint: the resolved series catalog shares no owned book -->
+    <div v-if="seriesResolutionLooksWrong" class="series-mismatch-hint">
+      <PhWarningCircle :size="18" />
+      <span>
+        This may be the wrong series — none of your books in it appear in the matched catalog.
+      </span>
+      <button class="btn btn-small" @click="showSeriesPicker = true">
+        Pick the correct series
+      </button>
     </div>
 
     <!-- Audiobooks Grid -->
@@ -826,6 +846,16 @@
       @added="handleBookAdded"
     />
 
+    <SeriesPickerModal
+      v-if="isSeriesCollection && showSeriesPicker"
+      :visible="showSeriesPicker"
+      :series-name="name"
+      :region="seriesCatalogRegion"
+      :current-asin="seriesHeroAsin"
+      @close="showSeriesPicker = false"
+      @selected="onSeriesPicked"
+    />
+
     <AddSelectedBooksModal
       v-if="showAddMissingModal"
       :visible="showAddMissingModal"
@@ -851,6 +881,7 @@ import {
   PhX,
   PhArrowClockwise,
   PhMagnifyingGlass,
+  PhSwap,
   PhInfo,
   PhBookOpen,
   PhWarningCircle,
@@ -874,6 +905,7 @@ import { useToast } from '@/services/toastService'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import AddLibraryModal from '@/components/domain/audiobook/AddLibraryModal.vue'
 import AddSelectedBooksModal from '@/components/domain/audiobook/AddSelectedBooksModal.vue'
+import SeriesPickerModal from '@/components/domain/audiobook/SeriesPickerModal.vue'
 import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
@@ -966,6 +998,7 @@ const seriesLookupRequestId = ref(0)
 const seriesMetadataRefreshBusy = ref(false)
 const seriesMonitoringBusy = ref(false)
 const seriesMonitoringStatus = ref<MonitoredSeries | null>(null)
+const showSeriesPicker = ref(false)
 const seriesMonitoringStatusRequestId = ref(0)
 const authorMonitoringBusy = ref(false)
 const authorMonitoringStatus = ref<MonitoredAuthor | null>(null)
@@ -1453,6 +1486,21 @@ function onAddMissingPillKeydown(e: KeyboardEvent) {
   }
 }
 
+// True when this series page has owned books whose stored series matches the page name,
+// but none of those owned books appear in the resolved catalog by title — a strong hint the
+// series resolved to the wrong thing (e.g. a mis-parsed name matching an unrelated series).
+const seriesResolutionLooksWrong = computed(() => {
+  if (!isSeriesCollection.value) return false
+  const catalog = seriesCatalog.value
+  const owned = libraryCollectionAudiobooks.value
+  if (!catalog || (catalog.books?.length ?? 0) === 0 || owned.length === 0) return false
+  const catalogTitles = new Set(
+    catalog.books.map((book) => normalizeCollectionText(book.title)).filter(Boolean),
+  )
+  if (catalogTitles.size === 0) return false
+  return !owned.some((book) => catalogTitles.has(normalizeCollectionText(book.title)))
+})
+
 // Missing (not-owned) works in this collection, as add-metadata for the bulk-add modal.
 const missingWorks = computed(() =>
   audiobooks.value
@@ -1801,6 +1849,42 @@ async function loadAuthorLookup(
       authorLookupLoading.value = false
     }
   }
+}
+
+async function onSeriesPicked(catalog: SeriesCatalogResponse) {
+  showSeriesPicker.value = false
+
+  // If this series is monitored, pin the chosen ASIN onto the monitored entry so future
+  // syncs resolve by it instead of re-resolving (and possibly mis-resolving) by name.
+  const pickedAsin = catalog.series?.asin
+  const monitoredId = seriesMonitoringStatus.value?.id
+  if (monitoredId && pickedAsin) {
+    try {
+      const response = await apiService.repointSeries(monitoredId, pickedAsin)
+      seriesMonitoringStatus.value = response.monitoredSeries
+      if (response.merged) {
+        toast.info(
+          'Merged into existing series',
+          'This series was already monitored under another entry; the duplicate was removed and the existing one is now pinned to it.',
+        )
+      }
+    } catch (err) {
+      errorTracking.captureException(err as Error, {
+        component: 'CollectionView',
+        operation: 'onSeriesPicked.repointSeries',
+      })
+      toast.warning(
+        'Series shown, but not pinned',
+        'The correct series is displayed, but pinning it for future monitoring failed. Try again from "Wrong series?".',
+      )
+    }
+  }
+
+  // Paint the chosen catalog immediately for instant feedback, then fully reload so the
+  // hero image, ASIN, description, and monitoring state all reflect the chosen series
+  // (the pick is now persisted in the series cache, so the reload resolves to it).
+  seriesCatalog.value = catalog
+  await loadCollectionData(true)
 }
 
 async function loadSeriesCatalog(refresh = false): Promise<SeriesCatalogResponse | null> {
@@ -4710,5 +4794,37 @@ defineExpose({
 .clickable-pill:focus-visible {
   outline: 2px solid var(--brand, #5aa9e6);
   outline-offset: 2px;
+}
+
+.series-mismatch-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid rgba(255, 183, 77, 0.4);
+  background: rgba(255, 183, 77, 0.1);
+  border-radius: 8px;
+  color: #ffcc80;
+  font-size: 0.9rem;
+}
+
+.series-mismatch-hint span {
+  flex: 1;
+}
+
+.series-mismatch-hint .btn-small {
+  flex: none;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.82rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 183, 77, 0.6);
+  background: transparent;
+  color: #ffcc80;
+  cursor: pointer;
+}
+
+.series-mismatch-hint .btn-small:hover {
+  background: rgba(255, 183, 77, 0.18);
 }
 </style>

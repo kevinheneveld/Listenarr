@@ -184,5 +184,101 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 Path.Join(rootPath, "Matt Dinniman", "Dungeon Crawler Carl", "This Inevitable Ruin"),
                 storedAudiobook.BasePath);
         }
+        [Fact]
+        public async Task RepointSeriesAsync_PinsAsinAndResyncsByAsin()
+        {
+            // Given
+            Init(services => services
+                .WithSingleton(_seriesCatalogService.Object)
+                .WithSingleton(_libraryAddService.Object));
+
+            var repo = _provider.GetRequiredService<IMonitoredSeriesRepository>();
+            var row = await repo.UpsertAsync(new MonitoredSeries
+            {
+                SeriesName = "Smugglers Tale",
+                SeriesNameNormalized = "smugglers tale",
+                SeriesAsin = "WRONGASIN",
+                Region = "us",
+                Language = "all"
+            });
+
+            _seriesCatalogService
+                .Setup(service => service.GetCatalogByAsinAsync(
+                    "Smugglers Tale",
+                    "RIGHTASIN",
+                    "us",
+                    500,
+                    null,
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SeriesCatalogFetchResultBuilder()
+                    .WithSeries("Smuggler's Tales", "RIGHTASIN")
+                    .Build());
+
+            var service = _provider.GetRequiredService<ISeriesMonitoringService>();
+
+            // When
+            var result = await service.RepointSeriesAsync(row.Id, "RIGHTASIN");
+
+            // Then: ASIN pinned, sync went through the by-ASIN path (mock verified by setup match)
+            Assert.NotNull(result);
+            Assert.False(result!.Merged);
+            Assert.Equal("RIGHTASIN", result.MonitoredSeries!.SeriesAsin);
+            Assert.True(result.MonitoredSeries.AsinPinned);
+            _seriesCatalogService.Verify(service => service.GetCatalogByAsinAsync(
+                "Smugglers Tale", "RIGHTASIN", "us", 500, null, It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task RepointSeriesAsync_CollapsesIntoExistingMonitorForSameAsin()
+        {
+            // Given: a healthy row already tracks the target ASIN; repointing a stale row onto it
+            // must merge (delete the stale row, pin + return the survivor).
+            Init(services => services
+                .WithSingleton(_seriesCatalogService.Object)
+                .WithSingleton(_libraryAddService.Object));
+
+            var repo = _provider.GetRequiredService<IMonitoredSeriesRepository>();
+            var survivor = await repo.UpsertAsync(new MonitoredSeries
+            {
+                SeriesName = "Smuggler's Tales",
+                SeriesNameNormalized = "smuggler s tales",
+                SeriesAsin = "RIGHTASIN",
+                Region = "us",
+                Language = "all"
+            });
+            var stale = await repo.UpsertAsync(new MonitoredSeries
+            {
+                SeriesName = "A Smugglers Tale",
+                SeriesNameNormalized = "a smugglers tale",
+                SeriesAsin = "WRONGASIN",
+                Region = "us",
+                Language = "all"
+            });
+
+            _seriesCatalogService
+                .Setup(service => service.GetCatalogByAsinAsync(
+                    It.IsAny<string>(),
+                    "RIGHTASIN",
+                    It.IsAny<string>(),
+                    500,
+                    null,
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SeriesCatalogFetchResultBuilder()
+                    .WithSeries("Smuggler's Tales", "RIGHTASIN")
+                    .Build());
+
+            var service = _provider.GetRequiredService<ISeriesMonitoringService>();
+
+            // When
+            var result = await service.RepointSeriesAsync(stale.Id, "RIGHTASIN");
+
+            // Then
+            Assert.NotNull(result);
+            Assert.True(result!.Merged);
+            Assert.Equal(survivor.Id, result.MonitoredSeries!.Id);
+            Assert.True(result.MonitoredSeries.AsinPinned);
+            Assert.Null(await repo.GetByIdAsync(stale.Id));
+        }
+
     }
 }
