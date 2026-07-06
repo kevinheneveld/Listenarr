@@ -71,6 +71,9 @@ import type {
   OrganizeFlattenResult,
   MoveQueueSummary,
   LibraryDuplicatesResponse,
+  DuplicatesMergePair,
+  MergeDuplicatesResult,
+  RecoveryRunResult,
 } from '@/types'
 import { getStartupConfigCached, resetCache as resetStartupConfigCache } from './startupConfigCache'
 import { sessionTokenManager } from '@/utils/sessionToken'
@@ -1463,6 +1466,46 @@ class ApiService {
 
   async getSeriesHealth(): Promise<SeriesHealthResponse> {
     return this.request<SeriesHealthResponse>(`/library/series/health`)
+  }
+
+  async mergeDuplicates(merges: DuplicatesMergePair[]): Promise<MergeDuplicatesResult> {
+    return this.request<MergeDuplicatesResult>(`/library/duplicates/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ merges }),
+    })
+  }
+
+  /** Recovery toolbox — every destructive endpoint defaults to dry-run. */
+  async runLibraryRecovery(
+    action:
+      | 'recover-broken-moves'
+      | 'recover-rootbase-audiobooks'
+      | 'recover-orphaned-tracking'
+      | 'cleanup-phantom-rows',
+    dryRun: boolean,
+  ): Promise<RecoveryRunResult> {
+    return this.request<RecoveryRunResult>(`/library/${action}?dryRun=${dryRun}`, {
+      method: 'POST',
+    })
+  }
+
+  async cleanupOrphanMoveTmp(dryRun: boolean): Promise<RecoveryRunResult> {
+    return this.request<RecoveryRunResult>(`/library/move/cleanup-orphan-tmp?dryRun=${dryRun}`, {
+      method: 'POST',
+    })
+  }
+
+  async cancelStaleMoveJobs(olderThanMinutes = 5): Promise<{ cancelled: number }> {
+    return this.request<{ cancelled: number }>(
+      `/library/move/cancel-stale?olderThanMinutes=${olderThanMinutes}`,
+      { method: 'POST' },
+    )
+  }
+
+  async backfillLibraryMetadata(): Promise<{ message: string; total: number }> {
+    return this.request<{ message: string; total: number }>(`/library/backfill-metadata`, {
+      method: 'POST',
+    })
   }
 
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {

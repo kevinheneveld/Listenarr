@@ -25,7 +25,8 @@ namespace Listenarr.Application.Audiobooks.Contracts
             string? path = null,
             string? correlationId = null,
             string? downloadId = null,
-            bool forceMetadataRefresh = false);
+            bool forceMetadataRefresh = false,
+            bool skipMissingBasePathCleanup = false);
         Task<Guid?> RequeueScanAsync(Guid jobId);
         bool TryGetJob(Guid id, out ScanJob? job);
         void UpdateJobStatus(Guid id, string status, string? error = null, int? found = null, int? created = null);

@@ -18,6 +18,7 @@
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Listenarr.Application.Downloads;
 
 namespace Listenarr.Infrastructure.Downloads.Monitoring
 {
@@ -70,7 +71,7 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
         }
     }
 
-    public class DownloadMonitorProcessor(
+    public partial class DownloadMonitorProcessor(
         IServiceScopeFactory scopeFactory,
         IDownloadPushService downloadPushService,
         ILogger<DownloadMonitorProcessor> logger) : IDownloadMonitorProcessor
@@ -155,6 +156,9 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                 return;
             }
 
+            var reaperOptions = StalledReaperOptions.FromEnvironment();
+            PruneStallSnapshots(activeDownloads);
+
             // Lets assume downloads have been updated by now
             if (DateTime.UtcNow - _lastFullBroadcast > TimeSpan.FromSeconds(120))
             {
@@ -192,10 +196,22 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                     var previousDownloads = clientDownloads.Select(item => item.Clone()).ToList();
                     var updatedDownloads = await downloadClientGateway.FetchDownloadsAsync(client, clientDownloads, cancellationToken);
 
+                    var reapCandidates = new List<Download>();
+                    var now = DateTime.UtcNow;
+
                     foreach (Download download in updatedDownloads)
                     {
                         var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
                         await downloadService.UpdateAsync(download);
+
+                        // Stall reaper: update this download's progress snapshot and flag it if it has
+                        // made no progress past the timeout. Detection runs whenever the reaper is
+                        // enabled (dry-run included); only the removal action below is gated on dry-run.
+                        if (reaperOptions.Enabled)
+                        {
+                            EvaluateStallSnapshot(download, now, reaperOptions, reapCandidates);
+                        }
+
                         var previousDownload = previousDownloads.FirstOrDefault(d => d.Id == download.Id);
                         if (previousDownload == null)
                         {
@@ -203,6 +219,14 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                         }
 
                         await TriggerCallbacks(client, download, previousDownload, cancellationToken);
+                    }
+
+                    // Reap stalled downloads as a separate pass AFTER the fetch loop so the Failed
+                    // transition does not re-enter TriggerCallbacks/OnDownloadFailed (which would
+                    // double-remove and possibly auto-search the same dead torrent).
+                    if (reaperOptions.Enabled && reapCandidates.Count > 0)
+                    {
+                        await ReapStalledDownloadsAsync(client, reapCandidates, reaperOptions, scope, cancellationToken);
                     }
                 }
                 catch (DownloadClientAdapterPollingException exception)

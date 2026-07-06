@@ -59,6 +59,35 @@ public partial class LibraryController
         public bool? DeleteEmptySource { get; set; }
     }
 
+    public class MergeDuplicatesRequest
+    {
+        public List<MergeDuplicatesPair> Merges { get; set; } = [];
+    }
+
+    /// <summary>
+    /// One resolution decision: losers merge into the winner (same-ASIN rows),
+    /// clear-ASIN ids keep their row but lose the ASIN (same ASIN, different book).
+    /// </summary>
+    public class MergeDuplicatesPair
+    {
+        public int? WinnerId { get; set; }
+        public List<int>? LoserIds { get; set; }
+        public List<int>? ClearAsinIds { get; set; }
+    }
+
+    public class MergeDuplicatesResult
+    {
+        public int GroupsProcessed { get; set; }
+        public int RowsDeleted { get; set; }
+        public int AsinsCleared { get; set; }
+        public int DownloadsReassigned { get; set; }
+        public int HistoryReassigned { get; set; }
+        public int MoveJobsReassigned { get; set; }
+        public int DiskFilesDeleted { get; set; }
+        public int DiskFoldersDeleted { get; set; }
+        public List<string> Warnings { get; set; } = [];
+    }
+
     public class TransferFilesRequest
     {
         public int TargetAudiobookId { get; set; }

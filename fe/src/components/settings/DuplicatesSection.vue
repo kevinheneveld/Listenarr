@@ -67,6 +67,24 @@
             {{ deletingId === b.id ? 'Deleting…' : 'Delete record' }}
           </button>
         </div>
+        <div v-if="g.reason === 'asin'" class="dupes-group-actions">
+          <button
+            type="button"
+            class="dupes-merge-btn"
+            :disabled="mergingKey !== null"
+            @click="mergeGroup(g)"
+          >
+            {{ mergingKey === g.key ? 'Merging…' : 'Merge into keeper…' }}
+          </button>
+          <button
+            type="button"
+            class="dupes-clear-btn"
+            :disabled="mergingKey !== null"
+            @click="markDifferentBooks(g)"
+          >
+            These are different books
+          </button>
+        </div>
       </div>
 
       <div class="dupes-subhead">
@@ -102,6 +120,81 @@ const error = ref<string | null>(null)
 const groups = ref<DuplicateGroup[]>([])
 const copies = ref<DuplicateCopyBook[]>([])
 const deletingId = ref<number | null>(null)
+const mergingKey = ref<string | null>(null)
+
+/**
+ * Merge a same-ASIN group into its keeper (kevin/live semantics): the losers'
+ * files and folders are DELETED from disk (the keeper already owns the good
+ * copy), their downloads/history/move jobs move to the keeper, and the loser
+ * records are removed.
+ */
+async function mergeGroup(g: DuplicateGroup) {
+  const keeper = g.books.find((b) => b.id === g.suggestedKeeperId) ?? g.books[0]
+  const losers = g.books.filter((b) => b.id !== keeper.id)
+  if (losers.length === 0) return
+
+  const loserFiles = losers.reduce((n, b) => n + b.fileCount, 0)
+  const ok = await showConfirm(
+    `Merge ${losers.length} duplicate record(s) into "${keeper.title}" (id ${keeper.id})?\n\n` +
+      `The duplicates' ${loserFiles} file(s) and folders are DELETED from disk — the keeper ` +
+      `already owns the good copy. Their download and history entries move to the keeper. ` +
+      `This cannot be undone.`,
+    'Merge duplicates',
+    { danger: true, confirmText: 'Merge & delete duplicates', cancelText: 'Cancel' },
+  )
+  if (!ok) return
+
+  mergingKey.value = g.key
+  try {
+    const result = await apiService.mergeDuplicates([
+      { winnerId: keeper.id, loserIds: losers.map((b) => b.id), clearAsinIds: [] },
+    ])
+    const summary = `Removed ${result.rowsDeleted} record(s), ${result.diskFilesDeleted} file(s) from disk; reassigned ${result.historyReassigned} history entries.`
+    if (result.warnings.length > 0) {
+      toast.warning('Merged with warnings', `${summary} ${result.warnings.join(' ')}`)
+    } else {
+      toast.success('Duplicates merged', summary)
+    }
+    await load()
+  } catch (err) {
+    toast.error('Merge failed', err instanceof Error ? err.message : 'unknown error')
+  } finally {
+    mergingKey.value = null
+  }
+}
+
+/**
+ * The escape hatch for same-ASIN rows that are actually different books: every
+ * non-keeper row keeps its record and files but loses the ASIN, so the
+ * duplicate scan stops flagging the group.
+ */
+async function markDifferentBooks(g: DuplicateGroup) {
+  const keeper = g.books.find((b) => b.id === g.suggestedKeeperId) ?? g.books[0]
+  const others = g.books.filter((b) => b.id !== keeper.id)
+  if (others.length === 0) return
+
+  const ok = await showConfirm(
+    `Keep all ${g.books.length} records and clear the shared ASIN from ${others.length} of them ` +
+      `(the keeper's ASIN stays)? Use this when the rows share an ASIN but are genuinely ` +
+      `different books. Nothing is deleted.`,
+    'Mark as different books',
+    { confirmText: 'Clear ASINs', cancelText: 'Cancel' },
+  )
+  if (!ok) return
+
+  mergingKey.value = g.key
+  try {
+    const result = await apiService.mergeDuplicates([
+      { winnerId: keeper.id, loserIds: [], clearAsinIds: others.map((b) => b.id) },
+    ])
+    toast.success('Marked as different books', `Cleared ${result.asinsCleared} ASIN(s).`)
+    await load()
+  } catch (err) {
+    toast.error('Clear ASINs failed', err instanceof Error ? err.message : 'unknown error')
+  } finally {
+    mergingKey.value = null
+  }
+}
 
 async function load() {
   loading.value = true
@@ -291,5 +384,45 @@ function formatSize(bytes: number): string {
 .dupes-delete-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+.dupes-group-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.dupes-merge-btn {
+  background: rgba(255, 107, 107, 0.1);
+  color: #ff6b6b;
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.dupes-merge-btn:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.2);
+}
+
+.dupes-clear-btn {
+  background: transparent;
+  color: #adb5bd;
+  border: 1px solid rgba(173, 181, 189, 0.3);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.dupes-clear-btn:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.dupes-merge-btn:disabled,
+.dupes-clear-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

@@ -24,4 +24,11 @@ public interface IMoveQueuePersistence
         string? error,
         DateTimeOffset updatedAt,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Mark Queued/Processing rows whose last activity precedes <paramref name="cutoff"/>
+    /// as Cancelled with <paramref name="error"/>. Returns the cancelled job ids so the
+    /// in-memory queue can evict them (a re-queue must not dedupe against a cancelled row).
+    /// </summary>
+    Task<IReadOnlyList<Guid>> CancelStalePendingAsync(DateTimeOffset cutoff, string error, CancellationToken cancellationToken = default);
 }

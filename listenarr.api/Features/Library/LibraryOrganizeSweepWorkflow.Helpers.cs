@@ -160,7 +160,7 @@ namespace Listenarr.Api.Features.Library
         /// a non-empty reason buckets the row as
         /// <see cref="OrganizePreviewStatus.InvalidTarget"/>.
         /// </summary>
-        private (string Target, string? InvalidReason, string? InvalidReasonCode) ComputeOrganizeTarget(
+        internal (string Target, string? InvalidReason, string? InvalidReasonCode) ComputeOrganizeTarget(
             Audiobook audiobook,
             ApplicationSettings settings,
             List<RootFolder> rootFolders)
@@ -235,7 +235,7 @@ namespace Listenarr.Api.Features.Library
                 .FirstOrDefault() ?? string.Empty;
         }
 
-        private static string NormalizeOrganizePath(string? path)
+        internal static string NormalizeOrganizePath(string? path)
             => string.IsNullOrWhiteSpace(path) ? string.Empty : FileUtils.NormalizeStoredPath(path);
 
         private static string NormalizeOrganizeKey(string path)
@@ -252,7 +252,7 @@ namespace Listenarr.Api.Features.Library
         /// itself, and the post-copy delete of the source would wipe every
         /// other audiobook on the same root.
         /// </summary>
-        private static bool IsSourceAtRootFolder(string? currentPath, IEnumerable<RootFolder> rootFolders)
+        internal static bool IsSourceAtRootFolder(string? currentPath, IEnumerable<RootFolder> rootFolders)
         {
             if (string.IsNullOrWhiteSpace(currentPath)) return false;
             var currentKey = NormalizeOrganizeKey(NormalizeOrganizePath(currentPath));

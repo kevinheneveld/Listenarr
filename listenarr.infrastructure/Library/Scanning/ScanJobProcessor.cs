@@ -109,6 +109,16 @@ namespace Listenarr.Infrastructure.Library.Scanning
                     }
                 }
 
+                if (usedBasePath && (string.IsNullOrEmpty(scanRoot) || !Directory.Exists(scanRoot)) && job.SkipMissingBasePathCleanup)
+                {
+                    // Recovery-scan safety belt: report the miss but never cascade into file
+                    // deletions — the recovery flows just re-stamped BasePath and verified the
+                    // folder had content; a race with the operator must not wipe the record.
+                    _logger.LogWarning("Audiobook BasePath missing for recovery scan {JobId}: {Path}. Skipping cleanup (SkipMissingBasePathCleanup).", job.Id, LogRedaction.SanitizeFilePath(scanRoot));
+                    _queue.UpdateJobStatus(job.Id, "Failed", "BasePath missing (cleanup skipped)");
+                    return;
+                }
+
                 if (usedBasePath && (string.IsNullOrEmpty(scanRoot) || !Directory.Exists(scanRoot)))
                 {
                     _logger.LogWarning("Audiobook BasePath missing for job {JobId}: {Path}. Removing tracked files.", job.Id, LogRedaction.SanitizeFilePath(scanRoot));

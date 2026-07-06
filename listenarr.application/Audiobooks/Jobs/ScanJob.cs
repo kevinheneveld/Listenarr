@@ -13,5 +13,12 @@ namespace Listenarr.Application.Audiobooks.Jobs
 
         /// <summary>Re-extract metadata for already-tracked files and backfill blank audiobook fields.</summary>
         public bool ForceMetadataRefresh { get; set; }
+
+        /// <summary>
+        /// Recovery-scan safety belt: when true, a missing/unreadable BasePath does NOT
+        /// cascade into AudiobookFile deletions. Set by the maintenance/recovery flows so
+        /// a recovery scan that somehow finds nothing can't wipe tracked files.
+        /// </summary>
+        public bool SkipMissingBasePathCleanup { get; set; }
     }
 }

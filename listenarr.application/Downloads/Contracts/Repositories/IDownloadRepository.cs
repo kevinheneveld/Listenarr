@@ -25,6 +25,13 @@ namespace Listenarr.Application.Downloads.Contracts.Repositories
         Task UpdateAsync(Download download);
         Task UpdateMetadataAsync(string id, string key, object? value);
         Task RemoveAsync(string id);
+
+        /// <summary>
+        /// Delete terminal download-history rows (Moved / Completed / Failed / ImportBlocked)
+        /// whose completion (or start, when never completed) precedes <paramref name="cutoffUtc"/>.
+        /// Active downloads are never touched. Returns the number of rows removed.
+        /// </summary>
+        Task<int> DeleteTerminalOlderThanAsync(DateTime cutoffUtc, CancellationToken ct = default);
         Task<List<Download>> GetAllAsync();
         Task<List<Download>> GetQueueDisplayCandidatesAsync();
         Task<List<Download>> GetQueueMatchingCandidatesAsync();

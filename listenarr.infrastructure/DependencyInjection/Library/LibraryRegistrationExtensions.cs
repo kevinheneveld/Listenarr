@@ -20,6 +20,8 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<IAudiobookFileService, AudiobookFileService>();
         // Singleton: stateless filesystem primitives, consumed by the singleton MoveJobProcessor.
         services.AddSingleton<IOrganizeFilesystem, Listenarr.Infrastructure.Library.Organizing.OrganizeFilesystem>();
+        // Singleton: stateless disk probes for the recovery/maintenance flows.
+        services.AddSingleton<ILibraryRecoveryFilesystem, Listenarr.Infrastructure.Library.Organizing.LibraryRecoveryFilesystem>();
 
         // Audio identity verification (ADR-0001). Whisper is scoped (not
         // singleton): it reads scoped IConfigurationService per transcription.

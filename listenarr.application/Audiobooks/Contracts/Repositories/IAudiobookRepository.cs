@@ -48,6 +48,12 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<Audiobook> AddAsync(Audiobook audiobook);
         Task<bool> UpdateAsync(Audiobook audiobook);
 
+        /// <summary>See <c>AudiobookRepository.Merge</c>: reassign losers' downloads/history/move jobs to the winner, delete the loser rows.</summary>
+        Task<AudiobookMergeCounts> MergeAudiobookRowsAsync(int winnerId, IReadOnlyCollection<int> loserIds, CancellationToken ct = default);
+
+        /// <summary>Null out the ASIN on the given rows (same-ASIN-but-different-books escape hatch).</summary>
+        Task<int> ClearAsinsAsync(IReadOnlyCollection<int> audiobookIds, CancellationToken ct = default);
+
         /// <summary>
         /// Stamp only <see cref="Audiobook.LastSearchTime"/> without touching any
         /// other column. The automatic-search cycle iterates a snapshot loaded at
@@ -69,4 +75,14 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task SaveChangesAsync(CancellationToken ct = default);
         Task<bool> UpdateWithIdentifierReplaceAsync(Audiobook audiobook, List<AudiobookExternalIdentifier> newIdentifiers, CancellationToken ct = default);
     }
+
+    /// <summary>Row counts from a duplicate-record merge.</summary>
+    public sealed class AudiobookMergeCounts
+    {
+        public int DownloadsReassigned { get; set; }
+        public int HistoryReassigned { get; set; }
+        public int MoveJobsReassigned { get; set; }
+        public int RowsDeleted { get; set; }
+    }
+
 }

@@ -46,6 +46,29 @@ namespace Listenarr.Application.Audiobooks.Jobs
 
         public ChannelReader<MoveJob> Reader => _channel.Reader;
 
+        public async Task<int> CancelStalePendingAsync(TimeSpan staleThreshold, CancellationToken ct = default)
+        {
+            var cutoff = _timeProvider.GetUtcNow() - staleThreshold;
+            var cancelledIds = await _persistence.CancelStalePendingAsync(
+                cutoff,
+                "Cancelled by operator (stale pending sweep)",
+                ct);
+
+            // Also drop from the in-memory map so a re-queue from the modal
+            // isn't deduped against a cancelled row.
+            foreach (var id in cancelledIds)
+            {
+                _jobs.TryRemove(id, out _);
+            }
+
+            if (cancelledIds.Count > 0)
+            {
+                _logger.LogInformation("Cancelled {Count} stale pending move job(s) older than {Threshold}", cancelledIds.Count, staleThreshold);
+            }
+
+            return cancelledIds.Count;
+        }
+
         public async Task<Guid> EnqueueMoveAsync(int audiobookId, string requestedPath, string? sourcePath = null, bool replaceStubTarget = false)
         {
             var deduplicationKey = BuildDeduplicationKey(audiobookId, requestedPath);

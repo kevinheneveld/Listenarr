@@ -37,7 +37,8 @@ namespace Listenarr.Application.Audiobooks.Jobs
             string? path = null,
             string? correlationId = null,
             string? downloadId = null,
-            bool forceMetadataRefresh = false)
+            bool forceMetadataRefresh = false,
+            bool skipMissingBasePathCleanup = false)
         {
             // Deduplicate: if there's already a job for the same audiobook and path that is
             // queued/processing/completed, return that job id instead of creating a duplicate.
@@ -77,7 +78,8 @@ namespace Listenarr.Application.Audiobooks.Jobs
                 Path = path,
                 CorrelationId = correlationId,
                 DownloadId = downloadId,
-                ForceMetadataRefresh = forceMetadataRefresh
+                ForceMetadataRefresh = forceMetadataRefresh,
+                SkipMissingBasePathCleanup = skipMissingBasePathCleanup
             };
             _jobs[job.Id] = job;
             _logger.LogInformation("Enqueueing scan job {JobId} for audiobook {AudiobookId} (path: {Path})", job.Id, audiobook.Id, LogRedaction.SanitizeFilePath(path));

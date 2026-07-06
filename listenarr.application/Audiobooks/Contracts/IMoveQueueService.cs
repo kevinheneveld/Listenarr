@@ -25,5 +25,12 @@ namespace Listenarr.Application.Audiobooks.Contracts
         Task<MoveJob?> GetJobAsync(Guid id, CancellationToken cancellationToken = default);
         Task UpdateJobStatusAsync(Guid id, string status, string? error = null, CancellationToken cancellationToken = default);
         System.Threading.Channels.ChannelReader<MoveJob> Reader { get; }
+
+        /// <summary>
+        /// Cancel Queued/Processing move jobs whose last activity is older than
+        /// <paramref name="staleThreshold"/> — the operator escape hatch for jobs
+        /// wedged by a crashed worker. Returns the number cancelled.
+        /// </summary>
+        Task<int> CancelStalePendingAsync(TimeSpan staleThreshold, CancellationToken ct = default);
     }
 }

@@ -1402,6 +1402,39 @@ export interface LibraryDuplicatesResponse {
   duplicateCopyBooks: DuplicateCopyBook[]
 }
 
+/**
+ * Wire shape for `POST /library/duplicates/merge`. Losers merge into the
+ * winner (same-ASIN rows: files deleted from disk, downloads/history/move
+ * jobs reassigned, rows removed); clear-ASIN ids keep their row but lose the
+ * ASIN (same ASIN, actually different books).
+ */
+export interface DuplicatesMergePair {
+  winnerId: number | null
+  loserIds: number[]
+  clearAsinIds: number[]
+}
+
+export interface MergeDuplicatesResult {
+  groupsProcessed: number
+  rowsDeleted: number
+  asinsCleared: number
+  downloadsReassigned: number
+  historyReassigned: number
+  moveJobsReassigned: number
+  diskFilesDeleted: number
+  diskFoldersDeleted: number
+  warnings: string[]
+}
+
+/** Result shape shared by the dry-run-first recovery endpoints. */
+export interface RecoveryRunResult {
+  dryRun: boolean
+  inspected?: number
+  recovered?: number
+  skipped?: number
+  [key: string]: unknown
+}
+
 export type ExtractDuplicateStrategy =
   | 'none'
   | 'merge'

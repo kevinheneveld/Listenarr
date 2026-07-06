@@ -33,6 +33,7 @@ internal static class WorkerRegistrationExtensions
         AddHostedProcessor<ImageCacheCleanupProcessor, IImageCacheCleanupProcessor, ImageCacheCleanupService>(services);
         AddHostedProcessor<DownloadMonitorProcessor, IDownloadMonitorProcessor, DownloadMonitorService>(services);
         AddHostedProcessor<MovedDownloadCleanupProcessor, IMovedDownloadCleanupProcessor, MovedDownloadCleanupService>(services);
+        services.AddHostedService<Listenarr.Infrastructure.Downloads.Cleanup.DownloadHistoryRetentionService>();
 
         AddProcessor<QueueMonitorProcessor, IQueueMonitorProcessor>(services);
         services.AddHostedService<QueueMonitorService>();

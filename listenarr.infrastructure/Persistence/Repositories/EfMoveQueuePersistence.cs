@@ -40,6 +40,34 @@ public sealed class EfMoveQueuePersistence(IDbContextFactory<ListenArrDbContext>
         await db.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Guid>> CancelStalePendingAsync(
+        DateTimeOffset cutoff,
+        string error,
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var cutoffUtc = cutoff.UtcDateTime;
+        var stale = await db.MoveJobs
+            .Where(j => (j.Status == "Queued" || j.Status == "Processing")
+                        && (j.UpdatedAt ?? j.EnqueuedAt) < cutoffUtc)
+            .ToListAsync(cancellationToken);
+
+        foreach (var job in stale)
+        {
+            job.Status = "Cancelled";
+            job.Error = error;
+            job.UpdatedAt = DateTime.UtcNow;
+            job.ActiveDeduplicationKey = null;
+        }
+
+        if (stale.Count > 0)
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        return stale.Select(j => j.Id).ToList();
+    }
+
     public async Task UpdateStatusAsync(
         Guid id,
         string status,
