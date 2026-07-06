@@ -55,7 +55,7 @@ namespace Listenarr.Api.Features.Library
             var audiobook = await _repo.GetByIdAsync(id);
             if (audiobook == null) return new NotFoundObjectResult(new { message = "Audiobook not found" });
 
-            var queuedResult = await _scanQueueWorkflow.TryEnqueueAsync(audiobook, request?.Path);
+            var queuedResult = await _scanQueueWorkflow.TryEnqueueAsync(audiobook, request?.Path, request?.ForceMetadataRefresh ?? false);
             if (queuedResult != null)
             {
                 return queuedResult;

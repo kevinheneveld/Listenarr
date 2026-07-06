@@ -456,6 +456,19 @@
                 >
                   Clear manual verdict
                 </button>
+                <button
+                  v-if="(audiobook.files?.length ?? 0) > 0"
+                  type="button"
+                  class="show-more-btn manual-reject-btn"
+                  title="Full remediation: the files are removed from disk, the delivering release is blocklisted so it can never be re-grabbed, and a replacement search starts immediately"
+                  @click="
+                    confirmAndPurgeWrongContent(
+                      'Purge the files, blocklist the release, and search for a better copy? This cannot be undone.',
+                    )
+                  "
+                >
+                  Wrong content — find a better copy
+                </button>
               </div>
             </div>
             <div class="detail-row detail-row-stacked" v-if="audiobook.verificationTranscript">
@@ -630,6 +643,24 @@
                 </button>
                 <span class="file-size" v-if="f.size">{{ formatFileSize(f.size) }}</span>
                 <span class="file-size" v-else>Unknown size</span>
+                <button
+                  type="button"
+                  class="file-action-btn"
+                  title="Rename file"
+                  aria-label="Rename file"
+                  @click.stop="openRenameFile(f)"
+                >
+                  <PhPencil />
+                </button>
+                <button
+                  type="button"
+                  class="file-action-btn"
+                  title="Move file to another audiobook"
+                  aria-label="Move file to another audiobook"
+                  @click.stop="openExtractFile(f)"
+                >
+                  <PhArrowSquareOut />
+                </button>
                 <PhCaretDown
                   class="accordion-toggle"
                   :class="{ rotated: isFileAccordionExpanded(f.id) }"
@@ -935,8 +966,31 @@
     @done="onTransferDone"
   />
 
+  <RenameFileModal
+    :visible="showRenameFileModal"
+    :audiobook-id="audiobook?.id ?? null"
+    :file="renameFileTarget"
+    @close="closeRenameFile"
+    @done="handleRenameFileDone"
+  />
+
+  <!-- Extract one file into a NEW library record (or merge it onto an existing
+       ASIN match) — the remedy when an import put a file under the wrong book. -->
+  <ExtractFileModal
+    :visible="showExtractModal"
+    :audiobook-id="audiobook?.id ?? null"
+    :file-id="extractFileTarget?.id ?? null"
+    :source-audiobook-title="audiobook?.title ?? null"
+    :can-preview-file="true"
+    @close="closeExtractFile"
+    @done="handleExtractDone"
+    @preview-file="handleExtractPreviewFile"
+  />
+
   <!-- In-browser preview of one file: identify the narrator / language / quality
-       without downloading. Streams with Range support for scrubbing. -->
+       without downloading. Streams with Range support for scrubbing.
+       Mounted AFTER ExtractFileModal so the preview renders on top when opened
+       from inside the extract flow (equal z-index → DOM order wins). -->
   <FilePreviewModal
     :visible="previewVisible"
     :audiobook-id="audiobook?.id ?? null"
@@ -992,6 +1046,8 @@ import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal
 import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 import NotAudiobookAction from '@/components/library/NotAudiobookAction.vue'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
+import RenameFileModal from '@/components/domain/organize/RenameFileModal.vue'
+import ExtractFileModal from '@/components/domain/organize/ExtractFileModal.vue'
 import SplitCollectionModal from '@/components/domain/audiobook/SplitCollectionModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
@@ -1040,6 +1096,7 @@ import {
   PhDiscordLogo,
   PhArrowsLeftRight,
   PhArrowsSplit,
+  PhArrowSquareOut,
 } from '@phosphor-icons/vue'
 
 const route = useRoute()
@@ -1070,6 +1127,58 @@ const showEditModal = ref(false)
 const showOrganizeModal = ref(false)
 const showTransferModal = ref(false)
 const showSplitModal = ref(false)
+const showRenameFileModal = ref(false)
+const renameFileTarget = ref<{ id: number } | null>(null)
+const showExtractModal = ref(false)
+const extractFileTarget = ref<{ id: number } | null>(null)
+
+function openRenameFile(file: { id: number }): void {
+  renameFileTarget.value = { id: file.id }
+  showRenameFileModal.value = true
+}
+
+function closeRenameFile(): void {
+  showRenameFileModal.value = false
+  renameFileTarget.value = null
+}
+
+async function handleRenameFileDone(): Promise<void> {
+  closeRenameFile()
+  await loadAudiobook()
+}
+
+function openExtractFile(file: { id: number }): void {
+  extractFileTarget.value = { id: file.id }
+  showExtractModal.value = true
+}
+
+function closeExtractFile(): void {
+  showExtractModal.value = false
+  extractFileTarget.value = null
+}
+
+async function handleExtractDone(): Promise<void> {
+  closeExtractFile()
+  await loadAudiobook()
+  // The extract created/filled another record — refresh the list too.
+  void libraryStore.fetchLibrary()
+}
+
+// Opens FilePreviewModal from inside ExtractFileModal so the user can audition
+// the file before committing to an Audible candidate. The preview modal is
+// mounted AFTER the extract modal in the template, so at equal overlay z-index
+// the preview renders on top (DOM order).
+function handleExtractPreviewFile(payload: { audiobookId: number; fileId: number }): void {
+  const file = audiobook.value?.files?.find((f) => f.id === payload.fileId)
+  if (!file) return
+  openFilePreview({
+    id: file.id,
+    path: file.path ?? null,
+    format: file.format ?? null,
+    durationSeconds: file.durationSeconds ?? null,
+    size: file.size ?? null,
+  })
+}
 
 // Audio verification (ADR-0001) state
 const verifyingAudio = ref(false)
@@ -1236,28 +1345,41 @@ async function setManualVerification(action: 'verify' | 'reject' | 'clear') {
   // half of "this is junk — replace it". Offer the second half right away so
   // the user doesn't have to find the separate flow in the Delete dialog.
   if (action === 'reject' && (book.files?.length ?? 0) > 0) {
-    const purge = await showConfirm(
-      'Also purge the files, blocklist the release, and search for a better copy?\n\n' +
-        'The files are removed from disk, the delivering release can never be re-grabbed, ' +
-        'and a background search for a correct version starts immediately.',
-      'Find a better copy?',
-      { danger: true, confirmText: 'Purge & re-search', cancelText: 'Keep files' },
+    await confirmAndPurgeWrongContent(
+      'Also purge the files, blocklist the release, and search for a better copy?',
     )
-    if (purge) {
-      try {
-        const result = await apiService.rejectNotAudiobook(book.id)
-        toast.success(
-          'Wrong content rejected',
-          result.searchStarted
-            ? `Removed ${result.filesRemoved} file(s); the release is blocklisted and a replacement search is running.`
-            : `Removed ${result.filesRemoved} file(s); the release is blocklisted.`,
-        )
-        await loadAudiobook()
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        toast.error('Could not purge files', message)
-      }
-    }
+  }
+}
+
+// Shared wrong-content remediation: danger confirm → not-audiobook endpoint →
+// toast → reload. Used by the post-reject bridge above and the direct
+// "Wrong content — find a better copy" button on the verification card. The
+// Delete-dialog NotAudiobookAction stays its own surface over the same endpoint.
+async function confirmAndPurgeWrongContent(leadIn: string): Promise<void> {
+  const book = audiobook.value
+  if (!book || (book.files?.length ?? 0) === 0) return
+  const toast = useToast()
+  const purge = await showConfirm(
+    leadIn +
+      '\n\n' +
+      'The files are removed from disk, the delivering release can never be re-grabbed, ' +
+      'and a background search for a correct version starts immediately.',
+    'Find a better copy?',
+    { danger: true, confirmText: 'Purge & re-search', cancelText: 'Keep files' },
+  )
+  if (!purge) return
+  try {
+    const result = await apiService.rejectNotAudiobook(book.id)
+    toast.success(
+      'Wrong content rejected',
+      result.searchStarted
+        ? `Removed ${result.filesRemoved} file(s); the release is blocklisted and a replacement search is running.`
+        : `Removed ${result.filesRemoved} file(s); the release is blocklisted.`,
+    )
+    await loadAudiobook()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    toast.error('Could not purge files', message)
   }
 }
 
@@ -4041,6 +4163,26 @@ a.identifier-link:hover {
 .secondary-actions .delete-btn {
   padding-left: 10px;
   padding-right: 10px;
+}
+
+.file-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.file-action-btn:hover,
+.file-action-btn:focus-visible {
+  color: var(--text-primary, #fff);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Multi-select toolbar + per-row checkbox */

@@ -22,6 +22,14 @@ namespace Listenarr.Application.Audiobooks.Contracts
     {
         Task<string?> DownloadAndCacheImageAsync(string imageUrl, string identifier);
         Task<string?> MoveToLibraryStorageAsync(string identifier, string? imageUrl = null);
+
+        /// <summary>
+        /// Persist raw image bytes (e.g. a cover extracted from a file's embedded tags)
+        /// into permanent library image storage under the given identifier. Returns the
+        /// stored relative path, or null on failure. No-ops (returning the existing path)
+        /// when a library image already exists for the identifier.
+        /// </summary>
+        Task<string?> StoreLibraryImageBytesAsync(string identifier, byte[] bytes, string extension);
         Task<string?> MoveToAuthorLibraryStorageAsync(string identifier, string? imageUrl = null, bool forceRefresh = false);
         Task<string?> MoveToSeriesLibraryStorageAsync(string identifier, string? imageUrl = null, bool forceRefresh = false);
         Task<string?> GetCachedImagePathAsync(string identifier);

@@ -9,6 +9,52 @@ namespace Listenarr.Infrastructure.Images.Cache
     public partial class ImageCacheService : IImageCacheService, IDisposable
     {
         /// <summary>
+        /// Persist raw image bytes (e.g. an embedded cover pulled from file tags) into
+        /// permanent library storage: write to the temp cache under the identifier, then
+        /// reuse the existing temp→library move (which no-ops if a library image already
+        /// exists for this identifier).
+        /// </summary>
+        public async Task<string?> StoreLibraryImageBytesAsync(string identifier, byte[] bytes, string extension)
+        {
+            if (string.IsNullOrWhiteSpace(identifier))
+            {
+                _logger.LogWarning("Cannot store image bytes: identifier is empty");
+                return null;
+            }
+            if (bytes == null || bytes.Length == 0)
+            {
+                _logger.LogWarning("Cannot store image bytes for {Identifier}: empty payload", LogRedaction.SanitizeText(identifier));
+                return null;
+            }
+
+            var normalizedExt = string.IsNullOrWhiteSpace(extension) ? ".jpg" : extension;
+            if (!normalizedExt.StartsWith('.')) normalizedExt = "." + normalizedExt;
+
+            try
+            {
+                var tempPath = _pathResolver.BuildTempFilePath(identifier, normalizedExt, _tempCachePath);
+                if (!FileSystemSafety.TryValidateMutationTarget(tempPath, [_tempCachePath], out tempPath, out var tempReason))
+                {
+                    _logger.LogWarning("Blocked embedded-cover cache write for {Identifier}: {Reason}", LogRedaction.SanitizeText(identifier), LogRedaction.SanitizeText(tempReason));
+                    return null;
+                }
+
+                Directory.CreateDirectory(_tempCachePath);
+                await File.WriteAllBytesAsync(tempPath, bytes);
+
+                // NOTE: MoveToLibraryStorageAsync short-circuits if a library file already exists
+                // under this identifier. Callers that want to overwrite an existing cover must
+                // delete the existing library file first.
+                return await MoveToLibraryStorageAsync(identifier);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogError(ex, "Failed to store image bytes to library for {Identifier}", LogRedaction.SanitizeText(identifier));
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Moves an image from temp cache to permanent library storage.
         /// </summary>
         public async Task<string?> MoveToLibraryStorageAsync(string identifier, string? imageUrl = null)

@@ -72,5 +72,11 @@ namespace Listenarr.Application.Metadata.Contracts
         /// <param name="coverArtUrl">URL of the cover art image</param>
         /// <returns>Image data as byte array or null if failed</returns>
         Task<byte[]?> DownloadCoverArtAsync(string coverArtUrl);
+
+        /// <summary>
+        /// Read the first embedded cover picture from a local audio file's container
+        /// tags. Returns (null, null) when the file has no usable picture.
+        /// </summary>
+        Task<(byte[]? Bytes, string? Extension)> ExtractEmbeddedCoverAsync(string filePath);
     }
 }

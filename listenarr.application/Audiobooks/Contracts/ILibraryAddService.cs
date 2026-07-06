@@ -42,6 +42,13 @@ namespace Listenarr.Application.Audiobooks.Contracts
         public string HistorySource { get; set; } = "AddNew";
 
         public string? HistoryMessage { get; set; }
+
+        /// <summary>
+        /// Skip the ASIN/ISBN already-exists check. Set only by callers whose user has
+        /// EXPLICITLY chosen to create a second record for the same identifier (e.g. the
+        /// file-extract flow's "Duplicate" strategy) — everything else must dedup.
+        /// </summary>
+        public bool BypassDuplicateCheck { get; set; }
     }
 
     public sealed class LibraryAddOperationResult

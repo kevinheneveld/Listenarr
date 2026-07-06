@@ -12,8 +12,9 @@ namespace Listenarr.Application.Audiobooks.Contracts
         /// <param name="audiobook">The audiobook</param>
         /// <param name="filePath">Path to the audio file</param>
         /// <param name="source">Optional source identifier (e.g., "scan", "import")</param>
+        /// <param name="forceMetadataRefresh">When true and the file is already tracked, re-extract its metadata and backfill blank library-level fields on the audiobook (never overwrites non-blank values).</param>
         /// <returns>True if the audiobook is associated with an audiobook file, false otherwise</returns>
-        Task<bool> EnsureAudiobookFileAsync(Audiobook audiobook, string filePath, string? source = "scan");
+        Task<bool> EnsureAudiobookFileAsync(Audiobook audiobook, string filePath, string? source = "scan", bool forceMetadataRefresh = false);
 
         /// <summary>
         /// Delete a single tracked file from an audiobook. Disk-delete failures surface

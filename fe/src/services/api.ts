@@ -64,6 +64,8 @@ import type {
   SearchActivityResponse,
   SeriesHealthResponse,
   EmbeddedFileMetadata,
+  ExtractFileRequest,
+  ExtractFileResult,
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
   OrganizeFlattenResult,
@@ -1303,6 +1305,7 @@ class ApiService {
   async scanAudiobook(
     id: number,
     path?: string,
+    forceMetadataRefresh?: boolean,
   ): Promise<{
     message: string
     scannedPath?: string
@@ -1313,7 +1316,7 @@ class ApiService {
   }> {
     return this.request(`/library/${id}/scan`, {
       method: 'POST',
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ path, forceMetadataRefresh: forceMetadataRefresh ?? false }),
     })
   }
 
@@ -1488,6 +1491,38 @@ class ApiService {
     )
   }
 
+  async extractFileToNewAudiobook(
+    audiobookId: number,
+    fileId: number,
+    request: ExtractFileRequest,
+  ): Promise<ExtractFileResult> {
+    // The endpoint returns 409 when the chosen ASIN already matches an existing audiobook and
+    // the caller hasn't picked a strategy yet, or 400 when the chosen strategy still can't
+    // resolve the conflict. In both cases the response body is a populated ExtractFileResult
+    // — surface it instead of throwing so the modal can render the duplicate-strategy step.
+    // Normalize the metadata first so isbn is sent as a string[] (FE type is a single
+    // string for ergonomics; the backend's AudibleBookMetadata.Isbn is List<string>).
+    const normalizedMetadata = this.normalizeMetadataForApi(request.metadata)
+    const normalizedRequest = { ...request, metadata: normalizedMetadata }
+    try {
+      return await this.request<ExtractFileResult>(
+        `/library/${audiobookId}/files/${fileId}/extract`,
+        { method: 'POST', body: JSON.stringify(normalizedRequest) },
+      )
+    } catch (err) {
+      const status = (err as { status?: number } | null)?.status
+      const body = (err as { body?: string } | null)?.body
+      if ((status === 409 || status === 400) && typeof body === 'string' && body.length > 0) {
+        try {
+          const parsed = JSON.parse(body) as ExtractFileResult
+          if (typeof parsed?.success === 'boolean') return parsed
+        } catch {
+          /* fall through and rethrow */
+        }
+      }
+      throw err
+    }
+  }
   async removeFromLibrary(
     id: number,
     options?: {

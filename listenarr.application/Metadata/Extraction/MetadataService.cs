@@ -146,6 +146,16 @@ namespace Listenarr.Application.Metadata.Extraction
             }
         }
 
+        public Task<(byte[]? Bytes, string? Extension)> ExtractEmbeddedCoverAsync(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath) || !_fileSystem.FileExists(filePath))
+            {
+                return Task.FromResult<(byte[]?, string?)>((null, null));
+            }
+
+            return _audioTagWriter.ExtractEmbeddedCoverAsync(filePath);
+        }
+
         public async Task<AudioMetadata?> ExtractFileMetadataAsync(string filePath)
         {
             var settings = await _configurationService.GetApplicationSettingsAsync();

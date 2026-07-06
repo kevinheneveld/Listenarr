@@ -1401,3 +1401,57 @@ export interface LibraryDuplicatesResponse {
   duplicateGroups: DuplicateGroup[]
   duplicateCopyBooks: DuplicateCopyBook[]
 }
+
+export type ExtractDuplicateStrategy =
+  | 'none'
+  | 'merge'
+  | 'duplicate'
+  | 'None'
+  | 'Merge'
+  | 'Duplicate'
+
+export interface ExtractFileRequest {
+  metadata: AudibleBookMetadata
+  duplicateStrategy?: ExtractDuplicateStrategy
+  qualityProfileId?: number
+  monitored?: boolean
+  cacheImageLocally?: boolean
+}
+
+export interface ExtractFileConflict {
+  existingAudiobookId: number
+  existingTitle?: string
+  existingAsin?: string
+  existingFileCount: number
+  /** Folder the existing (conflicting) audiobook lives in on disk. */
+  existingBasePath?: string
+  /** Folder a new audiobook would land in if the user picks Duplicate — derived from
+   *  the chosen Audible metadata. */
+  proposedDestinationFolder?: string
+  recommendedStrategy: 'merge' | 'duplicate' | 'Merge' | 'Duplicate'
+  recommendationReason?: string
+  /** A capped sample of the existing audiobook's tracked files (path / format / size /
+   *  duration) so the UI can show "what's already there" when the user is choosing
+   *  between merge and duplicate. */
+  existingFiles?: ExtractFileConflictExistingFile[]
+}
+
+export interface ExtractFileConflictExistingFile {
+  fileId: number
+  path?: string
+  format?: string
+  size?: number
+  durationSeconds?: number
+}
+
+export interface ExtractFileResult {
+  success: boolean
+  error?: string
+  appliedStrategy: ExtractDuplicateStrategy
+  destinationAudiobookId?: number
+  destinationAudiobookTitle?: string
+  newFilePath?: string
+  sourceAudiobookId: number
+  sourceAudiobookEmpty: boolean
+  conflict?: ExtractFileConflict
+}

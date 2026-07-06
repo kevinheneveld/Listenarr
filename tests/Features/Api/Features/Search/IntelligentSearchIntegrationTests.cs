@@ -171,6 +171,11 @@ namespace Listenarr.Tests.Features.Api.Features.Search
             return Task.FromResult<string?>("cache/images/test.jpg");
         }
 
+        public Task<string?> StoreLibraryImageBytesAsync(string identifier, byte[] bytes, string extension)
+        {
+            return Task.FromResult<string?>(null);
+        }
+
         public Task<string?> MoveToLibraryStorageAsync(string identifier, string? imageUrl = null)
         {
             return Task.FromResult<string?>("cache/images/library/test.jpg");

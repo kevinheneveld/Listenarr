@@ -15,19 +15,21 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Application.Audiobooks.Files;
 
 namespace Listenarr.Application.Audiobooks.Contracts
 {
-    public interface IScanQueueService
+    /// <summary>
+    /// Extracts a single tracked file from its current audiobook onto a destination
+    /// audiobook constructed from user-supplied Audible metadata — the remedy when an
+    /// import placed a file under the wrong parent record.
+    /// </summary>
+    public interface IFileExtractionService
     {
-        Task<Guid> EnqueueScanAsync(
-            Audiobook audiobook,
-            string? path = null,
-            string? correlationId = null,
-            string? downloadId = null,
-            bool forceMetadataRefresh = false);
-        Task<Guid?> RequeueScanAsync(Guid jobId);
-        bool TryGetJob(Guid id, out ScanJob? job);
-        void UpdateJobStatus(Guid id, string status, string? error = null, int? found = null, int? created = null);
+        Task<ExtractFileResult> ExtractToNewAudiobookAsync(
+            int sourceAudiobookId,
+            int fileId,
+            ExtractFileRequest request,
+            CancellationToken ct = default);
     }
 }

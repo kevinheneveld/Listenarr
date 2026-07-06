@@ -69,6 +69,17 @@
                 <button
                   type="button"
                   class="btn btn-secondary btn-sm fill-missing-btn"
+                  :disabled="fillingMissingMetadata || !props.audiobook?.id"
+                  title="Re-extract metadata from this book's files and fill in any blank fields. Existing values are preserved."
+                  @click="fillMissingMetadata"
+                >
+                  <PhSpinner v-if="fillingMissingMetadata" class="ph-spin" :size="14" />
+                  <PhMagicWand v-else :size="14" />
+                  {{ fillingMissingMetadata ? 'Refreshing...' : 'Fill missing from file' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm fill-missing-btn"
                   :disabled="!props.audiobook"
                   title="Compare this book's metadata against Audible and pick which fields to overwrite."
                   @click="openMetadataBackfill"
@@ -808,6 +819,7 @@ import {
   PhPlus,
   PhInfo,
   PhDownloadSimple,
+  PhMagicWand,
   PhEye,
   PhStar,
   PhTag,
@@ -902,6 +914,26 @@ const emit = defineEmits<{
 const showMetadataBackfill = ref(false)
 function openMetadataBackfill() {
   showMetadataBackfill.value = true
+}
+
+const fillingMissingMetadata = ref(false)
+
+async function fillMissingMetadata() {
+  const audiobook = props.audiobook
+  if (!audiobook?.id || fillingMissingMetadata.value) return
+
+  fillingMissingMetadata.value = true
+  try {
+    await apiService.scanAudiobook(audiobook.id, undefined, true)
+    toast.success(
+      'Metadata refresh enqueued',
+      'Scanning files for missing metadata. Reopen this audiobook to see the updated fields.',
+    )
+  } catch (error) {
+    toast.error('Metadata refresh failed', error instanceof Error ? error.message : String(error))
+  } finally {
+    fillingMissingMetadata.value = false
+  }
 }
 function onMetadataBackfillApplied() {
   showMetadataBackfill.value = false

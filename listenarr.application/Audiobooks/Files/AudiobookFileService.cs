@@ -23,18 +23,20 @@ using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Audiobooks.Files
 {
-    public class AudiobookFileService(
+    public partial class AudiobookFileService(
         IMemoryCache memoryCache,
         MetadataExtractionLimiter limiter,
         IAudiobookFileRepository audiobookFileRepository,
+        IAudiobookRepository audiobookRepository,
         IHistoryRepository historyRepository,
+        IImageCacheService imageCache,
         IMetadataService metadataService,
         IToastService toastService,
         IFfmpegService ffmpegService,
         IFileSystem fileSystem,
         ILogger<AudiobookFileService> logger) : IAudiobookFileService
     {
-        public async Task<bool> EnsureAudiobookFileAsync(Audiobook audiobook, string filePath, string? source = "scan")
+        public async Task<bool> EnsureAudiobookFileAsync(Audiobook audiobook, string filePath, string? source = "scan", bool forceMetadataRefresh = false)
         {
             if (!fileSystem.FileExists(filePath))
             {
@@ -53,7 +55,15 @@ namespace Listenarr.Application.Audiobooks.Files
                 var exists = await audiobookFileRepository.ExistsAtPathAsync(audiobook.Id, filePath);
                 if (exists)
                 {
-                    logger.LogDebug("AudiobookFile already exists for audiobook {AudiobookId} at path {Path}", audiobook.Id, LogRedaction.SanitizeFilePath(filePath));
+                    if (forceMetadataRefresh)
+                    {
+                        logger.LogDebug("AudiobookFile already exists for audiobook {AudiobookId} at {Path}; re-extracting metadata for backfill", audiobook.Id, LogRedaction.SanitizeFilePath(filePath));
+                        await RefreshAudiobookMetadataFromFileAsync(audiobook, filePath);
+                    }
+                    else
+                    {
+                        logger.LogDebug("AudiobookFile already exists for audiobook {AudiobookId} at path {Path}", audiobook.Id, LogRedaction.SanitizeFilePath(filePath));
+                    }
                     return false;
                 }
 

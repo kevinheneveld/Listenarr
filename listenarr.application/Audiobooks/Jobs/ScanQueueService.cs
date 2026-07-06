@@ -36,7 +36,8 @@ namespace Listenarr.Application.Audiobooks.Jobs
             Audiobook audiobook,
             string? path = null,
             string? correlationId = null,
-            string? downloadId = null)
+            string? downloadId = null,
+            bool forceMetadataRefresh = false)
         {
             // Deduplicate: if there's already a job for the same audiobook and path that is
             // queued/processing/completed, return that job id instead of creating a duplicate.
@@ -47,6 +48,9 @@ namespace Listenarr.Application.Audiobooks.Jobs
                     if (j.AudiobookId != audiobook.Id) return false;
                     bool bothNull = j.Path == null && path == null;
                     bool bothMatch = j.Path != null && path != null && string.Equals(j.Path, path, StringComparison.OrdinalIgnoreCase);
+                    // A force-refresh request must not dedupe against a plain scan (and
+                    // vice versa) — they do different work on already-tracked files.
+                    if (j.ForceMetadataRefresh != forceMetadataRefresh) return false;
                     return bothNull || bothMatch;
                 });
 
@@ -72,7 +76,8 @@ namespace Listenarr.Application.Audiobooks.Jobs
                 AudiobookId = audiobook.Id,
                 Path = path,
                 CorrelationId = correlationId,
-                DownloadId = downloadId
+                DownloadId = downloadId,
+                ForceMetadataRefresh = forceMetadataRefresh
             };
             _jobs[job.Id] = job;
             _logger.LogInformation("Enqueueing scan job {JobId} for audiobook {AudiobookId} (path: {Path})", job.Id, audiobook.Id, LogRedaction.SanitizeFilePath(path));
@@ -121,7 +126,8 @@ namespace Listenarr.Application.Audiobooks.Jobs
                 AudiobookId = job.AudiobookId,
                 Path = job.Path,
                 CorrelationId = job.CorrelationId,
-                DownloadId = job.DownloadId
+                DownloadId = job.DownloadId,
+                ForceMetadataRefresh = job.ForceMetadataRefresh
             };
             _jobs[newJob.Id] = newJob;
             _logger.LogInformation("Requeueing scan job {OldJobId} as new job {NewJobId} for audiobook {AudiobookId}", jobId, newJob.Id, job.AudiobookId);

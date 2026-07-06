@@ -15,6 +15,11 @@ namespace Listenarr.Tests.Mocks
             throw new NotImplementedException();
         }
 
+        public Task<(byte[]? Bytes, string? Extension)> ExtractEmbeddedCoverAsync(string filePath)
+        {
+            return Task.FromResult<(byte[]?, string?)>((null, null));
+        }
+
         public Task<byte[]?> DownloadCoverArtAsync(string coverArtUrl)
         {
             throw new NotImplementedException();

@@ -162,6 +162,33 @@ vi.mock('@/services/api', () => {
     previewLibraryPath: vi.fn(async () => ({ path: '' })),
     previewRename: vi.fn(async () => []),
     executeRename: vi.fn(async () => []),
+    previewRenameAudiobook: vi.fn(async () => ({
+      audiobookId: 0,
+      folderChanged: false,
+      fileRenames: [],
+      hasChanges: false,
+    })),
+    executeRenameAudiobook: vi.fn(async () => ({
+      audiobookId: 0,
+      success: true,
+      renamedFiles: [],
+    })),
+    getFileEmbeddedMetadata: vi.fn(async () => ({
+      fileId: 0,
+      audiobookId: 0,
+    })),
+    extractFileToNewAudiobook: vi.fn(async () => ({
+      success: true,
+      appliedStrategy: 'none' as const,
+      sourceAudiobookId: 0,
+      sourceAudiobookEmpty: false,
+    })),
+    getAudibleMetadata: vi.fn(async () => ({
+      title: '',
+      authors: [],
+      asin: '',
+    })),
+    scanAudiobook: vi.fn(async () => ({ message: '', found: 0, created: 0 })),
     getQualityProfiles: vi.fn(async () => []),
     getApiConfigurations: vi.fn(async () => []),
     // add getRootFolders to apiService so tests that spy on apiService.getRootFolders work

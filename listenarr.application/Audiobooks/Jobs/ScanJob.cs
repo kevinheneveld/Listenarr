@@ -10,5 +10,8 @@ namespace Listenarr.Application.Audiobooks.Jobs
         public string? Error { get; set; }
         public string? CorrelationId { get; set; }
         public string? DownloadId { get; set; }
+
+        /// <summary>Re-extract metadata for already-tracked files and backfill blank audiobook fields.</summary>
+        public bool ForceMetadataRefresh { get; set; }
     }
 }

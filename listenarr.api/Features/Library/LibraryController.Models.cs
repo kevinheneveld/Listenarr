@@ -15,6 +15,13 @@ public partial class LibraryController
     public class ScanRequest
     {
         public string? Path { get; set; }
+
+        /// <summary>
+        /// If true, re-extract metadata for already-tracked files and backfill blank
+        /// library-level fields on the audiobook record (cover, ASIN, ISBN, series,
+        /// narrator, etc.). Existing non-blank values are never overwritten.
+        /// </summary>
+        public bool ForceMetadataRefresh { get; set; }
     }
 
     public class BulkDeleteRequest

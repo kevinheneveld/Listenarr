@@ -21,5 +21,11 @@ namespace Listenarr.Application.Audiobooks.Contracts
     public interface IAudioTagWriter
     {
         Task WriteAsinTagAsync(string filePath, string asin);
+
+        /// <summary>
+        /// Read the first embedded cover picture from the file's container tags.
+        /// Returns (null, null) when the file has no usable picture.
+        /// </summary>
+        Task<(byte[]? Bytes, string? Extension)> ExtractEmbeddedCoverAsync(string filePath);
     }
 }

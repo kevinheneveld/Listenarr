@@ -33,6 +33,7 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<IAuthorCatalogService, AuthorCatalogService>();
         services.AddScoped<ISeriesCatalogService, SeriesCatalogService>();
         services.AddScoped<ILibraryAddService, LibraryAddService>();
+        services.AddScoped<Listenarr.Application.Audiobooks.Contracts.IFileExtractionService, Listenarr.Application.Audiobooks.Files.FileExtractionService>();
         services.AddScoped<IAudiobookFilesystemDeleteService, AudiobookFilesystemDeleteService>();
         // Admin-triggered backlog sweep: localizes external cover-art URLs.
         services.AddScoped<Listenarr.Application.Common.Images.IExternalCoverArtSweepService, Listenarr.Application.Common.Images.ExternalCoverArtSweepService>();

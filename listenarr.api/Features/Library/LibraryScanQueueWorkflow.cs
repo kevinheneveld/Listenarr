@@ -36,7 +36,7 @@ namespace Listenarr.Api.Features.Library
             _scanQueueService = scanQueueService;
         }
 
-        public async Task<IActionResult?> TryEnqueueAsync(Audiobook audiobook, string? requestedPath)
+        public async Task<IActionResult?> TryEnqueueAsync(Audiobook audiobook, string? requestedPath, bool forceMetadataRefresh = false)
         {
             if (_scanQueueService == null)
             {
@@ -45,8 +45,8 @@ namespace Listenarr.Api.Features.Library
 
             try
             {
-                var jobId = await _scanQueueService.EnqueueScanAsync(audiobook, requestedPath);
-                _logger.LogInformation("Enqueued scan job {JobId} for audiobook {AudiobookId}", jobId, audiobook.Id);
+                var jobId = await _scanQueueService.EnqueueScanAsync(audiobook, requestedPath, forceMetadataRefresh: forceMetadataRefresh);
+                _logger.LogInformation("Enqueued scan job {JobId} for audiobook {AudiobookId} (forceMetadataRefresh: {Force})", jobId, audiobook.Id, forceMetadataRefresh);
                 await BroadcastQueuedAsync(jobId, audiobook.Id);
 
                 return new AcceptedResult(string.Empty, new { message = "Scan enqueued", jobId });

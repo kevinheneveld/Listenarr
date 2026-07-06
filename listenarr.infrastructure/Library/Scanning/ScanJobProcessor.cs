@@ -241,7 +241,7 @@ namespace Listenarr.Infrastructure.Library.Scanning
                         var audioFileService = afScope.ServiceProvider.GetRequiredService<IAudiobookFileService>();
 
                         // Store absolute path - metadata extraction needs full path
-                        var created = await audioFileService.EnsureAudiobookFileAsync(audiobook, filePath, "scan");
+                        var created = await audioFileService.EnsureAudiobookFileAsync(audiobook, filePath, "scan", job.ForceMetadataRefresh);
                         if (created) createdFiles++;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
