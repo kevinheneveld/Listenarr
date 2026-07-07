@@ -1321,8 +1321,48 @@ export interface SeriesHealthApiRow {
   owned: number
   missingTracked: number
   catalogTotal: number | null
+  /** Distinct recording runs (narrations/dramatizations) in the cached catalog. */
+  editions?: number | null
   monitored: boolean
   complete: boolean
+}
+
+/** Add-ready metadata for one missing work within a recording run. */
+export interface SeriesEditionMissingEntry {
+  asin: string
+  title: string
+  subtitle?: string | null
+  authors?: string[]
+  narrators?: string[]
+  publisher?: string | null
+  language?: string | null
+  runtime?: number | null
+  imageUrl?: string | null
+  series?: string | null
+  seriesNumber?: string | null
+  publishedDate?: string | null
+  isbn?: string | null
+}
+
+/** One production run of a series (heuristic grouping — see backend classifier). */
+export interface SeriesEditionRun {
+  label: string
+  kind: string
+  narrators: string[]
+  publisher?: string | null
+  totalWorks: number
+  ownedWorks: number
+  recordings: number
+  missingEntries: SeriesEditionMissingEntry[]
+}
+
+export interface SeriesEditionsResponse {
+  name: string
+  region: string
+  totalWorks: number
+  ownedWorks: number
+  catalogCached: boolean
+  runs: SeriesEditionRun[]
 }
 
 export interface SeriesHealthResponse {

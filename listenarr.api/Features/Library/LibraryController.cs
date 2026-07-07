@@ -43,6 +43,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryTransferFilesWorkflow _transferFilesWorkflow;
         private readonly LibraryFileDeleteWorkflow _fileDeleteWorkflow;
         private readonly LibrarySplitPreviewWorkflow _splitPreviewWorkflow;
+        private readonly LibrarySeriesEditionsWorkflow _seriesEditionsWorkflow;
         private readonly LibraryDashboardStatsWorkflow _dashboardStatsWorkflow;
         private readonly LibraryNotAudiobookWorkflow _notAudiobookWorkflow;
         private readonly LibraryEmbeddedMetadataWorkflow _embeddedMetadataWorkflow;
@@ -75,6 +76,7 @@ namespace Listenarr.Api.Features.Library
             LibraryTransferFilesWorkflow transferFilesWorkflow,
             LibraryFileDeleteWorkflow fileDeleteWorkflow,
             LibrarySplitPreviewWorkflow splitPreviewWorkflow,
+            LibrarySeriesEditionsWorkflow seriesEditionsWorkflow,
             LibraryOrganizeSweepWorkflow organizeSweepWorkflow,
             LibraryMoveSummaryWorkflow moveSummaryWorkflow,
             LibraryDuplicatesWorkflow duplicatesWorkflow,
@@ -107,6 +109,7 @@ namespace Listenarr.Api.Features.Library
             _transferFilesWorkflow = transferFilesWorkflow;
             _fileDeleteWorkflow = fileDeleteWorkflow;
             _splitPreviewWorkflow = splitPreviewWorkflow;
+            _seriesEditionsWorkflow = seriesEditionsWorkflow;
             _organizeSweepWorkflow = organizeSweepWorkflow;
             _moveSummaryWorkflow = moveSummaryWorkflow;
             _duplicatesWorkflow = duplicatesWorkflow;

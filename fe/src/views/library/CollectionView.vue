@@ -198,7 +198,9 @@
             >
               {{ seriesNotAddedCount }} ready to add
             </Pill>
-            <Pill variant="primary"> {{ seriesCatalogTotalCount }} total books </Pill>
+            <Pill variant="primary">
+              {{ seriesCatalogWorkCount ?? seriesCatalogTotalCount }} total books
+            </Pill>
             <Pill variant="info">
               {{ seriesLanguageLabel }}
             </Pill>
@@ -414,6 +416,45 @@
       <button class="btn btn-small" @click="showSeriesPicker = true">
         Pick the correct series
       </button>
+    </div>
+
+    <!-- Recording editions ("runs"): heuristic grouping of the catalog's
+         recordings so gap-filling stays within one production (a narration
+         run vs. a full-cast dramatization of the same books). -->
+    <div
+      v-if="isSeriesCollection && seriesEditions && seriesEditions.runs.length > 1"
+      class="series-editions"
+    >
+      <div class="series-editions-title">
+        Editions
+        <small
+          >{{ seriesEditions.runs.length }} recording runs ·
+          {{ seriesEditions.totalWorks }} works</small
+        >
+      </div>
+      <div
+        v-for="run in seriesEditions.runs"
+        :key="run.label + run.kind"
+        class="series-edition-row"
+      >
+        <span class="series-edition-label">
+          <strong>{{ run.label }}</strong>
+          <small>
+            {{ run.ownedWorks }}/{{ run.totalWorks }} works owned · {{ run.recordings }} recordings
+            <template v-if="run.publisher"> · {{ run.publisher }}</template>
+          </small>
+        </span>
+        <button
+          v-if="run.missingEntries.length > 0"
+          class="toolbar-btn series-edition-add"
+          :title="`Add the ${run.missingEntries.length} missing work(s) using this run's recordings`"
+          @click="openRunAdd(run)"
+        >
+          <PhPlus />
+          Add missing ({{ run.missingEntries.length }})
+        </button>
+        <span v-else class="series-edition-complete">complete</span>
+      </div>
     </div>
 
     <!-- Audiobooks Grid -->
@@ -859,11 +900,11 @@
     <AddSelectedBooksModal
       v-if="showAddMissingModal"
       :visible="showAddMissingModal"
-      :books="missingWorks"
+      :books="runAddBooks ?? missingWorks"
       :series-name="isSeriesCollection ? resolvedSeriesName : undefined"
       :series-asin="isSeriesCollection ? seriesHeroAsin : undefined"
       :region="seriesCatalogRegion"
-      @close="showAddMissingModal = false"
+      @close="((showAddMissingModal = false), (runAddBooks = null))"
       @done="onMissingBooksAdded"
     />
   </div>
@@ -911,6 +952,7 @@ import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { showConfirm } from '@/composables/useConfirm'
 import { getPlaceholderUrl } from '@/utils/placeholder'
+import { buildWorkKey } from '@/utils/seriesDisplay'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import { EmptyState, LoadingState, Pill } from '@/components/base'
 import type {
@@ -920,6 +962,8 @@ import type {
   AuthorCatalogResponse,
   AuthorLookupResponse,
   AudibleBookMetadata,
+  SeriesEditionsResponse,
+  SeriesEditionRun,
   MonitoredAuthor,
   MonitoredSeries,
   RelatedAuthorItem,
@@ -1539,6 +1583,60 @@ const seriesCatalogTotalCount = computed(
     seriesLookup.value?.totalBooks ??
     seriesVisibleBookCount.value,
 )
+
+// WORKS (logical books), not raw catalog entries — the catalog lists every
+// recording of every book, so a trilogy with three narrations reads as nine.
+const seriesCatalogWorkCount = computed(() => {
+  const books = seriesCatalog.value?.books
+  if (!books || books.length === 0) return null
+  const keys = new Set<string>()
+  for (const b of books) {
+    const key = buildWorkKey(b.title, b.authors, b.seriesNumber)
+    if (key) keys.add(key)
+  }
+  return keys.size > 0 ? keys.size : null
+})
+
+// Recording-edition runs for this series (heuristic; server-classified).
+const seriesEditions = ref<SeriesEditionsResponse | null>(null)
+const runAddBooks = ref<AudibleBookMetadata[] | null>(null)
+
+watch(
+  () => [isSeriesCollection.value, resolvedSeriesName.value, seriesCatalog.value] as const,
+  async ([isSeries, seriesName, catalog]) => {
+    seriesEditions.value = null
+    if (!isSeries || !seriesName || !catalog) return
+    try {
+      seriesEditions.value = await apiService.getSeriesEditions(
+        seriesName,
+        seriesCatalogRegion.value,
+      )
+    } catch {
+      // Editions are an enhancement — the page works without them.
+      seriesEditions.value = null
+    }
+  },
+  { immediate: true },
+)
+
+function openRunAdd(run: SeriesEditionRun) {
+  runAddBooks.value = run.missingEntries.map((e) => ({
+    asin: e.asin,
+    title: e.title,
+    subtitle: e.subtitle ?? undefined,
+    authors: e.authors ?? [],
+    narrators: e.narrators ?? undefined,
+    publisher: e.publisher ?? undefined,
+    language: e.language ?? undefined,
+    runtime: e.runtime ?? undefined,
+    imageUrl: e.imageUrl ?? undefined,
+    series: e.series ?? undefined,
+    seriesNumber: e.seriesNumber ?? undefined,
+    publishedDate: e.publishedDate ?? undefined,
+    isbn: e.isbn ?? undefined,
+  }))
+  showAddMissingModal.value = true
+}
 
 const authorHeroName = computed(
   () =>
@@ -4826,5 +4924,57 @@ defineExpose({
 
 .series-mismatch-hint .btn-small:hover {
   background: rgba(255, 183, 77, 0.18);
+}
+
+.series-editions {
+  margin: 0 16px 12px;
+  padding: 10px 14px;
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.series-editions-title {
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.series-editions-title small {
+  color: #8a93a0;
+  font-weight: 400;
+}
+
+.series-edition-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.series-edition-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: #d8dee6;
+}
+
+.series-edition-label small {
+  color: #8a93a0;
+}
+
+.series-edition-add {
+  flex-shrink: 0;
+}
+
+.series-edition-complete {
+  color: #2ecc71;
+  font-size: 0.85rem;
+  flex-shrink: 0;
 }
 </style>

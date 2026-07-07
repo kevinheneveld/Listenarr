@@ -38,13 +38,22 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<SeriesCacheEntry> UpsertCachedSeriesAsync(SeriesCacheEntry seriesCacheEntry);
 
         /// <summary>
-        /// Cached Audible catalog sizes for the given series names, keyed by the
-        /// caller's own (raw) name. Names are normalized internally with the same
-        /// rules the cache rows were written with, so callers never need to know
-        /// the normalization. Only series with a cached catalog of at least one
-        /// book appear in the result; the freshest cache row wins per name.
+        /// Cached Audible catalog summaries for the given series names, keyed by
+        /// the caller's own (raw) name. Names are normalized internally with the
+        /// same rules the cache rows were written with, so callers never need to
+        /// know the normalization. Totals are in WORKS (logical books — multiple
+        /// recordings of one book collapse via <see cref="Series.SeriesWorkKey"/>),
+        /// not raw catalog entries, plus the number of distinct recording runs.
+        /// Only series with a cached catalog of at least one book appear in the
+        /// result; the freshest cache row wins per name.
         /// </summary>
-        Task<Dictionary<string, int>> GetSeriesCatalogTotalsAsync(IReadOnlyCollection<string> seriesNames, string region, CancellationToken ct = default);
+        Task<Dictionary<string, Series.SeriesCatalogSummary>> GetSeriesCatalogSummariesAsync(IReadOnlyCollection<string> seriesNames, string region, CancellationToken ct = default);
+
+        /// <summary>
+        /// The freshest cached catalog entries (raw recordings) for one series
+        /// name — the source data for edition/run grouping on the series page.
+        /// </summary>
+        Task<List<CachedSeriesCatalogBook>> GetSeriesCatalogEntriesAsync(string seriesName, string region, CancellationToken ct = default);
         Task<Audiobook> AddAsync(Audiobook audiobook);
         Task<bool> UpdateAsync(Audiobook audiobook);
 

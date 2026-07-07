@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Listenarr.Application.Audiobooks.Series;
 using Listenarr.Application.Configuration.Contracts.Repositories;
 using Microsoft.AspNetCore.Mvc;
 
@@ -52,8 +53,10 @@ namespace Listenarr.Api.Features.Library
 
         internal sealed record SeriesAccumulator(string Name)
         {
-            public int Owned { get; set; }
-            public int MissingTracked { get; set; }
+            // WORK keys, not record counts: two recordings of the same book
+            // (or a re-added duplicate) are one logical book to the user.
+            public HashSet<string> OwnedWorks { get; } = new(StringComparer.Ordinal);
+            public HashSet<string> TrackedNoFileWorks { get; } = new(StringComparer.Ordinal);
         }
 
         public async Task<IActionResult> HealthAsync(CancellationToken ct)
@@ -73,7 +76,9 @@ namespace Listenarr.Api.Features.Library
             var bySeries = new Dictionary<string, SeriesAccumulator>(StringComparer.OrdinalIgnoreCase);
             foreach (var book in books)
             {
-                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // Per-series position matters for the work key (volume-numbered
+                // sets must stay distinct), so track (name → position) pairs.
+                var nameToPosition = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
                 if (memberships.TryGetValue(book.Id, out var ms) && ms.Count > 0)
                 {
                     foreach (var m in ms)
@@ -81,22 +86,22 @@ namespace Listenarr.Api.Features.Library
                         var n = m.SeriesName?.Trim();
                         if (!string.IsNullOrWhiteSpace(n))
                         {
-                            names.Add(n!);
+                            nameToPosition.TryAdd(n!, m.SeriesNumber);
                         }
                     }
                 }
                 else if (!string.IsNullOrWhiteSpace(book.Series))
                 {
-                    names.Add(book.Series!.Trim());
+                    nameToPosition.TryAdd(book.Series!.Trim(), book.SeriesNumber);
                 }
 
-                if (names.Count == 0)
+                if (nameToPosition.Count == 0)
                 {
                     continue;
                 }
 
                 var owned = fileCounts.TryGetValue(book.Id, out var c) && c > 0;
-                foreach (var name in names)
+                foreach (var (name, position) in nameToPosition)
                 {
                     if (!bySeries.TryGetValue(name, out var acc))
                     {
@@ -104,19 +109,25 @@ namespace Listenarr.Api.Features.Library
                         bySeries[name] = acc;
                     }
 
+                    var workKey = SeriesWorkKey.Build(book.Title, book.Authors, position);
+                    if (workKey.Length == 0)
+                    {
+                        continue;
+                    }
+
                     if (owned)
                     {
-                        acc.Owned++;
+                        acc.OwnedWorks.Add(workKey);
                     }
                     else
                     {
-                        acc.MissingTracked++;
+                        acc.TrackedNoFileWorks.Add(workKey);
                     }
                 }
             }
 
             var allNames = bySeries.Keys.ToList();
-            var catalogTotals = await _repo.GetSeriesCatalogTotalsAsync(allNames, region, ct);
+            var catalogSummaries = await _repo.GetSeriesCatalogSummariesAsync(allNames, region, ct);
 
             var monitored = await _monitoredSeriesRepository.GetAllAsync(ct);
             var monitoredNames = new HashSet<string>(
@@ -126,16 +137,21 @@ namespace Listenarr.Api.Features.Library
             var rows = bySeries.Values
                 .Select(acc =>
                 {
-                    int? catalogTotal = catalogTotals.TryGetValue(acc.Name, out var total) ? total : null;
+                    var summary = catalogSummaries.TryGetValue(acc.Name, out var found) ? found : null;
+                    int? catalogTotal = summary?.Works;
+                    var ownedWorks = acc.OwnedWorks.Count;
+                    // A work is only "missing" while no recording of it is owned.
+                    var missingTracked = acc.TrackedNoFileWorks.Count(k => !acc.OwnedWorks.Contains(k));
                     var complete = catalogTotal.HasValue
-                        ? acc.Owned >= catalogTotal.Value
-                        : acc.MissingTracked == 0;
+                        ? ownedWorks >= catalogTotal.Value
+                        : missingTracked == 0;
                     return new
                     {
                         name = acc.Name,
-                        owned = acc.Owned,
-                        missingTracked = acc.MissingTracked,
+                        owned = ownedWorks,
+                        missingTracked,
                         catalogTotal,
+                        editions = summary?.Editions,
                         monitored = monitoredNames.Contains(acc.Name),
                         complete
                     };

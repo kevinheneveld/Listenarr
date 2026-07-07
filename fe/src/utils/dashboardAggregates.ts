@@ -62,6 +62,8 @@ export interface SeriesHealthRow {
   missing: number
   total: number
   complete: boolean
+  /** Distinct recording runs in the cached catalog (server rows only). */
+  editions?: number | null
   /** Cached Audible catalog size; null/undefined = tracked-only knowledge. */
   catalogTotal?: number | null
 }

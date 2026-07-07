@@ -156,7 +156,7 @@ namespace Listenarr.Api.Features.Verification
                 var multiBook = trackedCounts.Where(kv => kv.Value >= 2).Select(kv => kv.Key).ToList();
                 if (multiBook.Count == 0) return (0, 0);
 
-                var totals = await _audiobookRepository.GetSeriesCatalogTotalsAsync(multiBook, region, ct);
+                var totals = await _audiobookRepository.GetSeriesCatalogSummariesAsync(multiBook, region, ct);
                 var cached = multiBook.Count(totals.ContainsKey);
                 return (cached, multiBook.Count);
             }

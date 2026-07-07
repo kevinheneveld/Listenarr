@@ -223,6 +223,12 @@
                 title="No cached catalog for this series yet — counts reflect tracked records only. The background catalog sweep fills this in over time."
                 >tracked only</small
               >
+              <small
+                v-if="(s.editions ?? 0) > 1"
+                class="series-hint"
+                title="This series has multiple recording runs (narrations/dramatizations) — open it to see per-edition coverage."
+                >{{ s.editions }} editions</small
+              >
             </span>
           </RouterLink>
           <button
@@ -485,6 +491,7 @@ const seriesRows = computed<SeriesHealthRow[]>(() => {
         total,
         complete: r.complete,
         catalogTotal: r.catalogTotal,
+        editions: r.editions ?? undefined,
       }
     })
   }

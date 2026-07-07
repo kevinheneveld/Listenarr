@@ -76,6 +76,7 @@ import type {
   OrganizeLibraryApplyResult,
   OrganizeFlattenResult,
   MoveQueueSummary,
+  SeriesEditionsResponse,
   LibraryDuplicatesResponse,
   MusicCandidatesResponse,
   DuplicatesMergePair,
@@ -1411,6 +1412,12 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify(body),
     })
+  }
+
+  async getSeriesEditions(name: string, region?: string): Promise<SeriesEditionsResponse> {
+    const params = new URLSearchParams({ name })
+    if (region) params.set('region', region)
+    return this.request<SeriesEditionsResponse>(`/library/series/editions?${params.toString()}`)
   }
 
   async getSplitPreview(id: number): Promise<{

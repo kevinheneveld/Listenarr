@@ -15,18 +15,19 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Application.Audiobooks.Series;
 using Microsoft.EntityFrameworkCore;
 
 namespace Listenarr.Infrastructure.Persistence.Repositories
 {
     public partial class AudiobookRepository
     {
-        public async Task<Dictionary<string, int>> GetSeriesCatalogTotalsAsync(
+        public async Task<Dictionary<string, SeriesCatalogSummary>> GetSeriesCatalogSummariesAsync(
             IReadOnlyCollection<string> seriesNames,
             string region,
             CancellationToken ct = default)
         {
-            var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<string, SeriesCatalogSummary>(StringComparer.OrdinalIgnoreCase);
             if (seriesNames.Count == 0)
             {
                 return result;
@@ -66,20 +67,63 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
 
             foreach (var entry in entries)
             {
-                var total = entry.CatalogBooks?.Count ?? 0;
-                if (total <= 0)
+                var books = entry.CatalogBooks;
+                if (books is not { Count: > 0 })
                 {
                     continue;
                 }
 
-                if (normalizedToOriginal.TryGetValue(entry.SeriesNameNormalized, out var original)
-                    && !result.ContainsKey(original))
+                if (!normalizedToOriginal.TryGetValue(entry.SeriesNameNormalized, out var original)
+                    || result.ContainsKey(original))
                 {
-                    result[original] = total;
+                    continue;
+                }
+
+                // WORKS, not raw entries: the catalog lists every recording of
+                // every book (narrations, dramatizations, re-releases) — the
+                // user thinks in books, and gap math must too.
+                var workKeys = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var book in books)
+                {
+                    var key = SeriesWorkKey.Build(book.Title, book.Authors, book.SeriesNumber);
+                    if (key.Length > 0)
+                    {
+                        workKeys.Add(key);
+                    }
+                }
+
+                var runs = RecordingEditionClassifier.GroupIntoRuns(
+                    books,
+                    b => RecordingEditionClassifier.Classify(b.Title, b.Subtitle, b.Narrators, b.Publisher, b.PublishedDate));
+
+                if (workKeys.Count > 0)
+                {
+                    result[original] = new SeriesCatalogSummary(workKeys.Count, runs.Count);
                 }
             }
 
             return result;
+        }
+
+        public async Task<List<CachedSeriesCatalogBook>> GetSeriesCatalogEntriesAsync(
+            string seriesName,
+            string region,
+            CancellationToken ct = default)
+        {
+            var normalized = NormalizeSeriesName(seriesName);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return new List<CachedSeriesCatalogBook>();
+            }
+
+            var normalizedRegion = AudiobookIdentifierNormalizer.NormalizeRegion(region) ?? "us";
+            var entry = await _db.SeriesCacheEntries
+                .AsNoTracking()
+                .Where(e => e.Region == normalizedRegion && e.SeriesNameNormalized == normalized)
+                .OrderByDescending(e => e.LastFetchedAt ?? e.UpdatedAt)
+                .FirstOrDefaultAsync(ct);
+
+            return entry?.CatalogBooks ?? new List<CachedSeriesCatalogBook>();
         }
     }
 }

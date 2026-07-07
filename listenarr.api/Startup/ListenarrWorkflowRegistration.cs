@@ -92,6 +92,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryTransferFilesWorkflow>();
         services.AddScoped<LibraryFileDeleteWorkflow>();
         services.AddScoped<LibrarySplitPreviewWorkflow>();
+        services.AddScoped<LibrarySeriesEditionsWorkflow>();
         services.AddScoped<LibraryDashboardStatsWorkflow>();
         services.AddScoped<LibraryMaintenanceWorkflow>();
         services.AddScoped<LibrarySeriesBackfillWorkflow>();
