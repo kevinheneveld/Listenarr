@@ -88,11 +88,32 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         /// made a still-running mega-job report zero until it finished.
         /// </summary>
         Task<int> CountVerifiedSinceAsync(DateTime sinceUtc, CancellationToken ct = default);
+
+        /// <summary>
+        /// Best-effort creation of the partial unique index on Audiobooks.Asin
+        /// (cross-process duplicate backstop). Skips — without failing — when
+        /// the provider is non-relational or duplicate ASINs already exist.
+        /// </summary>
+        Task<AsinIndexEnsureResult> EnsureAsinUniqueIndexAsync(CancellationToken ct = default);
         Task<bool> DeleteAsync(Audiobook audiobook);
         Task<bool> DeleteByIdAsync(int id);
         Task<int> DeleteBulkAsync(List<int> ids);
         Task SaveChangesAsync(CancellationToken ct = default);
         Task<bool> UpdateWithIdentifierReplaceAsync(Audiobook audiobook, List<AudiobookExternalIdentifier> newIdentifiers, CancellationToken ct = default);
+    }
+
+    public enum AsinIndexOutcome
+    {
+        Ensured,
+        SkippedDuplicatesExist,
+        SkippedNonRelational,
+    }
+
+    /// <summary>Outcome of the startup unique-ASIN index ensure step.</summary>
+    public sealed class AsinIndexEnsureResult
+    {
+        public AsinIndexOutcome Outcome { get; set; }
+        public int DuplicateAsinGroups { get; set; }
     }
 
     /// <summary>Row counts from a duplicate-record merge.</summary>

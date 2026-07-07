@@ -209,6 +209,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryPreviewPathWorkflow>();
             services.AddSingleton<LibraryQueryWorkflow>();
             services.AddSingleton<LibraryRenameWorkflow>();
+            services.AddSingleton<DashboardAggregateCache>();
             services.AddSingleton<LibraryTransferFilesWorkflow>();
             services.AddSingleton<LibraryFileDeleteWorkflow>();
             services.AddSingleton<LibrarySplitPreviewWorkflow>();

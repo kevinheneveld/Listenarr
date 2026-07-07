@@ -328,7 +328,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                     {
                         var before = searchResults.Count;
                         searchResults = searchResults
-                            .Where(r => !BlockedReleaseMatcher.IsBlocked(r.Title, blocked))
+                            .Where(r => !BlockedReleaseMatcher.IsBlocked(r.Title, r.MagnetLink, blocked))
                             .ToList();
                         if (searchResults.Count < before)
                         {

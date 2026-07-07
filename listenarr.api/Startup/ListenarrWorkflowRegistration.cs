@@ -89,6 +89,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryPreviewPathWorkflow>();
         services.AddScoped<LibraryQueryWorkflow>();
         services.AddScoped<LibraryRenameWorkflow>();
+        services.AddSingleton<DashboardAggregateCache>();
         services.AddScoped<LibraryTransferFilesWorkflow>();
         services.AddScoped<LibraryFileDeleteWorkflow>();
         services.AddScoped<LibrarySplitPreviewWorkflow>();

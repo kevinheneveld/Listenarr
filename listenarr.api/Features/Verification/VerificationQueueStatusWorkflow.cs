@@ -34,6 +34,7 @@ namespace Listenarr.Api.Features.Verification
         private readonly IVerificationJobRepository _jobRepository;
         private readonly IAudiobookRepository _audiobookRepository;
         private readonly IApplicationSettingsRepository _settingsRepository;
+        private readonly DashboardAggregateCache _aggregateCache;
         private readonly ILogger<VerificationQueueStatusWorkflow> _logger;
 
         public VerificationQueueStatusWorkflow(
@@ -41,12 +42,14 @@ namespace Listenarr.Api.Features.Verification
             IVerificationJobRepository jobRepository,
             IAudiobookRepository audiobookRepository,
             IApplicationSettingsRepository settingsRepository,
+            DashboardAggregateCache aggregateCache,
             ILogger<VerificationQueueStatusWorkflow> logger)
         {
             _queue = queue;
             _jobRepository = jobRepository;
             _audiobookRepository = audiobookRepository;
             _settingsRepository = settingsRepository;
+            _aggregateCache = aggregateCache;
             _logger = logger;
         }
 
@@ -83,7 +86,11 @@ namespace Listenarr.Api.Features.Verification
             var completedBooksToday = await _audiobookRepository.CountVerifiedSinceAsync(DateTime.UtcNow.Date, ct);
 
             // --- Series-catalog backfill progress ---
-            var (cachedSeries, totalMultiBookSeries) = await ComputeSeriesBackfillProgressAsync(ct);
+            // Cached ~5 min: this endpoint is polled every 30s and the progress
+            // computation loads the full library — the queue numbers above stay
+            // live, only this slow-moving progress figure is memoized.
+            var (cachedSeries, totalMultiBookSeries) = await _aggregateCache.GetOrCreateAsync(
+                "queue-status:series-backfill", () => ComputeSeriesBackfillProgressAsync(ct));
 
             return new OkObjectResult(new
             {

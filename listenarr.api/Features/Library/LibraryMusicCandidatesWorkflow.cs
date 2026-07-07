@@ -17,7 +17,6 @@
  */
 
 using System.Text.Json;
-using Listenarr.Application.Audiobooks.Verification;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Listenarr.Api.Features.Library
@@ -48,6 +47,13 @@ namespace Listenarr.Api.Features.Library
 
         public async Task<IActionResult> GetCandidatesAsync(CancellationToken ct)
         {
+            // Deliberately NOT cached: this runs behind an explicit "Scan"
+            // click, and a re-scan must reflect sweeps/verdicts since the last one.
+            return new OkObjectResult(await ComputeCandidatesPayloadAsync(ct));
+        }
+
+        private async Task<object> ComputeCandidatesPayloadAsync(CancellationToken ct)
+        {
             var books = await _repo.GetAllAsync();
             var eligible = books
                 .Where(b => b.VerificationStatus is VerificationStatus.AgentFlagged or VerificationStatus.AgentUnverifiable)
@@ -55,7 +61,7 @@ namespace Listenarr.Api.Features.Library
 
             if (eligible.Count == 0)
             {
-                return new OkObjectResult(new { candidates = Array.Empty<object>() });
+                return new { candidates = Array.Empty<object>() };
             }
 
             var files = await _audioFileRepository.GetAllAsync(ct);
@@ -105,10 +111,10 @@ namespace Listenarr.Api.Features.Library
                 "Music-candidate sweep: {Eligible} flagged/unverifiable books scanned, {Candidates} candidate(s) at threshold {Threshold}",
                 eligible.Count, scored.Count, MusicSmellDetector.CandidateThreshold);
 
-            return new OkObjectResult(new
+            return new
             {
                 candidates = scored.OrderByDescending(c => c.Score).Select(c => c.Row).ToList()
-            });
+            };
         }
 
         /// <summary>

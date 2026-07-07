@@ -31,11 +31,13 @@ namespace Listenarr.Api.Features.Library
     {
         private readonly IAudiobookRepository _repo;
         private readonly IAudiobookFileRepository _fileRepository;
+        private readonly DashboardAggregateCache _aggregateCache;
 
-        public LibraryDashboardStatsWorkflow(IAudiobookRepository repo, IAudiobookFileRepository fileRepository)
+        public LibraryDashboardStatsWorkflow(IAudiobookRepository repo, IAudiobookFileRepository fileRepository, DashboardAggregateCache aggregateCache)
         {
             _repo = repo;
             _fileRepository = fileRepository;
+            _aggregateCache = aggregateCache;
         }
 
         // Bitrate is stored in bits/sec; buckets are expressed in kbps.
@@ -51,6 +53,13 @@ namespace Listenarr.Api.Features.Library
         };
 
         public async Task<IActionResult> GetStatsAsync(CancellationToken ct)
+        {
+            // Full-library aggregate; memoized ~5 min (see DashboardAggregateCache).
+            var payload = await _aggregateCache.GetOrCreateAsync<object>("dashboard-stats", () => ComputeStatsPayloadAsync(ct));
+            return new OkObjectResult(payload);
+        }
+
+        private async Task<object> ComputeStatsPayloadAsync(CancellationToken ct)
         {
             var files = await _fileRepository.GetFormatSummariesAsync(ct);
             var byCodec = files
@@ -73,7 +82,7 @@ namespace Listenarr.Api.Features.Library
                 missingSeriesPosition = books.Count(b => LibraryMetadataGaps.MissesField(b, MissingField.SeriesPosition)),
             };
 
-            return new OkObjectResult(new { quality = new { byCodec, byBitrate }, completeness });
+            return new { quality = new { byCodec, byBitrate }, completeness };
         }
 
         public async Task<IActionResult> GetMissingIdsAsync(string field, CancellationToken ct)
@@ -83,8 +92,11 @@ namespace Listenarr.Api.Features.Library
                 return new BadRequestObjectResult(new { message = $"Unknown field '{field}'" });
             }
 
-            var books = await _repo.GetAllAsync();
-            var ids = books.Where(b => LibraryMetadataGaps.MissesField(b, parsed)).Select(b => b.Id).ToList();
+            var ids = await _aggregateCache.GetOrCreateAsync($"dashboard-missing:{parsed}", async () =>
+            {
+                var books = await _repo.GetAllAsync();
+                return books.Where(b => LibraryMetadataGaps.MissesField(b, parsed)).Select(b => b.Id).ToList();
+            });
             return new OkObjectResult(new { field = parsed.ToString(), ids });
         }
     }

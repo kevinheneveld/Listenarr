@@ -44,6 +44,26 @@ namespace Listenarr.Infrastructure.Persistence
                 using var scope = _provider.CreateScope();
                 var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
                 await audiobookRepository.NormalizeJsonColumnsAsync(cancellationToken);
+
+                // Cross-process duplicate backstop (upstream issue #6). Not an EF
+                // migration: CREATE UNIQUE INDEX hard-fails on databases that
+                // already hold duplicate ASINs, and a failed migration blocks all
+                // later migrations. This step is idempotent and self-heals on the
+                // boot after the user merges duplicates.
+                var indexResult = await audiobookRepository.EnsureAsinUniqueIndexAsync(cancellationToken);
+                switch (indexResult.Outcome)
+                {
+                    case AsinIndexOutcome.Ensured:
+                        _logger.LogInformation("StartupDbNormalizer: unique-ASIN index ensured.");
+                        break;
+                    case AsinIndexOutcome.SkippedDuplicatesExist:
+                        _logger.LogWarning(
+                            "StartupDbNormalizer: unique-ASIN index NOT created — {Groups} duplicate ASIN group(s) exist. "
+                            + "Merge them (Settings → General → Duplicates) and the index will be created on the next start.",
+                            indexResult.DuplicateAsinGroups);
+                        break;
+                }
+
                 _logger.LogInformation("StartupDbNormalizer: normalization pass complete.");
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

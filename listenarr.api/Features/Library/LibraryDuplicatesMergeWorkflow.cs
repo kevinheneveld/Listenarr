@@ -34,15 +34,18 @@ namespace Listenarr.Api.Features.Library
     {
         private readonly IAudiobookRepository _repo;
         private readonly IAudiobookFilesystemDeleteService _filesystemDeleteService;
+        private readonly DashboardAggregateCache _aggregateCache;
         private readonly ILogger<LibraryDuplicatesMergeWorkflow> _logger;
 
         public LibraryDuplicatesMergeWorkflow(
             IAudiobookRepository repo,
             IAudiobookFilesystemDeleteService filesystemDeleteService,
+            DashboardAggregateCache aggregateCache,
             ILogger<LibraryDuplicatesMergeWorkflow> logger)
         {
             _repo = repo;
             _filesystemDeleteService = filesystemDeleteService;
+            _aggregateCache = aggregateCache;
             _logger = logger;
         }
 
@@ -196,6 +199,7 @@ namespace Listenarr.Api.Features.Library
                 result.DiskFilesDeleted, result.DiskFoldersDeleted,
                 result.DownloadsReassigned, result.HistoryReassigned, result.MoveJobsReassigned);
 
+            _aggregateCache.InvalidateAll(); // post-merge duplicate re-scan must not see merged rows
             return new OkObjectResult(result);
         }
     }

@@ -17,6 +17,7 @@
  */
 using System.Security.Cryptography;
 using System.Text;
+using Listenarr.Application.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Audiobooks.Catalog
@@ -183,7 +184,30 @@ namespace Listenarr.Application.Audiobooks.Catalog
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            await _repo.AddAsync(audiobook);
+            try
+            {
+                await _repo.AddAsync(audiobook);
+            }
+            catch (UniqueConstraintViolationException) when (!string.IsNullOrWhiteSpace(audiobook.Asin))
+            {
+                // The DB-level unique-ASIN backstop fired: another writer (a
+                // different process, or a BypassDuplicateCheck path) inserted
+                // this ASIN between our dedup check and the insert. Losing the
+                // race is not an error — return the winner like the dedup path.
+                var winner = await _repo.GetByAsinAsync(audiobook.Asin!);
+                if (winner != null)
+                {
+                    _logger.LogInformation(
+                        "Add race lost for ASIN {Asin}; returning existing record {Id}", audiobook.Asin, winner.Id);
+                    return new LibraryAddOperationResult
+                    {
+                        AlreadyExists = true,
+                        Message = "Audiobook already exists in library",
+                        Audiobook = winner
+                    };
+                }
+                throw;
+            }
 
             await ResolveAuthorAsinsAsync(audiobook);
             await SendAddedNotificationAsync(audiobook);

@@ -49,6 +49,13 @@ namespace Listenarr.Api.Features.Library
 
         public async Task<IActionResult> GetDuplicatesAsync(CancellationToken ct)
         {
+            // Deliberately NOT cached: this runs behind an explicit "Scan"
+            // click, and a re-scan must reflect books added since the last one.
+            return new OkObjectResult(await ComputeDuplicatesPayloadAsync(ct));
+        }
+
+        private async Task<object> ComputeDuplicatesPayloadAsync(CancellationToken ct)
+        {
             var books = await _repo.GetAllAsync();
             var files = await _audioFileRepository.GetAllAsync(ct);
             var filesByBook = files
@@ -200,7 +207,7 @@ namespace Listenarr.Api.Features.Library
                 "Duplicate sweep: {Groups} duplicate-record group(s), {Copies} record(s) with duplicate copies across {Books} books",
                 duplicateGroups.Count, duplicateCopyBooks.Count, books.Count);
 
-            return new OkObjectResult(new { duplicateGroups, duplicateCopyBooks });
+            return new { duplicateGroups, duplicateCopyBooks };
         }
     }
 }

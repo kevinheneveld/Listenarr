@@ -33,14 +33,17 @@ namespace Listenarr.Api.Features.Library
         public const int ManualRunMaxFetches = 100;
 
         private readonly ISeriesCatalogBackfillProcessor? _processor;
+        private readonly DashboardAggregateCache _aggregateCache;
         private readonly ILogger<LibrarySeriesBackfillWorkflow> _logger;
 
         public LibrarySeriesBackfillWorkflow(
+            DashboardAggregateCache aggregateCache,
             ILogger<LibrarySeriesBackfillWorkflow> logger,
             ISeriesCatalogBackfillProcessor? processor = null)
         {
             _logger = logger;
             _processor = processor;
+            _aggregateCache = aggregateCache;
         }
 
         public async Task<IActionResult> RunAsync(CancellationToken ct)
@@ -56,6 +59,7 @@ namespace Listenarr.Api.Features.Library
             _logger.LogInformation("Manual series-catalog backfill requested (cap {Cap})", ManualRunMaxFetches);
             var result = await _processor.RunOnceAsync(ManualRunMaxFetches, ct);
 
+            _aggregateCache.InvalidateAll(); // fresh series-progress/health on the UI's immediate refetch
             return new OkObjectResult(new
             {
                 message = $"Backfill pass complete: fetched {result.Fetched} series catalog(s), {result.AlreadyCached} already cached, {result.Remaining} remaining",

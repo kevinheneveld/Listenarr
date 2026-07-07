@@ -16,7 +16,6 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-using Listenarr.Application.Audiobooks.Files;
 using Listenarr.Application.Search;
 using Listenarr.Application.Search.Contracts;
 using Listenarr.Domain.Search;
@@ -40,6 +39,7 @@ namespace Listenarr.Api.Features.Library
         private readonly IHistoryRepository _historyRepository;
         private readonly IBlockedReleaseRepository _blockedReleaseRepository;
         private readonly IDownloadRepository _downloadRepository;
+        private readonly DashboardAggregateCache _aggregateCache;
         private readonly IAutomaticSearchInvoker? _searchInvoker;
         private readonly ILogger<LibraryNotAudiobookWorkflow> _logger;
 
@@ -50,6 +50,7 @@ namespace Listenarr.Api.Features.Library
             IHistoryRepository historyRepository,
             IBlockedReleaseRepository blockedReleaseRepository,
             IDownloadRepository downloadRepository,
+            DashboardAggregateCache aggregateCache,
             ILogger<LibraryNotAudiobookWorkflow> logger,
             IAutomaticSearchInvoker? searchInvoker = null)
         {
@@ -59,6 +60,7 @@ namespace Listenarr.Api.Features.Library
             _historyRepository = historyRepository;
             _blockedReleaseRepository = blockedReleaseRepository;
             _downloadRepository = downloadRepository;
+            _aggregateCache = aggregateCache;
             _searchInvoker = searchInvoker;
             _logger = logger;
         }
@@ -186,6 +188,7 @@ namespace Listenarr.Api.Features.Library
                         TaskContinuationOptions.OnlyOnFaulted);
                 }
 
+                _aggregateCache.InvalidateAll(); // swept books must vanish from cached music-candidates/stats
                 return new OkObjectResult(new
                 {
                     message = "Removed the rejected content and started a background search",

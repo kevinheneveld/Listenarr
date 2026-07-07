@@ -35,6 +35,7 @@ namespace Listenarr.Api.Features.Library
         private readonly IAudiobookFileRepository _fileRepository;
         private readonly IMonitoredSeriesRepository _monitoredSeriesRepository;
         private readonly IApplicationSettingsRepository _settingsRepository;
+        private readonly DashboardAggregateCache _aggregateCache;
         private readonly ILogger<LibrarySeriesHealthWorkflow> _logger;
 
         public LibrarySeriesHealthWorkflow(
@@ -42,12 +43,14 @@ namespace Listenarr.Api.Features.Library
             IAudiobookFileRepository fileRepository,
             IMonitoredSeriesRepository monitoredSeriesRepository,
             IApplicationSettingsRepository settingsRepository,
+            DashboardAggregateCache aggregateCache,
             ILogger<LibrarySeriesHealthWorkflow> logger)
         {
             _repo = repo;
             _fileRepository = fileRepository;
             _monitoredSeriesRepository = monitoredSeriesRepository;
             _settingsRepository = settingsRepository;
+            _aggregateCache = aggregateCache;
             _logger = logger;
         }
 
@@ -60,6 +63,13 @@ namespace Listenarr.Api.Features.Library
         }
 
         public async Task<IActionResult> HealthAsync(CancellationToken ct)
+        {
+            // Full-library aggregate; memoized ~5 min (see DashboardAggregateCache).
+            var payload = await _aggregateCache.GetOrCreateAsync<object>("series-health", () => ComputeHealthPayloadAsync(ct));
+            return new OkObjectResult(payload);
+        }
+
+        private async Task<object> ComputeHealthPayloadAsync(CancellationToken ct)
         {
             var settings = await _settingsRepository.GetAsync(ct);
             var region = string.IsNullOrWhiteSpace(settings?.DefaultSearchRegion)
@@ -165,7 +175,7 @@ namespace Listenarr.Api.Features.Library
                 "Series health: {Series} series, {WithCatalog} with cached catalog totals",
                 rows.Count, rows.Count(r => r.catalogTotal.HasValue));
 
-            return new OkObjectResult(new { region, rows });
+            return new { region, rows };
         }
     }
 }
