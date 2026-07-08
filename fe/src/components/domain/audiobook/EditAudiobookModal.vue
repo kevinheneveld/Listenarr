@@ -789,7 +789,8 @@
 
   <MetadataBackfillModal
     :visible="showMetadataBackfill"
-    :audiobook="baselineAudiobook"
+    :audiobook="backfillAudiobook"
+    :region="backfillAsinRegion"
     @close="showMetadataBackfill = false"
     @applied="onMetadataBackfillApplied"
   />
@@ -966,6 +967,30 @@ const isHydratingForm = ref(false)
 const hasLocalEdits = ref(false)
 const resolvedAudiobook = ref<Audiobook | null>(null)
 const baselineAudiobook = computed(() => resolvedAudiobook.value ?? props.audiobook)
+
+// The "Fill missing from online…" button reads baselineAudiobook.asin, but
+// that's a snapshot from before this modal opened. If the user has just
+// added/edited an ASIN identifier in the External Identifiers list above
+// and not yet saved (saving closes this modal, so there's no way to save
+// first without losing the in-progress backfill flow), baselineAudiobook
+// still has the old ASIN. Overlay the current in-progress identifier edit
+// so the backfill modal sees what's actually on screen.
+const currentPrimaryAsinIdentifier = computed(() => {
+  const rows = formData.value.identifiers.filter(
+    (row) => row.type === 'Asin' && row.value.trim().length > 0,
+  )
+  if (rows.length === 0) return null
+  return rows.find((row) => row.isPrimary) ?? rows[0]
+})
+const backfillAudiobook = computed(() => {
+  const base = baselineAudiobook.value
+  const asinRow = currentPrimaryAsinIdentifier.value
+  if (!base || !asinRow) return base
+  return { ...base, asin: asinRow.value.trim() }
+})
+const backfillAsinRegion = computed(
+  () => currentPrimaryAsinIdentifier.value?.region?.trim() || undefined,
+)
 
 // Minimal custom path behaviour: extra helpers removed to keep UI streamlined
 
