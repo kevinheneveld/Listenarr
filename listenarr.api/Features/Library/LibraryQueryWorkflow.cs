@@ -8,6 +8,7 @@
  * (at your option) any later version.
  */
 using Microsoft.AspNetCore.Mvc;
+using Listenarr.Domain.Common;
 
 namespace Listenarr.Api.Features.Library;
 
@@ -104,7 +105,7 @@ public sealed class LibraryQueryWorkflow(
         verificationMethod = audiobook.VerificationMethod,
         verificationTranscript = audiobook.VerificationTranscript,
         verificationDetailJson = audiobook.VerificationDetailJson,
-        files = audiobook.Files?.Select(file => new
+        files = AudiobookFileOrdering.InNaturalOrder(audiobook.Files).Select(file => new
         {
             id = file.Id,
             path = file.Path,
