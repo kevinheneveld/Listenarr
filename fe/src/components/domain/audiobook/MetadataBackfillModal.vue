@@ -136,6 +136,13 @@ type Phase = 'idle' | 'searching' | 'pick-candidate' | 'fetching' | 'review' | '
 
 const phase = ref<Phase>('idle')
 const errorMessage = ref<string | null>(null)
+// Bumped whenever the user starts a new search or jumps straight to a
+// candidate/pasted ASIN. An in-flight searchCandidates() loop checks this
+// after every await and quietly stops touching shared state once it's stale
+// — otherwise editing the title/author and re-searching while a slow
+// (often garbage-in, empty-result) region walk was still running had no way
+// to take effect until that walk finished on its own.
+let searchGeneration = 0
 // Informational notice surfaced when an ASIN lookup returned no usable
 // metadata (404, empty payload, or transient error) and we automatically
 // fell back to a title/author search. Distinct from errorMessage so the
@@ -423,6 +430,7 @@ async function searchCandidates() {
     return
   }
 
+  const myGeneration = ++searchGeneration
   phase.value = 'searching'
   errorMessage.value = null
 
@@ -439,8 +447,13 @@ async function searchCandidates() {
 
   let firstError: string | null = null
   for (const region of regionsToTry) {
+    // Superseded by a newer search (or a direct candidate/paste-ASIN pick)
+    // started while we were awaiting a previous region — stop touching
+    // shared state and let the newer call own it.
+    if (myGeneration !== searchGeneration) return
     try {
       const response = await apiService.searchAudibleByTitleAndAuthor(title, author, 1, 25, region)
+      if (myGeneration !== searchGeneration) return
       const results = response?.results || []
       if (results.length > 0) {
         // Tag each result with the region it actually came from. The
@@ -453,6 +466,7 @@ async function searchCandidates() {
         return
       }
     } catch (err) {
+      if (myGeneration !== searchGeneration) return
       logger.warn(
         `MetadataBackfillModal: candidate search failed in ${region}; continuing fallback chain`,
         err,
@@ -464,6 +478,8 @@ async function searchCandidates() {
       // shouldn't kill the whole search.
     }
   }
+
+  if (myGeneration !== searchGeneration) return
 
   // Every region tried returned empty (or threw).
   candidates.value = []
@@ -481,6 +497,9 @@ async function searchCandidates() {
 
 function pickCandidate(asin: string | undefined | null) {
   if (!asin) return
+  // Invalidate any still-running searchCandidates() loop so it can't
+  // clobber the phase transition below once its current await resolves.
+  searchGeneration++
   chosenAsin.value = asin
   errorMessage.value = null
   // Route the per-ASIN lookup to the candidate's own region so a UK
@@ -970,7 +989,6 @@ function candidateYear(c: AudibleSearchResult): string {
                   v-model="overrideTitle"
                   type="text"
                   class="form-input"
-                  :disabled="phase === 'searching'"
                   placeholder="Book title"
                 />
               </label>
@@ -980,7 +998,6 @@ function candidateYear(c: AudibleSearchResult): string {
                   v-model="overrideAuthor"
                   type="text"
                   class="form-input"
-                  :disabled="phase === 'searching'"
                   placeholder="Author name (optional)"
                 />
               </label>
@@ -989,7 +1006,6 @@ function candidateYear(c: AudibleSearchResult): string {
                 <select
                   v-model="searchRegion"
                   class="form-input candidate-region-select"
-                  :disabled="phase === 'searching'"
                   title="Audible runs separate regional stores; UK in particular carries titles US doesn't. Auto tries US first then walks UK/CA/AU until something matches."
                 >
                   <option v-for="opt in REGION_OPTIONS" :key="opt.code" :value="opt.code">
@@ -1000,7 +1016,7 @@ function candidateYear(c: AudibleSearchResult): string {
               <button
                 type="submit"
                 class="btn btn-secondary search-again-btn"
-                :disabled="phase === 'searching' || !overrideTitle.trim()"
+                :disabled="!overrideTitle.trim()"
               >
                 <PhMagnifyingGlass />
                 Search again
@@ -1022,14 +1038,13 @@ function candidateYear(c: AudibleSearchResult): string {
                   v-model="pasteAsinInput"
                   type="text"
                   class="form-input"
-                  :disabled="phase === 'searching'"
                   placeholder="B0CSV7NJMB or https://www.audible.com/pd/.../B0CSV7NJMB"
                 />
               </label>
               <button
                 type="submit"
                 class="btn btn-secondary paste-asin-btn"
-                :disabled="phase === 'searching' || !parsedPasteAsin"
+                :disabled="!parsedPasteAsin"
                 :title="
                   parsedPasteAsin
                     ? `Load metadata for ${parsedPasteAsin}`

@@ -74,6 +74,36 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Extract_UnabridgedRecordingOf_NoLeadInComma()
+        {
+            // Live false-flag: a mislabeled "Dark Lover" book. The lead-in has no
+            // comma at all ("presents an unabridged recording of <Title>"), so it
+            // used to survive untouched into the "title" — and "J.R. Ward"'s
+            // back-to-back initials truncated the author to just "J.R".
+            var credits = SpokenCreditsExtractor.Extract(
+                "Recording Books Romance presents an unabridged recording of Dark Lover by J.R. Ward, " +
+                "narrated by Jim Frangione, and directed by Danny Snelson. This book is copyrighted 2005 " +
+                "by Jessica Bird. This recording is copyrighted 2009 by Recorded Books, producer and " +
+                "publisher of Romantic Sounds.");
+
+            Assert.NotNull(credits);
+            Assert.Equal("Dark Lover", credits!.Title);
+            Assert.Equal("J.R. Ward", credits.Author);
+            Assert.Equal("Jim Frangione", credits.Narrator);
+        }
+
+        [Fact]
+        public void Extract_ChainedInitialsAuthor_NotTruncated()
+        {
+            // Three chained initials — a harder case than "J.R." alone.
+            var credits = SpokenCreditsExtractor.Extract(
+                "Random House Audio presents A Storm of Swords by George R. R. Martin, narrated by Roy Dotrice.");
+
+            Assert.NotNull(credits);
+            Assert.Equal("George R. R. Martin", credits!.Author);
+        }
+
+        [Fact]
         public void Extract_WrittenByReadByStyle()
         {
             // 3 Days to Live anthology opening (live).

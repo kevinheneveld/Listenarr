@@ -40,16 +40,20 @@ namespace Listenarr.Application.Audiobooks.Verification
         // "narrated by X", "read by X", "performed by X" — narrator span ends at
         // sentence punctuation or a follow-on production credit ("and directed by").
         // A period preceded by a lone capital is a middle initial ("Sarah J. Mass"),
-        // not a sentence end — the (?<!\s[A-Z]) lookbehind keeps consuming through it.
+        // not a sentence end — the (?<![\s.][A-Z]) lookbehind keeps consuming
+        // through it. The lookbehind accepts either whitespace OR a period before
+        // the capital so a back-to-back initials run ("J.R. Ward") doesn't stop
+        // at the first period: at the second period the preceding two chars are
+        // ".R", which still reads as "still inside an initials run".
         private static readonly Regex NarratorRegex = new(
-            @"\b(?:narrated|read|performed)\s+by\s+(?<name>[^;:!?]+?)(?=\s+and\s+(?:directed|produced|engineered|adapted|edited)\b|\s*[;:!?]|(?<!\s[A-Z])\s*\.(?:\s|$)|$)",
+            @"\b(?:narrated|read|performed)\s+by\s+(?<name>[^;:!?]+?)(?=\s+and\s+(?:directed|produced|engineered|adapted|edited)\b|\s*[;:!?]|(?<![\s.][A-Z])\s*\.(?:\s|$)|$)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         // Author candidate: a "by X" clause. Which "by" is the author's is decided
         // in ExtractAuthor (must not be a narrator/production/copyright "by").
         // Same middle-initial handling as the narrator span.
         private static readonly Regex ByClauseRegex = new(
-            @"\b(?:written\s+by|by)\s+(?<name>[^,;:!?]+?)(?=\s*[,;:!?]|\s+(?:narrated|read|performed)\b|(?<!\s[A-Z])\s*\.(?:\s|$)|$)",
+            @"\b(?:written\s+by|by)\s+(?<name>[^,;:!?]+?)(?=\s*[,;:!?]|\s+(?:narrated|read|performed)\b|(?<![\s.][A-Z])\s*\.(?:\s|$)|$)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         // Words that, appearing just before a "by", mark it as NOT the author's.
@@ -70,10 +74,21 @@ namespace Listenarr.Application.Audiobooks.Verification
             @"recording\s+is\s+copyright(?:ed)?\s+[^.;]*?\bby\s+(?<name>[^.;:!?]+?)(?=\s*[.;:!?]|$)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        // Lead-in fillers preceding the title inside a "presents" clause, e.g.
-        // "presents a sci-fi audio production, <Title>" / "and now, <Title>".
+        // Lead-in fillers preceding the title inside a "presents" clause. Two
+        // distinct shapes, each needing its own trailing boundary since neither
+        // works as the other's:
+        //   - comma-delimited appositive: "a sci-fi audio production, <Title>"
+        //     — a mandatory trailing comma bounds the greedy scan, so it can
+        //     span multiple lead-in words ("sci-fi audio production").
+        //   - prepositional "X of Y": "an unabridged recording of <Title>" — no
+        //     comma anywhere, so the boundary is the literal "of" right after
+        //     the credit word instead (a comma requirement here would let the
+        //     whole phrase survive untouched into the title, which is the bug
+        //     this shape used to trigger).
         private static readonly Regex TitleLeadInRegex = new(
-            @"^(?:(?:a|an|the)\b[^,]*\b(?:production|presentation|recording|audio|edition)\b[^,]*|and\s+now)\s*,\s*",
+            @"^(?:(?:a|an|the)\b[^,]*\b(?:production|presentation|recording|audio(?:book)?|edition)\b[^,]*\s*,\s*" +
+            @"|(?:a|an|the)\b[^,]*\b(?:production|presentation|recording|audio(?:book)?|edition)\b\s+of\s+" +
+            @"|and\s+now\s*,\s*)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         // Announcement-shaped phrases: the audio is talking ABOUT a recording
