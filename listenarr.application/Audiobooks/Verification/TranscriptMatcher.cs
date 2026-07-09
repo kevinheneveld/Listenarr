@@ -88,7 +88,19 @@ namespace Listenarr.Application.Audiobooks.Verification
         public static IReadOnlyList<string> Tokenize(string? text)
         {
             if (string.IsNullOrWhiteSpace(text)) return Array.Empty<string>();
-            return TokenPattern.Matches(text.ToLowerInvariant())
+
+            // "&" almost always stands in for a spoken "and" in titles/names
+            // ("Judge & Jury", "Sonny & Cher"). TokenPattern's character class
+            // has no symbol match, so left alone "&" silently vanishes instead
+            // of becoming a token — a title stored with an ampersand then
+            // tokenizes one token shorter than the transcript's spoken "and",
+            // and BestWindow's fixed-width alignment can only match one of the
+            // two real words, capping the score at ~50% (live false-flag:
+            // "Judge & Jury" scored 50%, heard "judge and"). Expanding here
+            // keeps both sides in agreement, same as CanonicalizeNumeralToken
+            // does for numerals.
+            var expanded = text.Replace("&", " and ");
+            return TokenPattern.Matches(expanded.ToLowerInvariant())
                 .Select(m => m.Value.Trim('\''))
                 .Where(t => t.Length > 0)
                 .Select(CanonicalizeNumeralToken)

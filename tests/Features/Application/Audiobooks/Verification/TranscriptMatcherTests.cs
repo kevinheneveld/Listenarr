@@ -63,6 +63,29 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Tokenize_ExpandsAmpersandToAnd()
+        {
+            // Live false-flag: "Judge & Jury" scored 50% (heard "judge and")
+            // against a transcript that spoke "Judge and Jury" — the stored
+            // title tokenized one word shorter than the transcript because "&"
+            // was silently dropped instead of becoming a token.
+            Assert.Equal(TranscriptMatcher.Tokenize("Judge & Jury"), TranscriptMatcher.Tokenize("Judge and Jury"));
+        }
+
+        [Fact]
+        public void MatchTitle_AmpersandTitle_MatchesSpokenAnd()
+        {
+            var tokens = TranscriptMatcher.Tokenize(
+                "Ashet Audio presents, \"Judge and Jury,\" written by James Patterson and Andrew Gross, and read by Joe Mantegna.");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "Judge & Jury");
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.95, $"expected ~1.0, got {match.Score}");
+            Assert.Equal("judge and jury", match.MatchedText);
+        }
+
+        [Fact]
         public void MatchTitle_ExactSpokenTitle_ScoresHigh()
         {
             var tokens = TranscriptMatcher.Tokenize(HailMaryCredits);

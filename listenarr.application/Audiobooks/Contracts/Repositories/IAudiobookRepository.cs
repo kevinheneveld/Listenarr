@@ -90,6 +90,17 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<int> CountVerifiedSinceAsync(DateTime sinceUtc, CancellationToken ct = default);
 
         /// <summary>
+        /// Which of <paramref name="candidateIds"/> already carry a verification
+        /// verdict stamped at or after <paramref name="sinceUtc"/>. Used to prune
+        /// an explicit-id verification job's list on restart-rehydration: a book
+        /// already (re-)verified since the job's original EnqueuedAt was handled
+        /// by an earlier, interrupted run of that same job, so re-running it
+        /// again would silently discard work and make the job's remaining size
+        /// balloon back toward its full original count on every restart.
+        /// </summary>
+        Task<List<int>> GetIdsVerifiedSinceAsync(DateTime sinceUtc, IReadOnlyCollection<int> candidateIds, CancellationToken ct = default);
+
+        /// <summary>
         /// Best-effort creation of the partial unique index on Audiobooks.Asin
         /// (cross-process duplicate backstop). Skips — without failing — when
         /// the provider is non-relational or duplicate ASINs already exist.

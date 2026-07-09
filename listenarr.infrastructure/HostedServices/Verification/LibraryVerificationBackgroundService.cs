@@ -157,6 +157,7 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                 using var scope = _scopeFactory.CreateScope();
                 var persistence = scope.ServiceProvider.GetService<Listenarr.Application.Audiobooks.Verification.Contracts.IVerificationJobPersistence>();
                 if (persistence == null) return;
+                var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
 
                 var pending = await persistence.GetPendingAsync(ct);
                 foreach (var record in pending)
@@ -175,6 +176,36 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                         catch (System.Text.Json.JsonException)
                         {
                             _logger.LogWarning("Verification job {JobId} had unreadable ids; skipping rehydration", record.Id);
+                            continue;
+                        }
+                    }
+
+                    // An explicit-id job (e.g. "Verify Selected", or a whole-library
+                    // sweep started with a snapshotted id list rather than a null
+                    // scope) always re-verifies its ids regardless of current status
+                    // — that's the point for a small user-picked batch. But on a
+                    // *restart* rehydration, any of those ids already (re-)verified
+                    // since this job was originally enqueued must have been handled
+                    // by an earlier, interrupted run of this same job. Without this
+                    // prune, the new incarnation starts back at book #1 with its
+                    // progress counter reset to zero, re-transcribing already-done
+                    // books and making the job's apparent remaining size balloon
+                    // back toward its full original count on every restart, even
+                    // though the true remaining work has been shrinking normally.
+                    if (ids is { Count: > 0 })
+                    {
+                        var alreadyHandled = await audiobookRepository.GetIdsVerifiedSinceAsync(record.EnqueuedAt, ids, ct);
+                        if (alreadyHandled.Count > 0)
+                        {
+                            var alreadyHandledSet = new HashSet<int>(alreadyHandled);
+                            ids = ids.Where(id => !alreadyHandledSet.Contains(id)).ToList();
+                        }
+
+                        if (ids.Count == 0)
+                        {
+                            _logger.LogInformation(
+                                "Verification job {OldJobId} had nothing left to rehydrate — the interrupted run had already finished",
+                                record.Id);
                             continue;
                         }
                     }

@@ -29,5 +29,16 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .AsNoTracking()
                 .CountAsync(a => a.VerifiedAt != null && a.VerifiedAt >= sinceUtc, ct);
         }
+
+        public async Task<List<int>> GetIdsVerifiedSinceAsync(DateTime sinceUtc, IReadOnlyCollection<int> candidateIds, CancellationToken ct = default)
+        {
+            if (candidateIds.Count == 0) return new List<int>();
+
+            return await _db.Audiobooks
+                .AsNoTracking()
+                .Where(a => candidateIds.Contains(a.Id) && a.VerifiedAt != null && a.VerifiedAt >= sinceUtc)
+                .Select(a => a.Id)
+                .ToListAsync(ct);
+        }
     }
 }
