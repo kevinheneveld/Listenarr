@@ -249,6 +249,81 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.Equal(2, clusters.Count);
         }
 
+        [Fact]
+        public void Cluster_WrapperFolder_DescendsToTheRealBookFolders()
+        {
+            // Live case (book 359): the record's BasePath is the book folder,
+            // but a narrator folder sits between it and everything else — 370
+            // files spanning 14+ books all share the first path segment
+            // "Oliver Wyman" and collapsed into ONE cluster named after the
+            // narrator. The clusterer must descend through the wrapper and
+            // group on the real per-book folders beneath it, with the loose
+            // files directly in the wrapper stem-clustered as usual.
+            const string b = "/audiobooks/Arthur C. Clarke/A Fall of Moondust";
+            AudiobookFile W(int id, string rel) => new() { Id = id, Path = $"{b}/Oliver Wyman/{rel}" };
+
+            var clusters = FileClustering.Cluster(new[]
+            {
+                W(1, "The Sentinel/Ralph Lister/The Sentinel-01.mp3"),
+                W(2, "The Sentinel/Ralph Lister/The Sentinel-02.mp3"),
+                W(3, "The Songs of Distant Earth/Jonathan Davis/The Songs of Distant Earth-01.mp3"),
+                W(4, "The Songs of Distant Earth/Jonathan Davis/The Songs of Distant Earth-02.mp3"),
+                W(5, "The Last Theorem/Mark Bramhall/The Last Theorem-1.mp3"),
+                // Loose files directly in the wrapper: two rips of the record's own book.
+                W(6, "A Fall of Moondust (1).mp3"),
+                W(7, "A Fall of Moondust (2).mp3"),
+                W(8, "A Fall of Moondust-01.mp3"),
+                W(9, "A Fall of Moondust-02.mp3"),
+            }, b);
+
+            Assert.Contains(clusters, c => c.DisplayName == "The Sentinel" && c.Files.Count == 2);
+            Assert.Contains(clusters, c => c.DisplayName == "The Songs of Distant Earth" && c.Files.Count == 2);
+            Assert.Contains(clusters, c => c.DisplayName == "The Last Theorem" && c.Files.Count == 1);
+            // The two loose rips keep their two-copies split (marker style is identity).
+            Assert.Equal(2, clusters.Count(c => c.DisplayName == "A Fall of Moondust"));
+        }
+
+        [Fact]
+        public void Cluster_ChainedWrapperFolders_DescendsThroughEachLevel()
+        {
+            // Two nested wrappers before the books: Base/Collection/mp3/<book>/...
+            const string b = "/audiobooks/Author/Record";
+            AudiobookFile C(int id, string rel) => new() { Id = id, Path = $"{b}/Collection/mp3/{rel}" };
+
+            var clusters = FileClustering.Cluster(new[]
+            {
+                C(1, "Book One/Book One-01.mp3"),
+                C(2, "Book One/Book One-02.mp3"),
+                C(3, "Book Two/Book Two-01.mp3"),
+                C(4, "Book Two/Book Two-02.mp3"),
+            }, b);
+
+            Assert.Equal(2, clusters.Count);
+            Assert.Contains(clusters, c => c.DisplayName == "Book One" && c.Files.Count == 2);
+            Assert.Contains(clusters, c => c.DisplayName == "Book Two" && c.Files.Count == 2);
+        }
+
+        [Fact]
+        public void Cluster_SingleBookInOneFolder_DoesNotExplodeIntoSingletons()
+        {
+            // A genuine single book in a single subfolder whose per-track
+            // filenames share no stem: descending would fragment it into
+            // useless singletons, so the honest one-folder grouping must win.
+            const string b = "/audiobooks/Author/Record";
+            AudiobookFile S(int id, string rel) => new() { Id = id, Path = $"{b}/Disc Rip/{rel}" };
+
+            var clusters = FileClustering.Cluster(new[]
+            {
+                S(1, "01 Intro.mp3"),
+                S(2, "02 The Innocent Eye.mp3"),
+                S(3, "03 Chapter One.mp3"),
+            }, b);
+
+            Assert.Single(clusters);
+            Assert.Equal("Disc Rip", clusters[0].DisplayName);
+            Assert.Equal(3, clusters[0].Files.Count);
+        }
+
         [Theory]
         [InlineData("The Rolling Stones (10)", "The Rolling Stones")]
         [InlineData("Track [07]", "Track")]

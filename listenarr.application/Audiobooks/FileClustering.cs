@@ -58,9 +58,58 @@ namespace Listenarr.Application.Audiobooks
             string? basePath,
             IReadOnlyDictionary<int, string>? embeddedTitles = null)
         {
+            var fileList = files.Where(f => !string.IsNullOrWhiteSpace(f.Path)).ToList();
+            var clusters = ClusterOnce(fileList, basePath, embeddedTitles);
+
+            // Wrapper-folder descent: one dir cluster holding EVERY file means
+            // the first path level under basePath is a shared wrapper (a
+            // narrator/format folder between the record's folder and the real
+            // per-book folders — live case: 370 files spanning 14+ books all
+            // under a single "Oliver Wyman/" folder collapsed into one useless
+            // cluster named after the narrator). Descend into the wrapper and
+            // re-cluster from there. A deeper result is accepted only when it
+            // yields at least two multi-file clusters — a genuine single book
+            // whose per-track filenames share no stem ("01 Intro", "02 The
+            // Innocent Eye") explodes into singletons at the deeper level, and
+            // that noise must never replace the honest one-folder grouping.
+            var currentBase = basePath;
+            while (clusters.Count == 1
+                && clusters[0].Key.StartsWith("dir:", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(currentBase))
+            {
+                var nextBase = currentBase.TrimEnd('/', '\\') + "/" + clusters[0].DisplayName;
+                var deeper = ClusterOnce(fileList, nextBase, embeddedTitles);
+
+                if (deeper.Count(c => c.Files.Count >= 2) >= 2)
+                {
+                    return deeper;
+                }
+
+                // A single dir cluster again: a chain of nested wrappers —
+                // keep walking down. Anything else (flat singletons, one stem
+                // group) means the wrapper held one real book; stop and keep
+                // the folder-named cluster.
+                if (deeper.Count == 1 && deeper[0].Key.StartsWith("dir:", StringComparison.Ordinal))
+                {
+                    clusters = deeper;
+                    currentBase = nextBase;
+                    continue;
+                }
+
+                break;
+            }
+
+            return clusters;
+        }
+
+        private static List<FileCluster> ClusterOnce(
+            List<AudiobookFile> files,
+            string? basePath,
+            IReadOnlyDictionary<int, string>? embeddedTitles)
+        {
             var groups = new Dictionary<string, FileCluster>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var file in files.Where(f => !string.IsNullOrWhiteSpace(f.Path)))
+            foreach (var file in files)
             {
                 var relative = MakeRelative(file.Path!, basePath);
                 var slash = relative.IndexOf('/');
