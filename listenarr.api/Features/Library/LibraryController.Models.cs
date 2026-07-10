@@ -88,6 +88,28 @@ public partial class LibraryController
         public List<string> Warnings { get; set; } = [];
     }
 
+    /// <summary>
+    /// Resolve a metadata-apply ASIN conflict (PUT /library/{id} returning 409
+    /// asin_conflict): unlike duplicates/merge, the two rows don't need to
+    /// already share an ASIN — the conflict itself is the proof they're
+    /// duplicates. keepThisRecord picks which side survives; the loser's
+    /// files are deleted from disk (same semantics as duplicates/merge).
+    /// </summary>
+    public class ResolveAsinConflictRequest
+    {
+        public int ConflictingAudiobookId { get; set; }
+        public bool KeepThisRecord { get; set; }
+    }
+
+    public class ResolveAsinConflictResult
+    {
+        public int WinnerId { get; set; }
+        public int LoserId { get; set; }
+        public int DiskFilesDeleted { get; set; }
+        public bool DiskFolderDeleted { get; set; }
+        public List<string> Warnings { get; set; } = [];
+    }
+
     public class TransferFilesRequest
     {
         public int TargetAudiobookId { get; set; }

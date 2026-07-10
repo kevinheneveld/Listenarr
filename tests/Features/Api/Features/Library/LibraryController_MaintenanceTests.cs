@@ -125,6 +125,66 @@ namespace Listenarr.Tests.Features.Api.Features.Library
         }
 
         [Fact]
+        [Trait("Method", "ResolveAsinConflict")]
+        [Trait("Scenario", "KeepThisRecord_MergesConflictingIntoIt")]
+        public async Task ResolveAsinConflict_KeepThisRecord_MergesConflictingIntoIt()
+        {
+            var controller = _provider.GetRequiredService<LibraryController>();
+            // Unlike MergeDuplicates, the two rows do NOT share an ASIN here —
+            // that's the whole point: this endpoint exists because assigning
+            // recordId this ASIN collided with conflictingId, which already has it.
+            var record = await AddBookAsync("The Ring", null, "conflict-record", files: 1);
+            var conflicting = await AddBookAsync("The Shattering Peace", "B000CONFLICT", "conflict-other", files: 1);
+            await _historyRepository.AddAsync(new History
+            {
+                AudiobookId = conflicting.Id,
+                AudiobookTitle = conflicting.Title,
+                EventType = "Added",
+                Source = "test",
+                Timestamp = DateTime.UtcNow,
+            });
+
+            var result = await controller.ResolveAsinConflict(
+                record.Id,
+                new LibraryController.ResolveAsinConflictRequest { ConflictingAudiobookId = conflicting.Id, KeepThisRecord = true },
+                CancellationToken.None);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var payload = Assert.IsType<LibraryController.ResolveAsinConflictResult>(ok.Value);
+            Assert.Equal(record.Id, payload.WinnerId);
+            Assert.Equal(conflicting.Id, payload.LoserId);
+            Assert.Equal(1, payload.DiskFilesDeleted);
+
+            Assert.NotNull(await _audiobookRepository.GetByIdAsync(record.Id));
+            Assert.Null(await _audiobookRepository.GetByIdAsync(conflicting.Id));
+            var history = await _historyRepository.GetByAudiobookIdAsync(record.Id);
+            Assert.Contains(history, h => h.EventType == "Added");
+        }
+
+        [Fact]
+        [Trait("Method", "ResolveAsinConflict")]
+        [Trait("Scenario", "KeepOtherRecord_MergesThisIntoConflicting")]
+        public async Task ResolveAsinConflict_KeepOtherRecord_MergesThisIntoConflicting()
+        {
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var record = await AddBookAsync("The Ring", null, "conflict-record-2", files: 1);
+            var conflicting = await AddBookAsync("The Shattering Peace", "B000CONFLICT2", "conflict-other-2", files: 1);
+
+            var result = await controller.ResolveAsinConflict(
+                record.Id,
+                new LibraryController.ResolveAsinConflictRequest { ConflictingAudiobookId = conflicting.Id, KeepThisRecord = false },
+                CancellationToken.None);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var payload = Assert.IsType<LibraryController.ResolveAsinConflictResult>(ok.Value);
+            Assert.Equal(conflicting.Id, payload.WinnerId);
+            Assert.Equal(record.Id, payload.LoserId);
+
+            Assert.Null(await _audiobookRepository.GetByIdAsync(record.Id));
+            Assert.NotNull(await _audiobookRepository.GetByIdAsync(conflicting.Id));
+        }
+
+        [Fact]
         [Trait("Method", "CleanupPhantomRows")]
         [Trait("Scenario", "DryRunPlansMerge_ThenApplies")]
         public async Task CleanupPhantomRows_MergesZeroFilePhantomIntoFileOwner()

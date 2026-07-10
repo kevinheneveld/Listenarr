@@ -202,5 +202,55 @@ namespace Listenarr.Api.Features.Library
             _aggregateCache.InvalidateAll(); // post-merge duplicate re-scan must not see merged rows
             return new OkObjectResult(result);
         }
+
+        /// <summary>
+        /// Resolve a metadata-apply ASIN conflict: a PUT /library/{id} tried to
+        /// assign an ASIN already held by <paramref name="conflictingId"/> and
+        /// was rejected by the unique-ASIN backstop. Unlike <see cref="MergeAsync"/>,
+        /// this doesn't require the two rows to already share an ASIN — the
+        /// 409 itself is the proof they're duplicates, so the ASIN-match
+        /// safety check that guards the general-purpose duplicates tool would
+        /// only get in the way here. <paramref name="keepThisRecord"/> picks
+        /// which side survives; the loser's files are deleted from disk and
+        /// its downloads/history/move jobs are reassigned to the winner,
+        /// exactly as in a normal duplicates merge.
+        /// </summary>
+        public async Task<IActionResult> ResolveAsinConflictAsync(int recordId, int conflictingId, bool keepThisRecord, CancellationToken ct)
+        {
+            if (recordId == conflictingId)
+            {
+                return new BadRequestObjectResult(new { message = "recordId and conflictingId must differ" });
+            }
+
+            var record = await _repo.GetByIdAsync(recordId);
+            var conflicting = await _repo.GetByIdAsync(conflictingId);
+            if (record == null || conflicting == null)
+            {
+                return new NotFoundObjectResult(new { message = "One or both audiobooks not found" });
+            }
+
+            var winnerId = keepThisRecord ? recordId : conflictingId;
+            var loserId = keepThisRecord ? conflictingId : recordId;
+            var loser = keepThisRecord ? conflicting : record;
+
+            var fsResult = await _filesystemDeleteService.DeleteAsync(loser, deleteFolder: true);
+            var counts = await _repo.MergeAudiobookRowsAsync(winnerId, new List<int> { loserId }, ct);
+
+            _aggregateCache.InvalidateAll();
+
+            _logger.LogInformation(
+                "Resolved ASIN conflict between audiobook {RecordId} and {ConflictingId}: kept {WinnerId}, deleted {DiskFiles} file(s) / folder={DiskFolder}, reassigned {Downloads} downloads / {History} history / {MoveJobs} move jobs",
+                recordId, conflictingId, winnerId, fsResult.DeletedFiles, fsResult.DeletedFolder,
+                counts.DownloadsReassigned, counts.HistoryReassigned, counts.MoveJobsReassigned);
+
+            return new OkObjectResult(new LibraryController.ResolveAsinConflictResult
+            {
+                WinnerId = winnerId,
+                LoserId = loserId,
+                DiskFilesDeleted = fsResult.DeletedFiles,
+                DiskFolderDeleted = fsResult.DeletedFolder,
+                Warnings = fsResult.Warnings
+            });
+        }
     }
 }

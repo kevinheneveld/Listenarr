@@ -34,6 +34,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   PhX,
   PhSpinner,
@@ -48,7 +49,7 @@ import { apiService } from '@/services/api'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import { useToast } from '@/services/toastService'
 import { logger } from '@/utils/logger'
-import type { Audiobook, AudibleSearchResult, EmbeddedFileMetadata } from '@/types'
+import type { Audiobook, AudibleSearchResult, EmbeddedFileMetadata, AsinConflictInfo } from '@/types'
 
 interface Props {
   visible: boolean
@@ -72,6 +73,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>()
 
 const toast = useToast()
+const router = useRouter()
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -136,6 +138,12 @@ type Phase = 'idle' | 'searching' | 'pick-candidate' | 'fetching' | 'review' | '
 
 const phase = ref<Phase>('idle')
 const errorMessage = ref<string | null>(null)
+// Set when Apply hits a 409 asin_conflict: the fresh metadata's ASIN is
+// already claimed by another library record. Rendered as a resolution panel
+// (keep this file vs. merge into the existing record) instead of a dead-end
+// error toast — see applyChanges()'s catch block.
+const asinConflict = ref<AsinConflictInfo | null>(null)
+const resolvingConflict = ref(false)
 // Bumped whenever the user starts a new search or jumps straight to a
 // candidate/pasted ASIN. An in-flight searchCandidates() loop checks this
 // after every await and quietly stops touching shared state once it's stale
@@ -878,11 +886,91 @@ async function applyChanges() {
     emit('close')
   } catch (err) {
     logger.error('MetadataBackfillModal: apply failed', err)
+    const conflict = parseAsinConflict(err)
+    if (conflict) {
+      asinConflict.value = conflict
+      phase.value = 'review'
+      return
+    }
     toast.error(
       'Update failed',
       err instanceof Error ? err.message : 'Failed to save the selected fields.',
     )
     phase.value = 'review'
+  }
+}
+
+/**
+ * PUT /library/{id} returns a bare 409 for most conflicts, but the ASIN
+ * unique-constraint case is enriched with structured conflict info so the
+ * UI can offer a real resolution instead of a dead-end error (mirrors the
+ * extractFileToNewAudiobook precedent — see api.ts).
+ */
+function parseAsinConflict(err: unknown): AsinConflictInfo | null {
+  const status = (err as { status?: number } | null)?.status
+  const body = (err as { body?: string } | null)?.body
+  if (status !== 409 || typeof body !== 'string' || !body) return null
+  try {
+    const parsed = JSON.parse(body) as { code?: string; conflict?: AsinConflictInfo }
+    return parsed?.code === 'asin_conflict' && parsed.conflict ? parsed.conflict : null
+  } catch {
+    return null
+  }
+}
+
+function cancelAsinConflict() {
+  asinConflict.value = null
+}
+
+/** Keep this record: merge the conflicting record into it, then retry the apply. */
+async function keepThisRecord() {
+  const book = props.audiobook
+  const conflict = asinConflict.value
+  if (!book || !conflict) return
+
+  resolvingConflict.value = true
+  try {
+    await apiService.resolveAsinConflict(book.id, conflict.audiobookId, true)
+    asinConflict.value = null
+    toast.info(
+      'Duplicate merged',
+      `Merged "${conflict.title}" into this record — retrying the update…`,
+    )
+    await applyChanges()
+  } catch (err) {
+    logger.error('MetadataBackfillModal: resolve-asin-conflict (keep this) failed', err)
+    toast.error(
+      'Merge failed',
+      err instanceof Error ? err.message : 'Could not merge the duplicate record.',
+    )
+  } finally {
+    resolvingConflict.value = false
+  }
+}
+
+/** This file is the duplicate: merge it into the existing (already-correct) record instead. */
+async function keepOtherRecord() {
+  const book = props.audiobook
+  const conflict = asinConflict.value
+  if (!book || !conflict) return
+
+  resolvingConflict.value = true
+  try {
+    await apiService.resolveAsinConflict(book.id, conflict.audiobookId, false)
+    toast.success(
+      'Merged into existing record',
+      `This file was merged into "${conflict.title}" — its files were removed as a duplicate.`,
+    )
+    emit('close')
+    await router.push(`/audiobooks/${conflict.audiobookId}`)
+  } catch (err) {
+    logger.error('MetadataBackfillModal: resolve-asin-conflict (keep other) failed', err)
+    toast.error(
+      'Merge failed',
+      err instanceof Error ? err.message : 'Could not merge into the existing record.',
+    )
+  } finally {
+    resolvingConflict.value = false
   }
 }
 
@@ -1161,22 +1249,56 @@ function candidateYear(c: AudibleSearchResult): string {
               </label>
             </div>
 
-            <div v-if="omnibusSuspected" class="omnibus-banner" role="status">
+            <div v-if="asinConflict" class="asin-conflict-panel" role="alert">
               <PhWarning />
-              <div class="omnibus-banner-text">
-                <strong>This Audible record is much longer than your file</strong>
-                <span class="muted">
-                  ({{ formatHoursForRuntime(fresh?.runtime) }} vs
-                  {{ formatHoursForRuntime(audiobook?.runtime) }})
-                </span>
-                — likely an omnibus or anthology that contains your story. We've pre-unchecked
-                <strong>Title</strong>, <strong>Subtitle</strong>, and <strong>Runtime</strong> so
-                they won't be overwritten with the bundle's values. The other fields (cover, series,
-                author, description) are usually still good to import.
+              <div class="asin-conflict-text">
+                <strong>This ASIN is already used by another book in your library</strong>
+                <p class="muted">
+                  <strong>{{ asinConflict.title }}</strong>
+                  <span v-if="asinConflict.authors?.length"> · {{ asinConflict.authors.join(', ') }}</span>
+                  · {{ asinConflict.fileCount }} file{{ asinConflict.fileCount === 1 ? '' : 's' }}
+                </p>
+                <p class="muted">
+                  These look like the same audiobook. Pick which record to keep — the other
+                  record's files will be <strong>deleted from disk</strong> and its downloads/
+                  history merged into the survivor.
+                </p>
+                <div class="asin-conflict-actions">
+                  <button class="btn btn-primary" :disabled="resolvingConflict" @click="keepThisRecord">
+                    <PhSpinner v-if="resolvingConflict" class="ph-spin" />
+                    Keep this file — merge the other in
+                  </button>
+                  <button
+                    class="btn btn-secondary"
+                    :disabled="resolvingConflict"
+                    @click="keepOtherRecord"
+                  >
+                    This file is the duplicate — merge into "{{ asinConflict.title }}"
+                  </button>
+                  <button class="btn btn-link" :disabled="resolvingConflict" @click="cancelAsinConflict">
+                    Cancel — pick a different match instead
+                  </button>
+                </div>
               </div>
             </div>
 
-            <table class="compare-table">
+            <template v-else>
+              <div v-if="omnibusSuspected" class="omnibus-banner" role="status">
+                <PhWarning />
+                <div class="omnibus-banner-text">
+                  <strong>This Audible record is much longer than your file</strong>
+                  <span class="muted">
+                    ({{ formatHoursForRuntime(fresh?.runtime) }} vs
+                    {{ formatHoursForRuntime(audiobook?.runtime) }})
+                  </span>
+                  — likely an omnibus or anthology that contains your story. We've pre-unchecked
+                  <strong>Title</strong>, <strong>Subtitle</strong>, and <strong>Runtime</strong> so
+                  they won't be overwritten with the bundle's values. The other fields (cover, series,
+                  author, description) are usually still good to import.
+                </div>
+              </div>
+
+              <table class="compare-table">
               <thead>
                 <tr>
                   <th class="col-pick"></th>
@@ -1229,11 +1351,15 @@ function candidateYear(c: AudibleSearchResult): string {
                   </td>
                 </tr>
               </tbody>
-            </table>
+              </table>
+            </template>
           </template>
         </div>
 
-        <footer v-if="phase === 'review' || phase === 'applying'" class="modal-footer">
+        <footer
+          v-if="!asinConflict && (phase === 'review' || phase === 'applying')"
+          class="modal-footer"
+        >
           <button class="btn btn-secondary" :disabled="phase === 'applying'" @click="close">
             Cancel
           </button>
@@ -1633,6 +1759,40 @@ function candidateYear(c: AudibleSearchResult): string {
 }
 .omnibus-banner-text strong {
   color: #fff;
+}
+
+.asin-conflict-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.85rem 1rem;
+  margin: 0 0 0.75rem;
+  background: rgba(220, 90, 74, 0.1);
+  border: 1px solid rgba(220, 90, 74, 0.35);
+  border-radius: 4px;
+  color: #f0b3ab;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+.asin-conflict-panel svg {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+.asin-conflict-text {
+  flex: 1;
+  min-width: 0;
+}
+.asin-conflict-text strong {
+  color: #fff;
+}
+.asin-conflict-text p {
+  margin: 0.35rem 0;
+}
+.asin-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
 }
 
 .compare-table {

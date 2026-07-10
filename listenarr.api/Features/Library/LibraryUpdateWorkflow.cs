@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Listenarr.Application.Common;
 using Listenarr.Domain.Common;
 using Microsoft.AspNetCore.Mvc;
 
@@ -104,11 +105,61 @@ namespace Listenarr.Api.Features.Library
                 AudiobookIdentifierMapper.SyncImportedIdentifiersFromLegacyFields(existingAudiobook);
             }
 
-            await _repo.UpdateAsync(existingAudiobook);
+            try
+            {
+                await _repo.UpdateAsync(existingAudiobook);
+            }
+            catch (UniqueConstraintViolationException)
+            {
+                // The unique-ASIN backstop rejected this write — some other row
+                // already holds the ASIN we just tried to assign. A bare 409 here
+                // gives the caller nothing to act on; look up the conflicting row
+                // so the UI can offer a real resolution (merge one record into
+                // the other via POST /library/{id}/resolve-asin-conflict) instead
+                // of a dead-end error.
+                return await BuildAsinConflictResponseAsync(id, existingAudiobook.Asin);
+            }
 
             _logger.LogInformation("Updated audiobook '{Title}' (ID: {Id})", LogRedaction.SanitizeText(existingAudiobook.Title), id);
 
             return new OkObjectResult(new { message = "Audiobook updated successfully", audiobook = existingAudiobook });
+        }
+
+        private async Task<IActionResult> BuildAsinConflictResponseAsync(int id, string? conflictingAsin)
+        {
+            var conflict = string.IsNullOrWhiteSpace(conflictingAsin) ? null : await _repo.GetByAsinAsync(conflictingAsin);
+            if (conflict == null || conflict.Id == id)
+            {
+                return new ConflictObjectResult(new
+                {
+                    type = "https://tools.ietf.org/html/rfc9110#section-15.5.10",
+                    title = "Conflict",
+                    status = 409,
+                    code = "asin_conflict",
+                    detail = "This ASIN is already used by another audiobook in your library."
+                });
+            }
+
+            var withFiles = await _repo.GetByIdsWithFilesAsync(new[] { conflict.Id });
+            var fileCount = withFiles.FirstOrDefault()?.Files?.Count ?? 0;
+
+            return new ConflictObjectResult(new
+            {
+                type = "https://tools.ietf.org/html/rfc9110#section-15.5.10",
+                title = "Conflict",
+                status = 409,
+                code = "asin_conflict",
+                detail = "This ASIN is already used by another audiobook in your library.",
+                conflict = new
+                {
+                    audiobookId = conflict.Id,
+                    title = conflict.Title,
+                    authors = conflict.Authors,
+                    basePath = conflict.BasePath,
+                    fileCount,
+                    asin = conflictingAsin
+                }
+            });
         }
 
         private static void ApplySeriesMembershipUpdates(Audiobook existingAudiobook, Audiobook updatedAudiobook)

@@ -82,6 +82,7 @@ import type {
   MusicCandidatesResponse,
   DuplicatesMergePair,
   MergeDuplicatesResult,
+  ResolveAsinConflictResult,
   RecoveryRunResult,
 } from '@/types'
 import { getStartupConfigCached, resetCache as resetStartupConfigCache } from './startupConfigCache'
@@ -1559,6 +1560,23 @@ class ApiService {
     return this.request<MergeDuplicatesResult>(`/library/duplicates/merge`, {
       method: 'POST',
       body: JSON.stringify({ merges }),
+    })
+  }
+
+  /**
+   * Resolve a 409 asin_conflict from PUT /library/{id}: pick which of the two
+   * colliding records survives. The loser's files are deleted from disk and
+   * its downloads/history/move jobs are reassigned to the winner (same
+   * semantics as mergeDuplicates).
+   */
+  async resolveAsinConflict(
+    id: number,
+    conflictingAudiobookId: number,
+    keepThisRecord: boolean,
+  ): Promise<ResolveAsinConflictResult> {
+    return this.request<ResolveAsinConflictResult>(`/library/${id}/resolve-asin-conflict`, {
+      method: 'POST',
+      body: JSON.stringify({ conflictingAudiobookId, keepThisRecord }),
     })
   }
 

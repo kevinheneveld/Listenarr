@@ -120,5 +120,17 @@ namespace Listenarr.Api.Features.Library
         {
             return await _duplicatesMergeWorkflow.MergeAsync(request, ct);
         }
+
+        /// <summary>
+        /// Resolve a 409 asin_conflict from PUT /library/{id}: pick which of the
+        /// two colliding records survives. The loser's files are deleted from
+        /// disk (same semantics as duplicates/merge) and its downloads/history/
+        /// move jobs are reassigned to the winner.
+        /// </summary>
+        [HttpPost("{id}/resolve-asin-conflict")]
+        public async Task<IActionResult> ResolveAsinConflict(int id, [FromBody] ResolveAsinConflictRequest request, CancellationToken ct)
+        {
+            return await _duplicatesMergeWorkflow.ResolveAsinConflictAsync(id, request.ConflictingAudiobookId, request.KeepThisRecord, ct);
+        }
     }
 }

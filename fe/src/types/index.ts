@@ -1605,6 +1605,24 @@ export interface MergeDuplicatesResult {
   warnings: string[]
 }
 
+/** Which record a PUT /library/{id} ASIN collision conflicts with — enough to decide how to resolve it. */
+export interface AsinConflictInfo {
+  audiobookId: number
+  title: string
+  authors?: string[]
+  basePath?: string | null
+  fileCount: number
+  asin: string
+}
+
+export interface ResolveAsinConflictResult {
+  winnerId: number
+  loserId: number
+  diskFilesDeleted: number
+  diskFolderDeleted: boolean
+  warnings: string[]
+}
+
 /** Result shape shared by the dry-run-first recovery endpoints. */
 export interface RecoveryRunResult {
   dryRun: boolean
