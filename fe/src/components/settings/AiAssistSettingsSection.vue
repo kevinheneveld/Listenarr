@@ -124,8 +124,8 @@
         >
       </label>
       <div class="test-cell">
-        <button type="button" class="test-btn" :disabled="sweeping" @click="runSweep">
-          {{ sweeping ? 'Sweeping…' : sweepCursor > 0 ? 'Sweep next batch' : 'Sweep library' }}
+        <button type="button" class="test-btn" :disabled="sweepStopRequested" @click="runSweep">
+          {{ sweeping ? 'Stop' : sweepCursor > 0 ? 'Continue sweep' : 'Sweep library' }}
         </button>
         <small v-if="sweepStatus" class="sweep-status">{{ sweepStatus }}</small>
       </div>
@@ -159,12 +159,18 @@ const testing = ref(false)
 const testResult = ref<string | null>(null)
 const testOk = ref(false)
 
-const sweepBatchSize = 25
+// One model call per request — a multi-batch request outlives reverse-proxy
+// timeouts (a 25-record run 504'd behind openresty). The loop below chains
+// small requests instead, so each stays well under any proxy limit.
+const sweepBatchSize = 10
 const sweeping = ref(false)
+const sweepStopRequested = ref(false)
 const sweepStatus = ref<string | null>(null)
 const sweepCursor = ref(0)
 const sweepChecked = ref(0)
-const sweepFindings = ref<{ audiobookId: number; title: string; reason: string; evidence?: string }[]>([])
+const sweepFindings = ref<
+  { audiobookId: number; title: string; reason: string; evidence?: string }[]
+>([])
 
 function patch(field: keyof ApplicationSettings, value: unknown) {
   emit('update:settings', {
@@ -174,25 +180,46 @@ function patch(field: keyof ApplicationSettings, value: unknown) {
 }
 
 async function runSweep() {
+  if (sweeping.value) {
+    // The button doubles as Stop while a sweep is looping; the current
+    // in-flight batch finishes, then the loop exits.
+    sweepStopRequested.value = true
+    sweepStatus.value = 'Stopping after the current batch…'
+    return
+  }
+
   sweeping.value = true
-  sweepStatus.value = null
+  sweepStopRequested.value = false
+  sweepStatus.value = 'Sweeping…'
   try {
-    const result = await apiService.runAiLibrarySweep(sweepBatchSize, sweepCursor.value)
-    sweepChecked.value += result.checkedCount
-    // Accumulate across batches; dedupe on re-runs of the same slice.
-    const known = new Set(sweepFindings.value.map((f) => f.audiobookId))
-    sweepFindings.value = [
-      ...sweepFindings.value,
-      ...result.suspicious.filter((s) => !known.has(s.audiobookId)),
-    ]
-    sweepCursor.value = result.exhausted ? 0 : (result.lastId ?? 0)
-    sweepStatus.value = result.exhausted
-      ? `Backlog swept — ${sweepChecked.value} record(s) checked, ${sweepFindings.value.length} flagged.`
-      : `${sweepChecked.value} checked so far, ${sweepFindings.value.length} flagged — run again to continue.`
+    // Chain small requests until the backlog is exhausted (or Stop): each
+    // request is a single model call, short enough for any reverse proxy.
+    for (;;) {
+      const result = await apiService.runAiLibrarySweep(sweepBatchSize, sweepCursor.value)
+      sweepChecked.value += result.checkedCount
+      // Accumulate across batches; dedupe on re-runs of the same slice.
+      const known = new Set(sweepFindings.value.map((f) => f.audiobookId))
+      sweepFindings.value = [
+        ...sweepFindings.value,
+        ...result.suspicious.filter((s) => !known.has(s.audiobookId)),
+      ]
+      if (result.exhausted) {
+        sweepCursor.value = 0
+        sweepStatus.value = `Backlog swept — ${sweepChecked.value} record(s) checked, ${sweepFindings.value.length} flagged.`
+        break
+      }
+      sweepCursor.value = result.lastId ?? 0
+      sweepStatus.value = `${sweepChecked.value} checked, ${sweepFindings.value.length} flagged…`
+      if (sweepStopRequested.value) {
+        sweepStatus.value = `Paused — ${sweepChecked.value} checked, ${sweepFindings.value.length} flagged. Sweep again to continue.`
+        break
+      }
+    }
   } catch (err) {
     sweepStatus.value = err instanceof Error ? err.message : 'Sweep failed.'
   } finally {
     sweeping.value = false
+    sweepStopRequested.value = false
   }
 }
 

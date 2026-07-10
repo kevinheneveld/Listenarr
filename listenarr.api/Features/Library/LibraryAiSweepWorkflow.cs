@@ -33,7 +33,11 @@ namespace Listenarr.Api.Features.Library
     /// </summary>
     public sealed class LibraryAiSweepWorkflow
     {
-        private const int DefaultLimit = 25;
+        // One model call per HTTP request: the UI loops batches itself. A
+        // single request must finish inside a reverse proxy's default ~60s
+        // timeout, and a multi-batch sweep can't (live case: 25 records = 3
+        // sequential model calls 504'd behind openresty, cancelling the run).
+        private const int DefaultLimit = AiLibrarySweepJudge.RecordsPerCall;
         private const int MaxLimit = 100;
 
         private readonly IAudiobookRepository _repo;
