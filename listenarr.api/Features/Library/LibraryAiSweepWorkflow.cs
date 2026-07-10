@@ -105,7 +105,16 @@ namespace Listenarr.Api.Features.Library
                     a.Title ?? string.Empty,
                     a.Authors ?? new List<string>(),
                     a.Files!.Count,
-                    SampleFileNames(a))).ToList();
+                    SampleFileNames(a),
+                    // The whisper opening (stored by the verification pass) is
+                    // the audio's own announcement of what it is — the
+                    // strongest wrong-content signal available. Truncated the
+                    // same way the prompt builder does, so the evidence gate
+                    // validates against exactly what the model saw.
+                    string.IsNullOrWhiteSpace(a.VerificationTranscript)
+                        ? null
+                        : AiLibrarySweepJudge.Truncate(a.VerificationTranscript!, AiLibrarySweepJudge.MaxTranscriptChars)))
+                    .ToList();
 
                 var raw = await _aiAssist.CompleteJsonAsync(
                     AiLibrarySweepJudge.BuildSystemPrompt(),
@@ -114,12 +123,13 @@ namespace Listenarr.Api.Features.Library
                 checkedCount += batch.Length;
                 if (raw == null) continue; // endpoint hiccup — batch counts as checked-without-opinion
 
-                // Evidence validation needs the exact sample lists that were
-                // shown to the model — a flag must quote one of them.
-                var fileNamesById = inputs.ToDictionary(
+                // Evidence validation needs exactly what was shown to the
+                // model — a flag must quote a sample file name or a fragment
+                // of the transcript excerpt.
+                var evidenceById = inputs.ToDictionary(
                     i => i.Id,
-                    i => i.SampleFileNames);
-                foreach (var verdict in AiLibrarySweepJudge.ParseResponse(raw, fileNamesById))
+                    i => new AiLibrarySweepJudge.RecordEvidence(i.SampleFileNames, i.TranscriptExcerpt));
+                foreach (var verdict in AiLibrarySweepJudge.ParseResponse(raw, evidenceById))
                 {
                     suspicious.Add(new
                     {

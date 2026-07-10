@@ -21,11 +21,14 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
 {
     public class AiLibrarySweepJudgeTests
     {
-        private static readonly IReadOnlyDictionary<int, IReadOnlyList<string>> FileNames =
-            new Dictionary<int, IReadOnlyList<string>>
+        private static readonly IReadOnlyDictionary<int, AiLibrarySweepJudge.RecordEvidence> FileNames =
+            new Dictionary<int, AiLibrarySweepJudge.RecordEvidence>
             {
-                [10] = new[] { "01 Dark Sky (Skyscrapers).mp3", "02 Blessings.mp3" },
-                [20] = new[] { "Dragon Tear.mp3" },
+                [10] = new(new[] { "01 Dark Sky (Skyscrapers).mp3", "02 Blessings.mp3" }, null),
+                [20] = new(new[] { "Dragon Tear.mp3" }, null),
+                [30] = new(
+                    new[] { "The Black Book-001.mp3" },
+                    "[opening] Recording Books Romance presents an unabridged recording of Dark Lover by J.R. Ward, narrated by Jim Frangione."),
             };
 
         [Fact]
@@ -83,6 +86,57 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
                 FileNames);
 
             Assert.Single(verdicts);
+        }
+
+        [Fact]
+        public void ParseResponse_TranscriptFragmentAsEvidence_Flags()
+        {
+            // The mislabeled "Black Book"/Dark Lover live case: the whisper
+            // opening names a different book, and quoting that credit phrase
+            // is valid evidence.
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":30,\"evidence\":\"Dark Lover by J.R. Ward\",\"reason\":\"audio announces Dark Lover, not The Black Book\"}]}",
+                FileNames);
+
+            var verdict = Assert.Single(verdicts);
+            Assert.Equal(30, verdict.Id);
+        }
+
+        [Fact]
+        public void ParseResponse_FabricatedTranscriptQuote_IsDropped()
+        {
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":30,\"evidence\":\"Moby Dick by Herman Melville\",\"reason\":\"wrong book\"}]}",
+                FileNames);
+
+            Assert.Empty(verdicts);
+        }
+
+        [Fact]
+        public void ParseResponse_TinyTranscriptFragment_IsDropped()
+        {
+            // A trivially-short quote ("the") appears in every transcript and
+            // proves nothing; substance is required.
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":30,\"evidence\":\"recording\",\"reason\":\"x\"}]}",
+                FileNames);
+
+            Assert.Empty(verdicts);
+        }
+
+        [Fact]
+        public void BuildUserPrompt_IncludesTranscriptWhenPresent()
+        {
+            var prompt = AiLibrarySweepJudge.BuildUserPrompt(new[]
+            {
+                new AiLibrarySweepJudge.RecordInput(
+                    30, "The Black Book", new[] { "James Patterson" }, 1,
+                    new[] { "The Black Book-001.mp3" },
+                    "Recording Books Romance presents Dark Lover by J.R. Ward"),
+            });
+
+            Assert.Contains("audio-opening:", prompt);
+            Assert.Contains("Dark Lover by J.R. Ward", prompt);
         }
 
         [Theory]

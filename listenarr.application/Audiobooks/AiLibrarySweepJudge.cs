@@ -36,8 +36,21 @@ namespace Listenarr.Application.Audiobooks
     {
         public const int RecordsPerCall = 10;
         public const int MaxFileNamesPerRecord = 6;
+        // Enough of the whisper opening to carry the spoken credits ("X presents
+        // <Title> by <Author>, narrated by…") without prose bloating the prompt.
+        public const int MaxTranscriptChars = 400;
 
-        public sealed record RecordInput(int Id, string Title, IReadOnlyList<string> Authors, int FileCount, IReadOnlyList<string> SampleFileNames);
+        public sealed record RecordInput(
+            int Id,
+            string Title,
+            IReadOnlyList<string> Authors,
+            int FileCount,
+            IReadOnlyList<string> SampleFileNames,
+            string? TranscriptExcerpt = null);
+
+        /// <summary>What a flag's evidence quote is validated against.</summary>
+        public sealed record RecordEvidence(IReadOnlyList<string> FileNames, string? TranscriptExcerpt);
+
         public sealed record SweepVerdict(int Id, string Reason, string Evidence);
 
         // First live run flagged 7/7 records falsely — the model invented
@@ -48,19 +61,22 @@ namespace Listenarr.Application.Audiobooks
         // actual file names, so a fabricated claim can't survive parsing).
         public static string BuildSystemPrompt() =>
             "You audit an audiobook library. For each record you get the book's title, author, " +
-            "and sample file names from its folder. Flag a record ONLY when its file names clearly " +
-            "belong to a DIFFERENT work than the record: song titles from a music album, a different " +
+            "sample file names from its folder, and — when available — 'audio-opening', a transcript " +
+            "of what the audio itself says at the start. Flag a record ONLY when the evidence clearly " +
+            "shows a DIFFERENT work than the record: song titles from a music album, a different " +
             "book's title, video releases, or several different books' titles under one record. " +
+            "The audio-opening is the strongest signal: spoken credits naming a DIFFERENT title or " +
+            "author than the record's is wrong content; spoken credits matching the record clears it. " +
             "The following are NEVER reasons to flag: file extension or format (.mp3, .m4b, .m4a, .flac are all normal), " +
             "how many files there are (one file or hundreds are both normal), track/part numbering, " +
             "chapter naming, '(Unabridged)' or '[Dramatized Adaptation]' tags, author names in file names, " +
-            "radio dramas, or anything about the record's own title — judge only whether the FILE NAMES " +
-            "match the record they are filed under. " +
+            "radio dramas, an audio-opening with no credits (cold-open narration is normal), " +
+            "or anything about the record's own title. " +
             "Most records are correctly filed: an empty list is the expected answer for a normal batch. " +
-            "Every flag must quote, in \"evidence\", one of the provided file names exactly as given — " +
-            "the file name that shows the wrong work. " +
+            "Every flag must quote, in \"evidence\", either one of the provided file names exactly as " +
+            "given, or the exact fragment of the audio-opening that names the wrong work. " +
             "Respond with ONLY a JSON object of the form " +
-            "{\"suspicious\":[{\"id\":<record id>,\"evidence\":\"<exact file name from the list>\",\"reason\":\"<what work the files actually appear to be>\"}]} " +
+            "{\"suspicious\":[{\"id\":<record id>,\"evidence\":\"<exact quote>\",\"reason\":\"<what work the audio/files actually appear to be>\"}]} " +
             "— no prose, no markdown.";
 
         public static string BuildUserPrompt(IReadOnlyList<RecordInput> records)
@@ -81,6 +97,13 @@ namespace Listenarr.Application.Audiobooks
                     sb.Append(" samples: ")
                       .Append(string.Join("; ", record.SampleFileNames.Take(MaxFileNamesPerRecord)));
                 }
+                if (!string.IsNullOrWhiteSpace(record.TranscriptExcerpt))
+                {
+                    sb.AppendLine();
+                    sb.Append("  audio-opening: \"")
+                      .Append(Truncate(record.TranscriptExcerpt!, MaxTranscriptChars))
+                      .Append('"');
+                }
                 sb.AppendLine();
             }
             return sb.ToString();
@@ -97,7 +120,7 @@ namespace Listenarr.Application.Audiobooks
         /// </summary>
         public static List<SweepVerdict> ParseResponse(
             string? responseText,
-            IReadOnlyDictionary<int, IReadOnlyList<string>> fileNamesById)
+            IReadOnlyDictionary<int, RecordEvidence> evidenceById)
         {
             var verdicts = new List<SweepVerdict>();
             if (string.IsNullOrWhiteSpace(responseText)) return verdicts;
@@ -121,7 +144,7 @@ namespace Listenarr.Application.Audiobooks
                     if (!item.TryGetProperty("id", out var idEl)
                         || idEl.ValueKind != JsonValueKind.Number
                         || !idEl.TryGetInt32(out var id)
-                        || !fileNamesById.TryGetValue(id, out var fileNames))
+                        || !evidenceById.TryGetValue(id, out var recordEvidence))
                     {
                         continue;
                     }
@@ -132,8 +155,16 @@ namespace Listenarr.Application.Audiobooks
                         continue;
                     }
                     var evidence = (evidenceEl.GetString() ?? string.Empty).Trim();
-                    if (evidence.Length == 0
-                        || !fileNames.Any(n => string.Equals(n, evidence, StringComparison.OrdinalIgnoreCase)))
+                    var evidenceIsFileName = recordEvidence.FileNames
+                        .Any(n => string.Equals(n, evidence, StringComparison.OrdinalIgnoreCase));
+                    // Transcript quotes need only be a substring — the model
+                    // legitimately excerpts the credit phrase, not the whole
+                    // opening. Require some substance so a bare "the" can't
+                    // pass as proof.
+                    var evidenceIsTranscriptQuote = evidence.Length >= 12
+                        && !string.IsNullOrWhiteSpace(recordEvidence.TranscriptExcerpt)
+                        && recordEvidence.TranscriptExcerpt!.Contains(evidence, StringComparison.OrdinalIgnoreCase);
+                    if (evidence.Length == 0 || (!evidenceIsFileName && !evidenceIsTranscriptQuote))
                     {
                         continue;
                     }
@@ -150,6 +181,17 @@ namespace Listenarr.Application.Audiobooks
             }
 
             return verdicts;
+        }
+
+        /// <summary>
+        /// Truncation shared by prompt building and the workflow, so the
+        /// transcript the evidence gate validates against is the same one the
+        /// model actually saw.
+        /// </summary>
+        public static string Truncate(string text, int maxChars)
+        {
+            var trimmed = text.Trim();
+            return trimmed.Length <= maxChars ? trimmed : trimmed[..maxChars];
         }
     }
 }
