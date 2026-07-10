@@ -38,17 +38,30 @@ namespace Listenarr.Application.Audiobooks
         public const int MaxFileNamesPerRecord = 6;
 
         public sealed record RecordInput(int Id, string Title, IReadOnlyList<string> Authors, int FileCount, IReadOnlyList<string> SampleFileNames);
-        public sealed record SweepVerdict(int Id, string Reason);
+        public sealed record SweepVerdict(int Id, string Reason, string Evidence);
 
+        // First live run flagged 7/7 records falsely — the model invented
+        // criteria (file extensions, file counts, title vibes) instead of
+        // comparing file names against the record. Hence the explicit
+        // non-reasons list, the "empty is the expected answer" framing, and
+        // the required evidence quote (validated server-side against the
+        // actual file names, so a fabricated claim can't survive parsing).
         public static string BuildSystemPrompt() =>
             "You audit an audiobook library. For each record you get the book's title, author, " +
-            "total file count, and sample file names from its folder. Flag records whose files are " +
-            "clearly NOT that audiobook: music albums or discographies, a different book, video, " +
-            "or a multi-book collection filed under a single book's title. " +
-            "Track numbering, chapter naming, and abbreviations of the book's own title are normal — do not flag them. " +
-            "Only flag when the mismatch is obvious; when unsure, stay silent about that record. " +
+            "and sample file names from its folder. Flag a record ONLY when its file names clearly " +
+            "belong to a DIFFERENT work than the record: song titles from a music album, a different " +
+            "book's title, video releases, or several different books' titles under one record. " +
+            "The following are NEVER reasons to flag: file extension or format (.mp3, .m4b, .m4a, .flac are all normal), " +
+            "how many files there are (one file or hundreds are both normal), track/part numbering, " +
+            "chapter naming, '(Unabridged)' or '[Dramatized Adaptation]' tags, author names in file names, " +
+            "radio dramas, or anything about the record's own title — judge only whether the FILE NAMES " +
+            "match the record they are filed under. " +
+            "Most records are correctly filed: an empty list is the expected answer for a normal batch. " +
+            "Every flag must quote, in \"evidence\", one of the provided file names exactly as given — " +
+            "the file name that shows the wrong work. " +
             "Respond with ONLY a JSON object of the form " +
-            "{\"suspicious\":[{\"id\":<record id>,\"reason\":\"<short reason>\"}]} — an empty list when everything looks right. No prose, no markdown.";
+            "{\"suspicious\":[{\"id\":<record id>,\"evidence\":\"<exact file name from the list>\",\"reason\":\"<what work the files actually appear to be>\"}]} " +
+            "— no prose, no markdown.";
 
         public static string BuildUserPrompt(IReadOnlyList<RecordInput> records)
         {
@@ -74,12 +87,17 @@ namespace Listenarr.Application.Audiobooks
         }
 
         /// <summary>
-        /// Lenient parse (fences/prose tolerated); ids not in
-        /// <paramref name="validIds"/> are dropped as hallucinations and
-        /// structural garbage yields an empty list — nothing gets flagged on
-        /// a bad answer.
+        /// Lenient parse (fences/prose tolerated) with two hallucination
+        /// gates: ids must be in <paramref name="fileNamesById"/>, and the
+        /// quoted evidence must be one of THAT record's actual submitted file
+        /// names — a flag whose "proof" doesn't exist is fabricated and gets
+        /// dropped (live case: "file format is not .mp3" about a file that
+        /// was literally Dragon Tear.mp3). Structural garbage yields an empty
+        /// list; nothing gets flagged on a bad answer.
         /// </summary>
-        public static List<SweepVerdict> ParseResponse(string? responseText, IReadOnlySet<int> validIds)
+        public static List<SweepVerdict> ParseResponse(
+            string? responseText,
+            IReadOnlyDictionary<int, IReadOnlyList<string>> fileNamesById)
         {
             var verdicts = new List<SweepVerdict>();
             if (string.IsNullOrWhiteSpace(responseText)) return verdicts;
@@ -103,7 +121,19 @@ namespace Listenarr.Application.Audiobooks
                     if (!item.TryGetProperty("id", out var idEl)
                         || idEl.ValueKind != JsonValueKind.Number
                         || !idEl.TryGetInt32(out var id)
-                        || !validIds.Contains(id))
+                        || !fileNamesById.TryGetValue(id, out var fileNames))
+                    {
+                        continue;
+                    }
+
+                    if (!item.TryGetProperty("evidence", out var evidenceEl)
+                        || evidenceEl.ValueKind != JsonValueKind.String)
+                    {
+                        continue;
+                    }
+                    var evidence = (evidenceEl.GetString() ?? string.Empty).Trim();
+                    if (evidence.Length == 0
+                        || !fileNames.Any(n => string.Equals(n, evidence, StringComparison.OrdinalIgnoreCase)))
                     {
                         continue;
                     }
@@ -111,7 +141,7 @@ namespace Listenarr.Application.Audiobooks
                     var reason = item.TryGetProperty("reason", out var reasonEl) && reasonEl.ValueKind == JsonValueKind.String
                         ? reasonEl.GetString() ?? "flagged"
                         : "flagged";
-                    verdicts.Add(new SweepVerdict(id, reason));
+                    verdicts.Add(new SweepVerdict(id, reason, evidence));
                 }
             }
             catch (JsonException)

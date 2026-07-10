@@ -114,14 +114,19 @@ namespace Listenarr.Api.Features.Library
                 checkedCount += batch.Length;
                 if (raw == null) continue; // endpoint hiccup — batch counts as checked-without-opinion
 
-                var validIds = batch.Select(a => a.Id).ToHashSet();
-                foreach (var verdict in AiLibrarySweepJudge.ParseResponse(raw, validIds))
+                // Evidence validation needs the exact sample lists that were
+                // shown to the model — a flag must quote one of them.
+                var fileNamesById = inputs.ToDictionary(
+                    i => i.Id,
+                    i => i.SampleFileNames);
+                foreach (var verdict in AiLibrarySweepJudge.ParseResponse(raw, fileNamesById))
                 {
                     suspicious.Add(new
                     {
                         audiobookId = verdict.Id,
                         title = titleById[verdict.Id],
-                        reason = verdict.Reason
+                        reason = verdict.Reason,
+                        evidence = verdict.Evidence
                     });
                 }
             }

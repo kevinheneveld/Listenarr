@@ -1597,7 +1597,7 @@ class ApiService {
     checkedCount: number
     lastId: number | null
     exhausted: boolean
-    suspicious: { audiobookId: number; title: string; reason: string }[]
+    suspicious: { audiobookId: number; title: string; reason: string; evidence?: string }[]
   }> {
     return this.request(`/library/ai-sweep?limit=${limit}&afterId=${afterId}`, {
       method: 'POST',

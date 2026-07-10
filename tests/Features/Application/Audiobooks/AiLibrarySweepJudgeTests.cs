@@ -21,27 +21,68 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
 {
     public class AiLibrarySweepJudgeTests
     {
-        private static readonly IReadOnlySet<int> ValidIds = new HashSet<int> { 10, 20 };
+        private static readonly IReadOnlyDictionary<int, IReadOnlyList<string>> FileNames =
+            new Dictionary<int, IReadOnlyList<string>>
+            {
+                [10] = new[] { "01 Dark Sky (Skyscrapers).mp3", "02 Blessings.mp3" },
+                [20] = new[] { "Dragon Tear.mp3" },
+            };
 
         [Fact]
-        public void ParseResponse_FlagsValidIdsWithReasons()
+        public void ParseResponse_ValidIdWithRealEvidence_Flags()
         {
             var verdicts = AiLibrarySweepJudge.ParseResponse(
-                "```json\n{\"suspicious\":[{\"id\":20,\"reason\":\"files are a music discography\"}]}\n```",
-                ValidIds);
+                "```json\n{\"suspicious\":[{\"id\":10,\"evidence\":\"02 Blessings.mp3\",\"reason\":\"Big Sean album tracks\"}]}\n```",
+                FileNames);
 
             var verdict = Assert.Single(verdicts);
-            Assert.Equal(20, verdict.Id);
-            Assert.Equal("files are a music discography", verdict.Reason);
+            Assert.Equal(10, verdict.Id);
+            Assert.Equal("02 Blessings.mp3", verdict.Evidence);
+            Assert.Equal("Big Sean album tracks", verdict.Reason);
+        }
+
+        [Fact]
+        public void ParseResponse_EvidenceNotInRecordsFiles_IsDropped()
+        {
+            // A flag whose "proof" doesn't exist among the record's submitted
+            // file names is fabricated — the first live run produced reasons
+            // like "file format is not .mp3" about a file that literally was
+            // Dragon Tear.mp3. The evidence gate kills that class of answer.
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":20,\"evidence\":\"Dragon Tear.flac\",\"reason\":\"file format is not .mp3\"}]}",
+                FileNames);
+
+            Assert.Empty(verdicts);
+        }
+
+        [Fact]
+        public void ParseResponse_MissingEvidence_IsDropped()
+        {
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":20,\"reason\":\"looks wrong\"}]}",
+                FileNames);
+
+            Assert.Empty(verdicts);
         }
 
         [Fact]
         public void ParseResponse_HallucinatedId_IsDropped()
         {
             var verdicts = AiLibrarySweepJudge.ParseResponse(
-                "{\"suspicious\":[{\"id\":999,\"reason\":\"x\"}]}", ValidIds);
+                "{\"suspicious\":[{\"id\":999,\"evidence\":\"Dragon Tear.mp3\",\"reason\":\"x\"}]}",
+                FileNames);
 
             Assert.Empty(verdicts);
+        }
+
+        [Fact]
+        public void ParseResponse_EvidenceMatchIsCaseInsensitive()
+        {
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":20,\"evidence\":\"dragon tear.MP3\",\"reason\":\"different book\"}]}",
+                FileNames);
+
+            Assert.Single(verdicts);
         }
 
         [Theory]
@@ -50,7 +91,19 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         [InlineData("{\"suspicious\":{}}")]
         public void ParseResponse_Garbage_FlagsNothing(string? response)
         {
-            Assert.Empty(AiLibrarySweepJudge.ParseResponse(response, ValidIds));
+            Assert.Empty(AiLibrarySweepJudge.ParseResponse(response, FileNames));
+        }
+
+        [Fact]
+        public void BuildSystemPrompt_ListsTheNonReasons()
+        {
+            // The first live run invented exactly these criteria; the prompt
+            // must keep disclaiming them explicitly.
+            var prompt = AiLibrarySweepJudge.BuildSystemPrompt();
+            Assert.Contains("file extension or format", prompt);
+            Assert.Contains("how many files", prompt);
+            Assert.Contains("empty list is the expected answer", prompt);
+            Assert.Contains("evidence", prompt);
         }
 
         [Fact]
@@ -66,7 +119,6 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.Contains("id=10", prompt);
             Assert.Contains("Dark Sky Paradise", prompt);
             Assert.Contains("Big Sean", prompt);
-            Assert.Contains("files=12", prompt);
             Assert.Contains("01 Dark Sky (Skyscrapers).mp3", prompt);
         }
     }

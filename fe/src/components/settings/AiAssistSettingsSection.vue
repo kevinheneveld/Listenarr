@@ -139,6 +139,7 @@
             {{ finding.title }}
           </router-link>
           <span class="sweep-reason"> — {{ finding.reason }}</span>
+          <span v-if="finding.evidence" class="sweep-evidence"> ({{ finding.evidence }})</span>
         </li>
       </ul>
     </div>
@@ -163,7 +164,7 @@ const sweeping = ref(false)
 const sweepStatus = ref<string | null>(null)
 const sweepCursor = ref(0)
 const sweepChecked = ref(0)
-const sweepFindings = ref<{ audiobookId: number; title: string; reason: string }[]>([])
+const sweepFindings = ref<{ audiobookId: number; title: string; reason: string; evidence?: string }[]>([])
 
 function patch(field: keyof ApplicationSettings, value: unknown) {
   emit('update:settings', {
@@ -342,5 +343,10 @@ async function testConnection() {
 }
 .sweep-reason {
   color: #f0b3ab;
+}
+.sweep-evidence {
+  color: #868e96;
+  font-family: monospace;
+  font-size: 0.8rem;
 }
 </style>

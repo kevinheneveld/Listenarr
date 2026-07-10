@@ -47,6 +47,8 @@ namespace Listenarr.Application.Search
             "identify releases that are clearly NOT an audiobook copy of the target: music albums or " +
             "discographies, movies or TV, e-book-only packs, or a different book entirely. " +
             "Release names use scene conventions (dots for spaces, quality tags, group suffixes) — that is normal, not suspicious. " +
+            "File format, bitrate, and size are NEVER reasons to flag. " +
+            "Most shortlists contain no wrong releases: an empty list is the common correct answer. " +
             "Only flag a release when you are confident; when unsure, do not flag it. " +
             "Respond with ONLY a JSON object of the form " +
             "{\"reject\":[{\"index\":<number>,\"reason\":\"<short reason>\"}]} — an empty list when nothing is clearly wrong. No prose, no markdown.";
