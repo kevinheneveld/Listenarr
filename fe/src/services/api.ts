@@ -1577,6 +1577,26 @@ class ApiService {
     })
   }
 
+  /**
+   * AI library sweep: review a slice of the vetting backlog by file names via
+   * the configured AI-assist endpoint. Cursor-paged (pass the previous call's
+   * lastId as afterId to continue). Flag-only — nothing is changed.
+   */
+  async runAiLibrarySweep(
+    limit = 25,
+    afterId = 0,
+  ): Promise<{
+    checkedCount: number
+    lastId: number | null
+    exhausted: boolean
+    suspicious: { audiobookId: number; title: string; reason: string }[]
+  }> {
+    return this.request(`/library/ai-sweep?limit=${limit}&afterId=${afterId}`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+  }
+
   async resolveAsinConflict(
     id: number,
     conflictingAudiobookId: number,

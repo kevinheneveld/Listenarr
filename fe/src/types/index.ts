@@ -388,6 +388,7 @@ export interface ApplicationSettings {
   aiAssistBaseUrl?: string
   aiAssistModel?: string
   aiAssistApiKey?: string
+  aiAssistGateSearches?: boolean
   outputPath: string
   folderNamingPattern: string
   fileNamingPattern: string

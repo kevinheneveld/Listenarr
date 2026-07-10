@@ -153,6 +153,13 @@ namespace Listenarr.Domain.Configuration
         public string AiAssistBaseUrl { get; set; } = string.Empty; // e.g. http://192.168.1.20:11434/v1
         public string AiAssistModel { get; set; } = string.Empty;   // e.g. qwen3:8b
         public string AiAssistApiKey { get; set; } = string.Empty;  // optional; hosted services only
+
+        // Sub-toggle: judge automatic-search picks before grabbing (an LLM
+        // checks the chosen release's title against the target book and skips
+        // obvious music/wrong-book releases). Separate switch because it runs
+        // unattended inside search sweeps — worth its own off-switch even when
+        // AI assist stays on for interactive features.
+        public bool AiAssistGateSearches { get; set; } = true;
         public List<string> ImportBlacklistExtensions
         {
             get

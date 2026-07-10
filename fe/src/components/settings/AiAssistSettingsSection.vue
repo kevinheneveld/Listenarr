@@ -85,6 +85,23 @@
     </div>
 
     <div class="setting-row">
+      <label for="ai-assist-gate-searches">
+        <strong>Screen automatic-search picks</strong>
+        <small
+          >Before grabbing, the model checks the chosen release name against the target book and
+          skips obvious music albums or wrong books. Fails open — an unreachable endpoint never
+          blocks a grab.</small
+        >
+      </label>
+      <input
+        id="ai-assist-gate-searches"
+        type="checkbox"
+        :checked="settings.aiAssistGateSearches ?? true"
+        @change="patch('aiAssistGateSearches', ($event.target as HTMLInputElement).checked)"
+      />
+    </div>
+
+    <div class="setting-row">
       <label>
         <strong>Connection test</strong>
         <small>Uses the saved settings — save any changes first, then test.</small>
@@ -95,6 +112,35 @@
         </button>
         <small v-if="testResult" :class="testOk ? 'test-ok' : 'test-fail'">{{ testResult }}</small>
       </div>
+    </div>
+
+    <div class="setting-row sweep-row">
+      <label>
+        <strong>Vet library by file names</strong>
+        <small
+          >Reviews unsettled records ({{ sweepBatchSize }} per run) — the model flags ones whose
+          files look like something else entirely (music, a different book, a collection). Flag
+          only: nothing is changed; each run continues where the last left off.</small
+        >
+      </label>
+      <div class="test-cell">
+        <button type="button" class="test-btn" :disabled="sweeping" @click="runSweep">
+          {{ sweeping ? 'Sweeping…' : sweepCursor > 0 ? 'Sweep next batch' : 'Sweep library' }}
+        </button>
+        <small v-if="sweepStatus" class="sweep-status">{{ sweepStatus }}</small>
+      </div>
+    </div>
+
+    <div v-if="sweepFindings.length > 0" class="sweep-findings">
+      <strong>Flagged records</strong>
+      <ul>
+        <li v-for="finding in sweepFindings" :key="finding.audiobookId">
+          <router-link :to="`/audiobooks/${finding.audiobookId}`" target="_blank">
+            {{ finding.title }}
+          </router-link>
+          <span class="sweep-reason"> — {{ finding.reason }}</span>
+        </li>
+      </ul>
     </div>
   </div>
 </template>
@@ -112,11 +158,41 @@ const testing = ref(false)
 const testResult = ref<string | null>(null)
 const testOk = ref(false)
 
+const sweepBatchSize = 25
+const sweeping = ref(false)
+const sweepStatus = ref<string | null>(null)
+const sweepCursor = ref(0)
+const sweepChecked = ref(0)
+const sweepFindings = ref<{ audiobookId: number; title: string; reason: string }[]>([])
+
 function patch(field: keyof ApplicationSettings, value: unknown) {
   emit('update:settings', {
     ...(props.settings || {}),
     [field]: value,
   } as Partial<ApplicationSettings>)
+}
+
+async function runSweep() {
+  sweeping.value = true
+  sweepStatus.value = null
+  try {
+    const result = await apiService.runAiLibrarySweep(sweepBatchSize, sweepCursor.value)
+    sweepChecked.value += result.checkedCount
+    // Accumulate across batches; dedupe on re-runs of the same slice.
+    const known = new Set(sweepFindings.value.map((f) => f.audiobookId))
+    sweepFindings.value = [
+      ...sweepFindings.value,
+      ...result.suspicious.filter((s) => !known.has(s.audiobookId)),
+    ]
+    sweepCursor.value = result.exhausted ? 0 : (result.lastId ?? 0)
+    sweepStatus.value = result.exhausted
+      ? `Backlog swept — ${sweepChecked.value} record(s) checked, ${sweepFindings.value.length} flagged.`
+      : `${sweepChecked.value} checked so far, ${sweepFindings.value.length} flagged — run again to continue.`
+  } catch (err) {
+    sweepStatus.value = err instanceof Error ? err.message : 'Sweep failed.'
+  } finally {
+    sweeping.value = false
+  }
 }
 
 async function testConnection() {
@@ -226,5 +302,39 @@ async function testConnection() {
 }
 .test-fail {
   color: #ff8a8a;
+}
+
+.sweep-status {
+  color: #868e96;
+  text-align: right;
+}
+
+.sweep-findings {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: rgba(220, 90, 74, 0.08);
+  border: 1px solid rgba(220, 90, 74, 0.3);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.sweep-findings strong {
+  color: #fff;
+}
+.sweep-findings ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+.sweep-findings li {
+  margin: 0.25rem 0;
+}
+.sweep-findings a {
+  color: #7cb5ec;
+  text-decoration: none;
+}
+.sweep-findings a:hover {
+  text-decoration: underline;
+}
+.sweep-reason {
+  color: #f0b3ab;
 }
 </style>

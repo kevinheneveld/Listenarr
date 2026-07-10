@@ -103,18 +103,36 @@ namespace Listenarr.Application.Downloads.Submission
             }
 
             // Only consider non-rejected, score > 0 results
-            var topResult = scoredResults
+            var acceptable = scoredResults
                 .Where(s => !s.IsRejected && s.TotalScore > 0)
                 .OrderByDescending(s => s.TotalScore)
-                .FirstOrDefault();
+                .ToList();
 
-            if (topResult == null)
+            if (acceptable.Count == 0)
             {
                 logger.LogWarning("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
                 return new SearchAndDownloadResult
                 {
                     Success = false,
                     Message = "No acceptable search results found"
+                };
+            }
+
+            // AI release gate: one model call over the shortlist names releases
+            // that are clearly not this audiobook (music albums, wrong books);
+            // the pick drops to the best unflagged candidate. Fails open — an
+            // unreachable endpoint or garbage answer gates nothing, and a
+            // wrongly-gated release only waits for the next search cycle.
+            var topResult = await PickThroughAiGateAsync(audiobook, acceptable);
+            if (topResult == null)
+            {
+                logger.LogWarning(
+                    "AI release gate flagged every acceptable candidate for audiobook '{Title}' — skipping this cycle",
+                    LogRedaction.SanitizeText(audiobook.Title));
+                return new SearchAndDownloadResult
+                {
+                    Success = false,
+                    Message = "All candidates were flagged as wrong content by the AI release gate"
                 };
             }
 
@@ -150,6 +168,65 @@ namespace Listenarr.Application.Downloads.Submission
                 DownloadClientUsed = downloadClientId,
                 SearchResult = topResult.SearchResult
             };
+        }
+
+        /// <summary>
+        /// Returns the best-scored candidate that the AI release gate didn't
+        /// flag, or the plain top pick whenever the gate is disabled,
+        /// unconfigured, unreachable, or answers garbage. Null only when the
+        /// gate confidently flagged the entire shortlist.
+        /// </summary>
+        private async Task<QualityScore?> PickThroughAiGateAsync(
+            Audiobook audiobook,
+            List<QualityScore> acceptable)
+        {
+            try
+            {
+                var settings = await configurationService.GetApplicationSettingsAsync();
+                if (!settings.AiAssistGateSearches || !await aiAssist.IsConfiguredAsync())
+                {
+                    return acceptable[0];
+                }
+
+                var shortlist = acceptable.Take(AiReleaseGateJudge.MaxCandidates).ToList();
+                var releases = shortlist
+                    .Select((s, i) => new AiReleaseGateJudge.ReleaseInput(i, s.SearchResult.Title ?? string.Empty, s.SearchResult.Size))
+                    .ToList();
+
+                var raw = await aiAssist.CompleteJsonAsync(
+                    AiReleaseGateJudge.BuildSystemPrompt(),
+                    AiReleaseGateJudge.BuildUserPrompt(
+                        audiobook.Title ?? string.Empty,
+                        audiobook.Authors ?? new List<string>(),
+                        audiobook.Runtime,
+                        releases));
+                if (raw == null) return acceptable[0];
+
+                var validIndexes = releases.Select(r => r.Index).ToHashSet();
+                var flagged = AiReleaseGateJudge.ParseResponse(raw, validIndexes);
+                if (flagged.Count == 0) return acceptable[0];
+
+                foreach (var verdict in flagged)
+                {
+                    logger.LogInformation(
+                        "AI release gate flagged candidate for '{Book}': {Release} — {Reason}",
+                        LogRedaction.SanitizeText(audiobook.Title),
+                        LogRedaction.SanitizeText(shortlist[verdict.Index].SearchResult.Title),
+                        LogRedaction.SanitizeText(verdict.Reason));
+                }
+
+                var flaggedIndexes = flagged.Select(v => v.Index).ToHashSet();
+                var pick = shortlist.Where((_, i) => !flaggedIndexes.Contains(i)).FirstOrDefault();
+                // Beyond the shortlist the gate had no opinion; those candidates
+                // scored below the shortlist but weren't judged, so they remain
+                // eligible rather than being condemned unseen.
+                return pick ?? acceptable.Skip(shortlist.Count).FirstOrDefault();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogWarning(ex, "AI release gate failed; using the top-scored candidate");
+                return acceptable[0];
+            }
         }
     }
 }

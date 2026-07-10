@@ -122,6 +122,23 @@ namespace Listenarr.Api.Features.Library
         }
 
         /// <summary>
+        /// AI library sweep: review a slice of the vetting backlog (records
+        /// with files whose verification isn't settled) by file names via the
+        /// configured AI-assist endpoint, flagging obvious wrong content.
+        /// Cursor-paged (afterId) and capped per call — each batch is a slow
+        /// LLM round-trip. Flag-only; nothing is changed.
+        /// </summary>
+        [HttpPost("ai-sweep")]
+        public async Task<IActionResult> AiSweep(
+            [FromServices] LibraryAiSweepWorkflow aiSweepWorkflow,
+            [FromQuery] int limit = 25,
+            [FromQuery] int afterId = 0,
+            CancellationToken ct = default)
+        {
+            return await aiSweepWorkflow.SweepAsync(limit, afterId, ct);
+        }
+
+        /// <summary>
         /// Resolve a 409 asin_conflict from PUT /library/{id}: pick which of the
         /// two colliding records survives. The loser's files are deleted from
         /// disk (same semantics as duplicates/merge) and its downloads/history/
