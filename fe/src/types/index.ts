@@ -1605,14 +1605,25 @@ export interface MergeDuplicatesResult {
   warnings: string[]
 }
 
-/** Which record a PUT /library/{id} ASIN collision conflicts with — enough to decide how to resolve it. */
-export interface AsinConflictInfo {
+/**
+ * One side of a PUT /library/{id} ASIN collision — both the record being
+ * edited and the record already holding the ASIN get this summary, so the
+ * resolution panel can compare their relative merits (files, size, bitrate,
+ * verification verdicts) instead of forcing a blind choice.
+ */
+export interface AsinConflictSide {
   audiobookId: number
   title: string
   authors?: string[]
   basePath?: string | null
+  asin?: string | null
   fileCount: number
-  asin: string
+  totalSizeBytes: number
+  maxBitrate: number
+  formats: string[]
+  runtime?: number | null
+  verificationStatus?: string | number | null
+  verificationConfidence?: number | null
 }
 
 export interface ResolveAsinConflictResult {

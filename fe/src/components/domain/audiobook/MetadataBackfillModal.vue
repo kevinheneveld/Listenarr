@@ -49,7 +49,7 @@ import { apiService } from '@/services/api'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import { useToast } from '@/services/toastService'
 import { logger } from '@/utils/logger'
-import type { Audiobook, AudibleSearchResult, EmbeddedFileMetadata, AsinConflictInfo } from '@/types'
+import type { Audiobook, AudibleSearchResult, EmbeddedFileMetadata, AsinConflictSide } from '@/types'
 
 interface Props {
   visible: boolean
@@ -140,9 +140,12 @@ const phase = ref<Phase>('idle')
 const errorMessage = ref<string | null>(null)
 // Set when Apply hits a 409 asin_conflict: the fresh metadata's ASIN is
 // already claimed by another library record. Rendered as a resolution panel
-// (keep this file vs. merge into the existing record) instead of a dead-end
+// comparing both records' merits (keep this file / merge into the existing
+// record / apply without the ASIN and decide later) instead of a dead-end
 // error toast — see applyChanges()'s catch block.
-const asinConflict = ref<AsinConflictInfo | null>(null)
+const asinConflict = ref<{ conflict: AsinConflictSide; record: AsinConflictSide | null } | null>(
+  null,
+)
 const resolvingConflict = ref(false)
 // Bumped whenever the user starts a new search or jumps straight to a
 // candidate/pasted ASIN. An in-flight searchCandidates() loop checks this
@@ -822,7 +825,7 @@ function formatValue(v: unknown): string {
 
 // ── Apply ──────────────────────────────────────────────────────────────────
 
-async function applyChanges() {
+async function applyChanges(includeAsin = true) {
   const book = props.audiobook
   const metadata = fresh.value
   if (!book || !metadata) return
@@ -869,6 +872,14 @@ async function applyChanges() {
     }
   }
 
+  // The "apply without ASIN" conflict resolution: everything else lands, the
+  // contested identifier stays off so the unique-ASIN backstop can't reject
+  // the write. Both records then share title+author and surface as a
+  // duplicate group in Settings → Duplicates for a decision later.
+  if (!includeAsin) {
+    delete payload.asin
+  }
+
   phase.value = 'applying'
   try {
     // When applying Audible metadata we always want the cover art cached
@@ -902,20 +913,68 @@ async function applyChanges() {
 
 /**
  * PUT /library/{id} returns a bare 409 for most conflicts, but the ASIN
- * unique-constraint case is enriched with structured conflict info so the
- * UI can offer a real resolution instead of a dead-end error (mirrors the
- * extractFileToNewAudiobook precedent — see api.ts).
+ * unique-constraint case is enriched with structured summaries of BOTH
+ * colliding records so the UI can offer an informed resolution instead of a
+ * dead-end error (mirrors the extractFileToNewAudiobook precedent — see
+ * api.ts).
  */
-function parseAsinConflict(err: unknown): AsinConflictInfo | null {
+function parseAsinConflict(
+  err: unknown,
+): { conflict: AsinConflictSide; record: AsinConflictSide | null } | null {
   const status = (err as { status?: number } | null)?.status
   const body = (err as { body?: string } | null)?.body
   if (status !== 409 || typeof body !== 'string' || !body) return null
   try {
-    const parsed = JSON.parse(body) as { code?: string; conflict?: AsinConflictInfo }
-    return parsed?.code === 'asin_conflict' && parsed.conflict ? parsed.conflict : null
+    const parsed = JSON.parse(body) as {
+      code?: string
+      conflict?: AsinConflictSide
+      record?: AsinConflictSide | null
+    }
+    return parsed?.code === 'asin_conflict' && parsed.conflict
+      ? { conflict: parsed.conflict, record: parsed.record ?? null }
+      : null
   } catch {
     return null
   }
+}
+
+// ── Conflict comparison helpers ────────────────────────────────────────────
+
+function formatConflictSize(bytes: number | undefined): string {
+  if (!bytes || bytes <= 0) return '—'
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`
+  return `${(bytes / 1024).toFixed(0)} KB`
+}
+
+function formatConflictBitrate(bps: number | undefined): string {
+  if (!bps || bps <= 0) return '—'
+  return `${Math.round(bps / 1000)} kbps`
+}
+
+const VERIFICATION_LABELS: Record<string, string> = {
+  unverified: 'Not yet verified',
+  agentVerified: 'Verified ✓',
+  agentFlagged: 'Needs review ⚠',
+  agentUnverifiable: 'No spoken credits',
+  manuallyVerified: 'Manually verified ✓',
+  rejected: 'Rejected ✗',
+  // The enum serializes as camelCase strings; keep numeric fallbacks in case
+  // a serializer config change ever regresses that.
+  '0': 'Not yet verified',
+  '1': 'Verified ✓',
+  '2': 'Needs review ⚠',
+  '3': 'Manually verified ✓',
+  '4': 'Rejected ✗',
+  '5': 'No spoken credits',
+}
+
+function formatVerification(side: AsinConflictSide): string {
+  const status = side.verificationStatus
+  if (status == null) return '—'
+  const label = VERIFICATION_LABELS[String(status)] ?? String(status)
+  const confidence = side.verificationConfidence
+  return confidence != null ? `${label} (${Math.round(confidence * 100)}%)` : label
 }
 
 function cancelAsinConflict() {
@@ -925,7 +984,7 @@ function cancelAsinConflict() {
 /** Keep this record: merge the conflicting record into it, then retry the apply. */
 async function keepThisRecord() {
   const book = props.audiobook
-  const conflict = asinConflict.value
+  const conflict = asinConflict.value?.conflict
   if (!book || !conflict) return
 
   resolvingConflict.value = true
@@ -951,7 +1010,7 @@ async function keepThisRecord() {
 /** This file is the duplicate: merge it into the existing (already-correct) record instead. */
 async function keepOtherRecord() {
   const book = props.audiobook
-  const conflict = asinConflict.value
+  const conflict = asinConflict.value?.conflict
   if (!book || !conflict) return
 
   resolvingConflict.value = true
@@ -969,6 +1028,30 @@ async function keepOtherRecord() {
       'Merge failed',
       err instanceof Error ? err.message : 'Could not merge into the existing record.',
     )
+  } finally {
+    resolvingConflict.value = false
+  }
+}
+
+/**
+ * Defer the decision: apply every selected field EXCEPT the contested ASIN.
+ * Nothing is deleted; the record gets its correct title/author/cover now,
+ * and because both records then share title+author they surface together as
+ * a duplicate group in Settings → Duplicates, whose comparison view can
+ * settle which copy survives later.
+ */
+async function applyWithoutAsin() {
+  const conflict = asinConflict.value?.conflict
+  asinConflict.value = null
+  resolvingConflict.value = true
+  try {
+    await applyChanges(false)
+    if (conflict) {
+      toast.info(
+        'Decide later',
+        `Metadata applied without the ASIN — this record and "${conflict.title}" will appear together under Settings → Duplicates.`,
+      )
+    }
   } finally {
     resolvingConflict.value = false
   }
@@ -1254,17 +1337,62 @@ function candidateYear(c: AudibleSearchResult): string {
               <div class="asin-conflict-text">
                 <strong>This ASIN is already used by another book in your library</strong>
                 <p class="muted">
-                  <strong>{{ asinConflict.title }}</strong>
-                  <span v-if="asinConflict.authors?.length"> · {{ asinConflict.authors.join(', ') }}</span>
-                  · {{ asinConflict.fileCount }} file{{ asinConflict.fileCount === 1 ? '' : 's' }}
+                  These look like two copies of the same audiobook. Compare them below, then
+                  either pick a survivor now (the other record's files are
+                  <strong>deleted from disk</strong>, its downloads/history move to the
+                  survivor) — or apply the metadata without the ASIN and decide later.
                 </p>
-                <p class="muted">
-                  These look like the same audiobook. Pick which record to keep — the other
-                  record's files will be <strong>deleted from disk</strong> and its downloads/
-                  history merged into the survivor.
-                </p>
+                <table class="asin-conflict-table">
+                  <thead>
+                    <tr>
+                      <th></th>
+                      <th>This record</th>
+                      <th>
+                        <router-link
+                          :to="`/audiobooks/${asinConflict.conflict.audiobookId}`"
+                          target="_blank"
+                        >
+                          {{ asinConflict.conflict.title }}
+                        </router-link>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Files</td>
+                      <td>{{ asinConflict.record?.fileCount ?? '—' }}</td>
+                      <td>{{ asinConflict.conflict.fileCount }}</td>
+                    </tr>
+                    <tr>
+                      <td>Size</td>
+                      <td>{{ formatConflictSize(asinConflict.record?.totalSizeBytes) }}</td>
+                      <td>{{ formatConflictSize(asinConflict.conflict.totalSizeBytes) }}</td>
+                    </tr>
+                    <tr>
+                      <td>Bitrate</td>
+                      <td>{{ formatConflictBitrate(asinConflict.record?.maxBitrate) }}</td>
+                      <td>{{ formatConflictBitrate(asinConflict.conflict.maxBitrate) }}</td>
+                    </tr>
+                    <tr>
+                      <td>Format</td>
+                      <td>{{ asinConflict.record?.formats?.join(', ') || '—' }}</td>
+                      <td>{{ asinConflict.conflict.formats?.join(', ') || '—' }}</td>
+                    </tr>
+                    <tr>
+                      <td>Verification</td>
+                      <td>
+                        {{ asinConflict.record ? formatVerification(asinConflict.record) : '—' }}
+                      </td>
+                      <td>{{ formatVerification(asinConflict.conflict) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
                 <div class="asin-conflict-actions">
-                  <button class="btn btn-primary" :disabled="resolvingConflict" @click="keepThisRecord">
+                  <button
+                    class="btn btn-primary"
+                    :disabled="resolvingConflict"
+                    @click="keepThisRecord"
+                  >
                     <PhSpinner v-if="resolvingConflict" class="ph-spin" />
                     Keep this file — merge the other in
                   </button>
@@ -1273,9 +1401,21 @@ function candidateYear(c: AudibleSearchResult): string {
                     :disabled="resolvingConflict"
                     @click="keepOtherRecord"
                   >
-                    This file is the duplicate — merge into "{{ asinConflict.title }}"
+                    This file is the duplicate — merge into "{{ asinConflict.conflict.title }}"
                   </button>
-                  <button class="btn btn-link" :disabled="resolvingConflict" @click="cancelAsinConflict">
+                  <button
+                    class="btn btn-secondary"
+                    :disabled="resolvingConflict"
+                    title="Applies the selected metadata but skips the contested ASIN. Both records then show up together under Settings → Duplicates, where you can compare and merge them any time."
+                    @click="applyWithoutAsin"
+                  >
+                    Apply without ASIN — decide later
+                  </button>
+                  <button
+                    class="btn btn-link"
+                    :disabled="resolvingConflict"
+                    @click="cancelAsinConflict"
+                  >
                     Cancel — pick a different match instead
                   </button>
                 </div>
@@ -1366,7 +1506,7 @@ function candidateYear(c: AudibleSearchResult): string {
           <button
             class="btn btn-primary"
             :disabled="phase === 'applying' || selected.size === 0"
-            @click="applyChanges"
+            @click="applyChanges()"
           >
             <PhSpinner v-if="phase === 'applying'" class="ph-spin" />
             Apply {{ selected.size }} change{{ selected.size === 1 ? '' : 's' }}
@@ -1793,6 +1933,34 @@ function candidateYear(c: AudibleSearchResult): string {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.6rem;
+}
+.asin-conflict-table {
+  width: 100%;
+  max-width: 34rem;
+  margin: 0.5rem 0;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.asin-conflict-table th,
+.asin-conflict-table td {
+  padding: 0.25rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.asin-conflict-table th {
+  color: #fff;
+  font-weight: 600;
+}
+.asin-conflict-table td:first-child {
+  color: #aaa;
+  white-space: nowrap;
+}
+.asin-conflict-table a {
+  color: #7cb5ec;
+  text-decoration: none;
+}
+.asin-conflict-table a:hover {
+  text-decoration: underline;
 }
 
 .compare-table {

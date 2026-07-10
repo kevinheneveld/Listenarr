@@ -85,6 +85,17 @@
             These are different books
           </button>
         </div>
+        <div v-else class="dupes-group-actions">
+          <button
+            type="button"
+            class="dupes-merge-btn"
+            :disabled="mergingKey !== null"
+            title="Merges the non-keeper records into the keeper: their files are deleted from disk, their downloads/history move to the keeper."
+            @click="mergeTitleAuthorGroup(g)"
+          >
+            {{ mergingKey === g.key ? 'Merging…' : 'Merge into keeper…' }}
+          </button>
+        </div>
       </div>
 
       <div class="dupes-subhead">
@@ -152,6 +163,53 @@ async function mergeGroup(g: DuplicateGroup) {
     const summary = `Removed ${result.rowsDeleted} record(s), ${result.diskFilesDeleted} file(s) from disk; reassigned ${result.historyReassigned} history entries.`
     if (result.warnings.length > 0) {
       toast.warning('Merged with warnings', `${summary} ${result.warnings.join(' ')}`)
+    } else {
+      toast.success('Duplicates merged', summary)
+    }
+    await load()
+  } catch (err) {
+    toast.error('Merge failed', err instanceof Error ? err.message : 'unknown error')
+  } finally {
+    mergingKey.value = null
+  }
+}
+
+/**
+ * Merge a title+author group into its keeper. These rows do NOT share an
+ * ASIN (at most one carries it — the sweep disqualifies groups with two
+ * distinct ASINs), so the same-ASIN merge endpoint would refuse them; the
+ * pairwise resolve-asin-conflict endpoint handles exactly this shape. This
+ * is the "decide later" completion path for backfill ASIN conflicts applied
+ * without their ASIN.
+ */
+async function mergeTitleAuthorGroup(g: DuplicateGroup) {
+  const keeper = g.books.find((b) => b.id === g.suggestedKeeperId) ?? g.books[0]
+  const losers = g.books.filter((b) => b.id !== keeper.id)
+  if (losers.length === 0) return
+
+  const loserFiles = losers.reduce((n, b) => n + b.fileCount, 0)
+  const ok = await showConfirm(
+    `Merge ${losers.length} record(s) into "${keeper.title}" (id ${keeper.id})?\n\n` +
+      `These records share a title and author but not an ASIN — make sure they really are ` +
+      `the same book. The merged-away ${loserFiles} file(s) and folders are DELETED from ` +
+      `disk. Their download and history entries move to the keeper. This cannot be undone.`,
+    'Merge duplicates',
+    { danger: true, confirmText: 'Merge & delete duplicates', cancelText: 'Cancel' },
+  )
+  if (!ok) return
+
+  mergingKey.value = g.key
+  try {
+    let filesDeleted = 0
+    const warnings: string[] = []
+    for (const loser of losers) {
+      const result = await apiService.resolveAsinConflict(keeper.id, loser.id, true)
+      filesDeleted += result.diskFilesDeleted
+      warnings.push(...result.warnings)
+    }
+    const summary = `Removed ${losers.length} record(s), ${filesDeleted} file(s) from disk.`
+    if (warnings.length > 0) {
+      toast.warning('Merged with warnings', `${summary} ${warnings.join(' ')}`)
     } else {
       toast.success('Duplicates merged', summary)
     }

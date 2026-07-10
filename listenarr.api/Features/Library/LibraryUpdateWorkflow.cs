@@ -140,8 +140,12 @@ namespace Listenarr.Api.Features.Library
                 });
             }
 
-            var withFiles = await _repo.GetByIdsWithFilesAsync(new[] { conflict.Id });
-            var fileCount = withFiles.FirstOrDefault()?.Files?.Count ?? 0;
+            // Both sides get a full comparison summary (files, size, bitrate,
+            // verification verdicts) — "which record do I keep?" is a quality
+            // judgment the user can't make from a title alone.
+            var withFiles = await _repo.GetByIdsWithFilesAsync(new[] { id, conflict.Id });
+            var recordSide = withFiles.FirstOrDefault(a => a.Id == id);
+            var conflictSide = withFiles.FirstOrDefault(a => a.Id == conflict.Id);
 
             return new ConflictObjectResult(new
             {
@@ -150,16 +154,34 @@ namespace Listenarr.Api.Features.Library
                 status = 409,
                 code = "asin_conflict",
                 detail = "This ASIN is already used by another audiobook in your library.",
-                conflict = new
-                {
-                    audiobookId = conflict.Id,
-                    title = conflict.Title,
-                    authors = conflict.Authors,
-                    basePath = conflict.BasePath,
-                    fileCount,
-                    asin = conflictingAsin
-                }
+                conflict = SummarizeConflictSide(conflictSide ?? conflict, conflictingAsin),
+                record = recordSide == null ? null : SummarizeConflictSide(recordSide, recordSide.Asin)
             });
+        }
+
+        private static object SummarizeConflictSide(Audiobook book, string? asin)
+        {
+            var files = book.Files ?? new List<AudiobookFile>();
+            return new
+            {
+                audiobookId = book.Id,
+                title = book.Title,
+                authors = book.Authors,
+                basePath = book.BasePath,
+                asin,
+                fileCount = files.Count,
+                totalSizeBytes = files.Sum(f => f.Size ?? 0),
+                maxBitrate = files.Count > 0 ? files.Max(f => f.Bitrate ?? 0) : 0,
+                formats = files
+                    .Select(f => f.Format)
+                    .Where(f => !string.IsNullOrWhiteSpace(f))
+                    .Select(f => f!.ToUpperInvariant())
+                    .Distinct()
+                    .ToList(),
+                runtime = book.Runtime,
+                verificationStatus = book.VerificationStatus,
+                verificationConfidence = book.VerificationConfidence
+            };
         }
 
         private static void ApplySeriesMembershipUpdates(Audiobook existingAudiobook, Audiobook updatedAudiobook)
