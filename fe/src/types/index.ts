@@ -378,6 +378,13 @@ export interface TranslatePathResponse {
 }
 
 export interface ApplicationSettings {
+  /**
+   * Optimistic-concurrency token. The backend rejects a save whose version
+   * doesn't match the persisted row (409 settings_concurrency_conflict), so
+   * after every save the local editing copy must adopt the response's
+   * version or the SECOND save without a page reload fails.
+   */
+  version?: number
   verificationOpeningSeconds?: number
   verificationClosingSeconds?: number
   verificationOnImport?: boolean

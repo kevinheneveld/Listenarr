@@ -43,6 +43,12 @@ namespace Listenarr.Application.Common.Contracts
 
         /// <summary>Settings-page probe: is the configured endpoint reachable and does the model answer?</summary>
         Task<AiAssistTestResult> TestConnectionAsync(CancellationToken ct = default);
+
+        /// <summary>
+        /// Probe explicit values instead of the saved settings — lets the
+        /// settings page test what's typed in the form before saving it.
+        /// </summary>
+        Task<AiAssistTestResult> TestConnectionAsync(string? baseUrl, string? model, string? apiKey, CancellationToken ct = default);
     }
 
     public sealed record AiAssistTestResult(bool Ok, string Detail);

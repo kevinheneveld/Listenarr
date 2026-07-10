@@ -138,6 +138,10 @@ export const useConfigurationStore = defineStore('configuration', () => {
     try {
       const savedSettings = await apiService.saveApplicationSettings(settings)
       applicationSettings.value = savedSettings
+      // Returned so callers holding their own editing copy can adopt the new
+      // concurrency version — without it, a second save without a reload is
+      // rejected as a settings_concurrency_conflict.
+      return savedSettings
     } catch (error) {
       errorTracking.captureException(error as Error, {
         component: 'ConfigurationStore',

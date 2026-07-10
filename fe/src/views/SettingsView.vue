@@ -827,7 +827,15 @@ const saveSettings = async () => {
     // Call the runtime store save method. Some test setups replace the store
     // instance or spy on the store returned from `useConfigurationStore()` at
     // different times; call both if they differ to ensure the spy is observed.
-    await runtimeConfigStore.saveApplicationSettings(settingsToSave)
+    const saved = await runtimeConfigStore.saveApplicationSettings(settingsToSave)
+    // Adopt the new concurrency version into the local editing copy — the
+    // backend rejects any later save carrying the pre-save version, so
+    // without this a second save without a page reload fails with a
+    // settings_concurrency_conflict (live case: fix a typo'd AI-assist URL
+    // and re-save → 500).
+    if (saved && typeof saved.version === 'number' && settings.value) {
+      settings.value.version = saved.version
+    }
     if (
       configStore !== runtimeConfigStore &&
       typeof configStore.saveApplicationSettings === 'function'

@@ -1569,11 +1569,19 @@ class ApiService {
    * its downloads/history/move jobs are reassigned to the winner (same
    * semantics as mergeDuplicates).
    */
-  /** Probe the saved AI-assist endpoint (Settings → AI Assist "Test connection"). */
-  async testAiAssist(): Promise<{ ok: boolean; detail: string }> {
+  /**
+   * Probe an AI-assist endpoint (Settings → AI Assist "Test connection").
+   * Pass the form's current values so what's typed gets tested without
+   * saving first; an empty body tests the saved settings instead.
+   */
+  async testAiAssist(values?: {
+    baseUrl?: string
+    model?: string
+    apiKey?: string
+  }): Promise<{ ok: boolean; detail: string }> {
     return this.request<{ ok: boolean; detail: string }>(`/configuration/settings/ai-assist/test`, {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify(values ?? {}),
     })
   }
 

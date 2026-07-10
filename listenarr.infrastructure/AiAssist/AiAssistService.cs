@@ -125,7 +125,12 @@ namespace Listenarr.Infrastructure.AiAssist
         public async Task<AiAssistTestResult> TestConnectionAsync(CancellationToken ct = default)
         {
             var settings = await _configurationService.GetApplicationSettingsAsync();
-            if (string.IsNullOrWhiteSpace(settings.AiAssistBaseUrl) || string.IsNullOrWhiteSpace(settings.AiAssistModel))
+            return await TestConnectionAsync(settings.AiAssistBaseUrl, settings.AiAssistModel, settings.AiAssistApiKey, ct);
+        }
+
+        public async Task<AiAssistTestResult> TestConnectionAsync(string? baseUrl, string? model, string? apiKey, CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(model))
             {
                 return new AiAssistTestResult(false, "Set a base URL and model first.");
             }
@@ -135,9 +140,9 @@ namespace Listenarr.Infrastructure.AiAssist
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 linked.CancelAfter(TimeSpan.FromSeconds(TestTimeoutSeconds));
 
-                using var request = BuildChatRequest(settings.AiAssistBaseUrl, settings.AiAssistApiKey, new
+                using var request = BuildChatRequest(baseUrl, apiKey, new
                 {
-                    model = settings.AiAssistModel,
+                    model,
                     temperature = 0,
                     stream = false,
                     max_tokens = 20,
@@ -156,8 +161,8 @@ namespace Listenarr.Infrastructure.AiAssist
                 }
 
                 using var doc = JsonDocument.Parse(body);
-                var model = doc.RootElement.TryGetProperty("model", out var m) ? m.GetString() : settings.AiAssistModel;
-                return new AiAssistTestResult(true, $"Connected — model \"{model}\" answered.");
+                var answeredModel = doc.RootElement.TryGetProperty("model", out var m) ? m.GetString() : model;
+                return new AiAssistTestResult(true, $"Connected — model \"{answeredModel}\" answered.");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

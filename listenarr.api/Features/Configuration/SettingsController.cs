@@ -69,15 +69,29 @@ namespace Listenarr.Api.Features.Configuration
             }
         }
 
+        public class AiAssistTestRequest
+        {
+            public string? BaseUrl { get; set; }
+            public string? Model { get; set; }
+            public string? ApiKey { get; set; }
+        }
+
         /// <summary>
-        /// Probe the configured AI-assist endpoint: is it reachable and does
-        /// the model answer? Uses the SAVED settings — save first, then test.
+        /// Probe an AI-assist endpoint: is it reachable and does the model
+        /// answer? Tests the values in the request body when provided (so the
+        /// settings form can test what's typed before saving); falls back to
+        /// the saved settings when the body is empty.
         /// </summary>
         [Tags("Settings")]
         [HttpPost("settings/ai-assist/test")]
-        public async Task<IActionResult> TestAiAssist([FromServices] IAiAssistService aiAssist, CancellationToken ct)
+        public async Task<IActionResult> TestAiAssist(
+            [FromServices] IAiAssistService aiAssist,
+            [FromBody] AiAssistTestRequest? request,
+            CancellationToken ct)
         {
-            var result = await aiAssist.TestConnectionAsync(ct);
+            var result = !string.IsNullOrWhiteSpace(request?.BaseUrl) || !string.IsNullOrWhiteSpace(request?.Model)
+                ? await aiAssist.TestConnectionAsync(request!.BaseUrl, request.Model, request.ApiKey, ct)
+                : await aiAssist.TestConnectionAsync(ct);
             return Ok(new { ok = result.Ok, detail = result.Detail });
         }
 
@@ -111,6 +125,14 @@ namespace Listenarr.Api.Features.Configuration
                 }
 
                 return Ok(savedSettings);
+            }
+            catch (Listenarr.Application.Common.Exceptions.ApplicationConflictException ex)
+            {
+                // Optimistic-concurrency loss (another request bumped the
+                // settings row) is the caller's to resolve by reloading —
+                // don't bury it in the generic 500.
+                _logger.LogWarning("Application settings save rejected: {Message}", ex.Message);
+                return Conflict(new { error = "settings_concurrency_conflict", message = ex.Message });
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {

@@ -104,7 +104,7 @@
     <div class="setting-row">
       <label>
         <strong>Connection test</strong>
-        <small>Uses the saved settings — save any changes first, then test.</small>
+        <small>Tests the values as entered above — no need to save first.</small>
       </label>
       <div class="test-cell">
         <button type="button" class="test-btn" :disabled="testing" @click="testConnection">
@@ -199,7 +199,13 @@ async function testConnection() {
   testing.value = true
   testResult.value = null
   try {
-    const result = await apiService.testAiAssist()
+    // Send the form's CURRENT values — what you see is what gets tested,
+    // saved or not.
+    const result = await apiService.testAiAssist({
+      baseUrl: props.settings.aiAssistBaseUrl ?? '',
+      model: props.settings.aiAssistModel ?? '',
+      apiKey: props.settings.aiAssistApiKey ?? '',
+    })
     testOk.value = result.ok
     testResult.value = result.detail
   } catch (err) {

@@ -19,5 +19,8 @@ namespace Listenarr.Tests.Mocks
 
         public Task<AiAssistTestResult> TestConnectionAsync(CancellationToken ct = default)
             => Task.FromResult(new AiAssistTestResult(Configured, Configured ? "mock" : "not configured"));
+
+        public Task<AiAssistTestResult> TestConnectionAsync(string? baseUrl, string? model, string? apiKey, CancellationToken ct = default)
+            => TestConnectionAsync(ct);
     }
 }
