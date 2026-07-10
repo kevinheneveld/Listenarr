@@ -170,6 +170,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton(new Mock<IDiscordBotService>().Object);
             services.AddSingleton<IFfmpegService, FfmpegServiceMock>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService, Listenarr.Tests.Mocks.WhisperServiceMock>();
+            services.AddSingleton<IAiAssistService, Listenarr.Tests.Mocks.AiAssistServiceMock>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.Contracts.IAudioSampleExtractor, Listenarr.Infrastructure.Ffmpeg.Sampling.AudioSampleExtractor>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.Contracts.IIdentityVerifier, Listenarr.Application.Audiobooks.Verification.DeterministicIdentityVerifier>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService, Listenarr.Application.Audiobooks.Verification.LibraryVerificationQueueService>();

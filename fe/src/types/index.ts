@@ -384,6 +384,10 @@ export interface ApplicationSettings {
   verificationLowCpuPriority?: boolean
   verificationAutoRejectWrongContent?: boolean
   verificationEscalationModel?: string
+  aiAssistEnabled?: boolean
+  aiAssistBaseUrl?: string
+  aiAssistModel?: string
+  aiAssistApiKey?: string
   outputPath: string
   folderNamingPattern: string
   fileNamingPattern: string

@@ -70,6 +70,18 @@ namespace Listenarr.Api.Features.Configuration
         }
 
         /// <summary>
+        /// Probe the configured AI-assist endpoint: is it reachable and does
+        /// the model answer? Uses the SAVED settings — save first, then test.
+        /// </summary>
+        [Tags("Settings")]
+        [HttpPost("settings/ai-assist/test")]
+        public async Task<IActionResult> TestAiAssist([FromServices] IAiAssistService aiAssist, CancellationToken ct)
+        {
+            var result = await aiAssist.TestConnectionAsync(ct);
+            return Ok(new { ok = result.Ok, detail = result.Detail });
+        }
+
+        /// <summary>
         /// Save application settings. Broadcasts the update to all connected realtime clients.
         /// </summary>
         /// <param name="settings">Updated application settings.</param>

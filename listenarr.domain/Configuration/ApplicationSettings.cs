@@ -140,6 +140,19 @@ namespace Listenarr.Domain.Configuration
         // "Not an audiobook" flow — purge files, blocklist the delivering release,
         // re-monitor, re-search. NoSpokenCredits/Uncertain never auto-reject.
         public bool VerificationAutoRejectWrongContent { get; set; } = true;
+
+        // AI assist: an optional OpenAI-compatible chat-completions endpoint
+        // (Ollama, LM Studio, OpenRouter, OpenAI, …) used for fuzzy text tasks
+        // deterministic code handles poorly — currently semantic destination
+        // matching in the split-collection preview ("Rama" → the record titled
+        // "Rendezvous with Rama"). Every consumer must degrade gracefully to
+        // its deterministic behavior when this is disabled or unreachable —
+        // the endpoint may live on a machine that sleeps (a desktop running
+        // Ollama), so absence is an expected steady state, not an error.
+        public bool AiAssistEnabled { get; set; } = false;
+        public string AiAssistBaseUrl { get; set; } = string.Empty; // e.g. http://192.168.1.20:11434/v1
+        public string AiAssistModel { get; set; } = string.Empty;   // e.g. qwen3:8b
+        public string AiAssistApiKey { get; set; } = string.Empty;  // optional; hosted services only
         public List<string> ImportBlacklistExtensions
         {
             get

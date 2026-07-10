@@ -1569,6 +1569,14 @@ class ApiService {
    * its downloads/history/move jobs are reassigned to the winner (same
    * semantics as mergeDuplicates).
    */
+  /** Probe the saved AI-assist endpoint (Settings → AI Assist "Test connection"). */
+  async testAiAssist(): Promise<{ ok: boolean; detail: string }> {
+    return this.request<{ ok: boolean; detail: string }>(`/configuration/settings/ai-assist/test`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+  }
+
   async resolveAsinConflict(
     id: number,
     conflictingAudiobookId: number,

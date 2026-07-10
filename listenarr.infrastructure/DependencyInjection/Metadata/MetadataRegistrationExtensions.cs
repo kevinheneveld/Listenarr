@@ -30,6 +30,11 @@ internal static class MetadataRegistrationExtensions
         services.AddHttpClient<IAudnexusService, AudnexusService>()
             .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler)
             .AddPolicyHandler(retryPolicy);
+        // No retry policy: LLM generation is slow, and every consumer already
+        // degrades to deterministic behavior on failure — retrying would just
+        // triple a timeout nobody is waiting on.
+        services.AddHttpClient<IAiAssistService, Listenarr.Infrastructure.AiAssist.AiAssistService>()
+            .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler);
         return services;
     }
 

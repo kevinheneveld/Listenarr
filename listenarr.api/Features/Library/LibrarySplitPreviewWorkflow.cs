@@ -35,6 +35,7 @@ namespace Listenarr.Api.Features.Library
         private readonly IAudiobookFileRepository _audioFileRepository;
         private readonly IFfmpegService _ffmpegService;
         private readonly IFileSystem _fileSystem;
+        private readonly IAiAssistService _aiAssist;
         private readonly ILogger<LibrarySplitPreviewWorkflow> _logger;
 
         public LibrarySplitPreviewWorkflow(
@@ -42,12 +43,14 @@ namespace Listenarr.Api.Features.Library
             IAudiobookFileRepository audioFileRepository,
             IFfmpegService ffmpegService,
             IFileSystem fileSystem,
+            IAiAssistService aiAssist,
             ILogger<LibrarySplitPreviewWorkflow> logger)
         {
             _repo = repo;
             _audioFileRepository = audioFileRepository;
             _ffmpegService = ffmpegService;
             _fileSystem = fileSystem;
+            _aiAssist = aiAssist;
             _logger = logger;
         }
 
@@ -127,25 +130,101 @@ namespace Listenarr.Api.Features.Library
             }
             var titleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Title ?? string.Empty);
 
-            var response = clusters.Select(cluster =>
+            var deterministic = clusters.Select(cluster => new
             {
-                var suggested = SplitDestinationSuggester.Suggest(cluster.DisplayName, sameAuthor)
-                                ?? SplitDestinationSuggester.Suggest(cluster.DisplayName, others);
+                cluster.Key,
+                cluster.DisplayName,
+                cluster.Files,
+                Suggested = SplitDestinationSuggester.Suggest(cluster.DisplayName, sameAuthor)
+                            ?? SplitDestinationSuggester.Suggest(cluster.DisplayName, others)
+            }).ToList();
+
+            // Optional AI pass: a language model reviews every group against
+            // the candidate list and can fill gaps the substring matcher
+            // missed ("Rama" → "Rendezvous with Rama") or fix its junk
+            // matches ("Space Trilogy" → "Space"). Advisory only — the user
+            // confirms every group — and any failure keeps the deterministic
+            // suggestions untouched.
+            var aiSuggestions = await TryRefineWithAiAsync(audiobook, deterministic
+                .Select(d => new SplitSuggestionAiRefiner.ClusterInput(
+                    d.Key,
+                    d.DisplayName,
+                    d.Files.Take(SplitSuggestionAiRefiner.MaxSampleFileNames)
+                        .Select(f => Path.GetFileName(f.Path ?? string.Empty)).ToList(),
+                    d.Suggested))
+                .ToList(), sameAuthor, others, ct);
+
+            var response = deterministic.Select(d =>
+            {
+                var fromAi = aiSuggestions != null && aiSuggestions.TryGetValue(d.Key, out var aiTarget);
+                var suggested = fromAi && aiSuggestions != null ? aiSuggestions[d.Key] : d.Suggested;
                 return new
                 {
-                    key = cluster.Key,
-                    displayName = cluster.DisplayName,
-                    fileIds = cluster.Files.Select(f => f.Id).ToList(),
-                    fileNames = cluster.Files
+                    key = d.Key,
+                    displayName = d.DisplayName,
+                    fileIds = d.Files.Select(f => f.Id).ToList(),
+                    fileNames = d.Files
                         .Select(f => Path.GetFileName(f.Path ?? string.Empty))
                         .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                         .ToList(),
                     suggestedTargetId = suggested,
-                    suggestedTargetTitle = suggested.HasValue && titleById.TryGetValue(suggested.Value, out var t) ? t : null
+                    suggestedTargetTitle = suggested.HasValue && titleById.TryGetValue(suggested.Value, out var t) ? t : null,
+                    suggestionSource = suggested == null ? null : (fromAi ? "ai" : "title-match")
                 };
             }).ToList();
 
             return new OkObjectResult(new { audiobookId = id, clusters = response });
+        }
+
+        private async Task<Dictionary<string, int?>?> TryRefineWithAiAsync(
+            Audiobook audiobook,
+            IReadOnlyList<SplitSuggestionAiRefiner.ClusterInput> clusterInputs,
+            List<(int Id, string Title)> sameAuthor,
+            List<(int Id, string Title)> others,
+            CancellationToken ct)
+        {
+            try
+            {
+                if (!await _aiAssist.IsConfiguredAsync(ct)) return null;
+
+                // Same-author candidates first — they almost always contain the
+                // answer — then pad with the rest of the library up to the cap.
+                var candidates = sameAuthor
+                    .Concat(others)
+                    .Take(SplitSuggestionAiRefiner.MaxCandidates)
+                    .Select(c => new SplitSuggestionAiRefiner.CandidateInput(c.Id, c.Title))
+                    .ToList();
+                if (candidates.Count == 0 || clusterInputs.Count == 0) return null;
+
+                var raw = await _aiAssist.CompleteJsonAsync(
+                    SplitSuggestionAiRefiner.BuildSystemPrompt(),
+                    SplitSuggestionAiRefiner.BuildUserPrompt(
+                        audiobook.Title ?? string.Empty,
+                        audiobook.Authors ?? new List<string>(),
+                        clusterInputs,
+                        candidates),
+                    ct);
+                if (raw == null) return null;
+
+                var validIds = candidates.Select(c => c.Id).ToHashSet();
+                var parsed = SplitSuggestionAiRefiner.ParseResponse(raw, validIds);
+                if (parsed.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "AI assist refined split suggestions for audiobook {Id}: {Count} of {Total} groups answered",
+                        audiobook.Id, parsed.Count, clusterInputs.Count);
+                }
+                return parsed.Count > 0 ? parsed : null;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "AI assist split refinement failed; keeping deterministic suggestions");
+                return null;
+            }
         }
     }
 }
