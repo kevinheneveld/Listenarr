@@ -159,9 +159,31 @@ namespace Listenarr.Application.Search.Audible
 
             if (!string.IsNullOrEmpty(title))
             {
-                authorFiltered = authorFiltered.Where(b =>
+                // Substring first, then token overlap: editions title the
+                // same book differently ("20,000 Leagues…" vs "Twenty
+                // Thousand Leagues…"), and strict containment silently
+                // dropped the variants (live case: the Bill Homewood
+                // edition invisible while 11 siblings matched).
+                var titleFiltered = authorFiltered.Where(b =>
                     (!string.IsNullOrWhiteSpace(b.Title) && b.Title.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (!string.IsNullOrWhiteSpace(b.Subtitle) && b.Subtitle.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0));
+                    (!string.IsNullOrWhiteSpace(b.Subtitle) && b.Subtitle.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    TitleMatcher.MostlyMatches(b.Title, b.Subtitle, title)).ToList();
+                if (titleFiltered.Count == 0)
+                {
+                    // A title matching NOTHING on the author's own shelf is
+                    // far more likely misspelled than absent (live case:
+                    // "20,000 Leages" [sic] dead-ended at zero results).
+                    // Return the full shelf so the book can be spotted by
+                    // eye — this is a manual review flow, nothing is
+                    // auto-applied.
+                    _logger.LogInformation(
+                        "AUTHOR_TITLE title '{Title}' matched none of the author's {Count} book(s); returning the unfiltered author list",
+                        title, authorFiltered.Count());
+                }
+                else
+                {
+                    authorFiltered = titleFiltered;
+                }
             }
 
             var detailedMetaByAsin = new Dictionary<string, AudibleBookResponse>(StringComparer.OrdinalIgnoreCase);
