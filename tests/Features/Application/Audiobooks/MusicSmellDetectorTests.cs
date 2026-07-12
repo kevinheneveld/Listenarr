@@ -139,10 +139,12 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             // sum to 0.5 exactly; guard: 0.25 + 0.25 = 0.5 REACHES the threshold.
             // The precision intent is that transcript-only evidence with the
             // matching shape absent still surfaces only when BOTH soft signals
-            // agree — verify that a lone signal does not.
+            // agree — verify that a lone signal does not. (Cues around REAL
+            // narration stay soft; a transcript that is ONLY cues is the
+            // strong tier, tested separately below.)
             var cueOnly = Score(
                 durations: Tracks(2, 1800),
-                transcript: "[Music] [Music] [Music] (upbeat music)");
+                transcript: "[Music] (upbeat music) Chapter one. The narrator begins reading in ordinary spoken prose that carries on for a good while before anything else happens.");
             Assert.False(cueOnly.IsCandidate);
 
             var performerOnly = Score(
@@ -150,6 +152,52 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
                 transcript: "performed by Patterson Hood, live at the Fillmore. A long spoken narration follows with plenty of ordinary sentences that are not music cues at all and keep going for a while.",
                 heardAuthor: "Patterson Hood");
             Assert.False(performerOnly.IsCandidate);
+        }
+
+        // --- Strong transcript tier: live shapes that the soft cap missed ----
+
+        [Fact]
+        public void PureCueTranscript_SingleFile_IsCandidate()
+        {
+            // Live record 3134 "Hunted Down": whisper heard nothing but music
+            // across opening AND closing of a single long file — no album
+            // shape to help, so the transcript alone must cross the threshold.
+            var r = Score(
+                durations: Tracks(1, 3600),
+                transcript: "[opening] (eerie music) ♪♪♪ ♪♪♪ ♪♪♪ (eerie music) [Music]\n[closing] (dramatic music) ♪♪ ♪♪ (gentle music)");
+
+            Assert.True(r.IsCandidate);
+            Assert.Contains(r.Reasons, x => x.Contains("music, not narration"));
+        }
+
+        [Fact]
+        public void LyricDominatedTranscript_SingleFile_IsCandidate()
+        {
+            // Live record 877 "Bag of Bones": a song decode — every short
+            // lyric line wrapped in ♪. Plenty of letters, but the glyph
+            // density gives it away.
+            var r = Score(
+                durations: Tracks(1, 3600),
+                transcript: "[opening] ♪♪ ♪ Mercy, mercy, baby ♪ ♪ God, you look so fine ♪ ♪ I don't know how you do it ♪ ♪ But you're doing it all the time ♪ ♪ And I don't care about nothing ♪ ♪ When you look me in the eyes ♪ ♪ Mercy, mercy, baby ♪ ♪ You blow my mind ♪");
+
+            Assert.True(r.IsCandidate);
+            Assert.Contains(r.Reasons, x => x.Contains("music, not narration"));
+        }
+
+        [Fact]
+        public void RadioDrama_MusicCuesThenRealProse_IsNotCandidate()
+        {
+            // Live record 1504 "The Magician's Nephew": the Radio Theater
+            // dramatization of the RIGHT book — music cues, then a host
+            // speaking real prose. Must stay soft-tier only.
+            var r = Score(
+                durations: Tracks(1, 3600),
+                transcript: "[opening] (eerie music) (screaming) - Mia. Awake. (dramatic music) [Music] (dramatic music) Hello, I'm Douglas Gresham, your host for Focus on the Family Radio Theater. I'm sure you can imagine the scene. A small boy tucked away in his playroom on a rainy afternoon creating an intricate world of fantasy.",
+                metadataTitle: "The Magician's Nephew",
+                metadataAuthor: "C.S. Lewis");
+
+            Assert.False(r.IsCandidate);
+            Assert.True(r.Score <= 0.25, $"only the soft cue signal may fire, got {r.Score}: {string.Join("; ", r.Reasons)}");
         }
 
         [Fact]

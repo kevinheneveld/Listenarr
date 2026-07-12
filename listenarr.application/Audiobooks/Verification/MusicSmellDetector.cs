@@ -108,8 +108,16 @@ namespace Listenarr.Application.Audiobooks.Verification
                 }
             }
 
-            // --- Music-dominated transcript (+0.25): whisper mostly heard music
-            // cues, or almost nothing despite real duration.
+            // --- Transcript signals: two strengths. Music cues AROUND real
+            // narration are soft (+0.25, can never flag alone — dramatized
+            // adaptations open with music too). But a transcript that IS the
+            // music — nothing but cues, or sung lyrics wrapped in note glyphs
+            // line after line — is near-conclusive (+0.5, crosses the
+            // threshold alone): whisper listened across the sampled window
+            // and found no narration to transcribe. Live misses forced the
+            // strong tier: single-file "books" whose whole transcript was
+            // "(eerie music) ♪♪♪ …" or per-line ♪ lyrics scored only 0.25
+            // and never surfaced.
             if (!string.IsNullOrWhiteSpace(transcript))
             {
                 var cueMatches = MusicCueRegex.Matches(transcript).Count;
@@ -120,7 +128,19 @@ namespace Listenarr.Application.Audiobooks.Verification
                 // qualify, so the bar is deliberately far below any real
                 // opening-window transcript.
                 var nearEmpty = speechChars < 40 && totalDuration > 600;
-                if (cueMatches >= 3 || (cueMatches >= 1 && speechChars < 200) || nearEmpty)
+                // All cues, essentially zero words: the audio is instrumental.
+                var pureMusic = cueMatches >= 2 && speechChars < 20;
+                // Lyric-dominated: a cue or note glyph every few words. Real
+                // narration (including radio-drama dialogue between cues)
+                // yields far more letters per cue than sung-lyric decodes,
+                // where whisper wraps every short line in ♪.
+                var lyricDominated = cueMatches >= 6 && speechChars < cueMatches * 25;
+                if (pureMusic || lyricDominated)
+                {
+                    score += 0.5;
+                    reasons.Add($"transcript is music, not narration ({cueMatches} music cue(s), {speechChars} spoken letter(s))");
+                }
+                else if (cueMatches >= 3 || (cueMatches >= 1 && speechChars < 200) || nearEmpty)
                 {
                     score += 0.25;
                     reasons.Add(nearEmpty

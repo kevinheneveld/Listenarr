@@ -29,6 +29,9 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
                 [30] = new(
                     new[] { "The Black Book-001.mp3" },
                     "[opening] Recording Books Romance presents an unabridged recording of Dark Lover by J.R. Ward, narrated by Jim Frangione."),
+                [40] = new(
+                    new[] { "Hunted Down.m4b" },
+                    "[opening] (eerie music) ♪♪♪ ♪♪♪ (eerie music) [Music]\n[closing] (dramatic music) ♪♪ ♪♪"),
             };
 
         [Fact]
@@ -122,6 +125,55 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
                 FileNames);
 
             Assert.Empty(verdicts);
+        }
+
+        [Fact]
+        public void ParseResponse_MusicNotationEvidence_ShortButProbative_Flags()
+        {
+            // Live miss: a transcript that is nothing but music cues/♪ gives
+            // the model no 12-char lyric line to quote — the note glyphs ARE
+            // the evidence, and they only appear when whisper heard singing.
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":40,\"evidence\":\"♪♪♪\",\"reason\":\"transcript is music, not narration\"}]}",
+                FileNames);
+
+            var verdict = Assert.Single(verdicts);
+            Assert.Equal(40, verdict.Id);
+        }
+
+        [Fact]
+        public void ParseResponse_MusicAnnotationQuote_Flags()
+        {
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":40,\"evidence\":\"(eerie music)\",\"reason\":\"music track\"}]}",
+                FileNames);
+
+            Assert.Single(verdicts);
+        }
+
+        [Fact]
+        public void ParseResponse_FabricatedMusicGlyphQuote_IsDropped()
+        {
+            // ♪ relaxes the length floor, not the substring requirement —
+            // record 30's transcript has no note glyphs, so this is invented.
+            var verdicts = AiLibrarySweepJudge.ParseResponse(
+                "{\"suspicious\":[{\"id\":30,\"evidence\":\"♪♪♪\",\"reason\":\"music\"}]}",
+                FileNames);
+
+            Assert.Empty(verdicts);
+        }
+
+        [Fact]
+        public void BuildSystemPrompt_MakesMusicTranscriptsFlaggable()
+        {
+            // The first prompt hardening over-corrected: "audio-opening with
+            // no credits is normal" read as never-flag for lyric/♪ openings
+            // too, and live music records sailed through. Music-as-opening
+            // must be an explicit flag category.
+            var prompt = AiLibrarySweepJudge.BuildSystemPrompt();
+            Assert.Contains("song lyrics", prompt);
+            Assert.Contains("♪", prompt);
+            Assert.Contains("ordinary spoken prose with no credits", prompt);
         }
 
         [Fact]

@@ -67,10 +67,16 @@ namespace Listenarr.Application.Audiobooks
             "book's title, video releases, or several different books' titles under one record. " +
             "The audio-opening is the strongest signal: spoken credits naming a DIFFERENT title or " +
             "author than the record's is wrong content; spoken credits matching the record clears it. " +
+            "An audio-opening that is MUSIC instead of narration — sung song lyrics, ♪ marks, or " +
+            "annotations like (upbeat music) with essentially no spoken prose — means the file is a " +
+            "music track, not an audiobook: flag it and quote a lyric line or the music annotation as " +
+            "evidence. (A little intro music or a music-scored radio drama followed by real spoken " +
+            "prose is normal — only flag when the opening is essentially ALL music or lyrics.) " +
             "The following are NEVER reasons to flag: file extension or format (.mp3, .m4b, .m4a, .flac are all normal), " +
             "how many files there are (one file or hundreds are both normal), track/part numbering, " +
             "chapter naming, '(Unabridged)' or '[Dramatized Adaptation]' tags, author names in file names, " +
-            "radio dramas, an audio-opening with no credits (cold-open narration is normal), " +
+            "radio dramas, an audio-opening of ordinary spoken prose with no credits (cold-open narration " +
+            "is normal — but sung lyrics or ♪ marks are NOT a cold open), " +
             "or anything about the record's own title. " +
             "Most records are correctly filed: an empty list is the expected answer for a normal batch. " +
             "Every flag must quote, in \"evidence\", either one of the provided file names exactly as " +
@@ -160,8 +166,10 @@ namespace Listenarr.Application.Audiobooks
                     // Transcript quotes need only be a substring — the model
                     // legitimately excerpts the credit phrase, not the whole
                     // opening. Require some substance so a bare "the" can't
-                    // pass as proof.
-                    var evidenceIsTranscriptQuote = evidence.Length >= 12
+                    // pass as proof — except ♪, which no amount of length
+                    // padding makes more probative: a note glyph only exists
+                    // in a transcript because whisper heard singing.
+                    var evidenceIsTranscriptQuote = (evidence.Length >= 12 || evidence.Contains('♪'))
                         && !string.IsNullOrWhiteSpace(recordEvidence.TranscriptExcerpt)
                         && recordEvidence.TranscriptExcerpt!.Contains(evidence, StringComparison.OrdinalIgnoreCase);
                     if (evidence.Length == 0 || (!evidenceIsFileName && !evidenceIsTranscriptQuote))
