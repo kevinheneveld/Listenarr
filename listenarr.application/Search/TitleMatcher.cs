@@ -91,6 +91,34 @@ namespace Listenarr.Application.Search
             return queryTokens.IsSubsetOf(candidateTokens);
         }
 
+        /// <summary>
+        /// Looser agreement than <see cref="Matches"/>, for filtering a
+        /// known-author book list by a user-typed title: at least 60% of the
+        /// query's significant tokens must appear in the candidate. Absorbs
+        /// numeral-vs-word edition titling ("20,000 Leagues Under the Sea"
+        /// vs "Twenty Thousand Leagues Under the Sea" — live case where the
+        /// strict substring filter silently dropped an edition of the very
+        /// book being searched). Requires 3+ significant query tokens: below
+        /// that, "mostly" degenerates to a single shared word, which would
+        /// admit half the shelf.
+        /// </summary>
+        public static bool MostlyMatches(string? title, string? subtitle, string? query)
+        {
+            if (Matches(title, subtitle, query)) return true;
+
+            var queryTokens = new HashSet<string>(
+                Filters.SignificantTokens.From(query),
+                StringComparer.OrdinalIgnoreCase);
+            if (queryTokens.Count < 3) return false;
+
+            var combined = (title ?? string.Empty) + " " + (subtitle ?? string.Empty);
+            var candidateTokens = new HashSet<string>(
+                Filters.SignificantTokens.From(combined),
+                StringComparer.OrdinalIgnoreCase);
+            var matched = queryTokens.Count(candidateTokens.Contains);
+            return matched >= queryTokens.Count * 0.6;
+        }
+
         private static bool ContainsNormalized(string? field, string normalizedQuery)
         {
             if (string.IsNullOrWhiteSpace(field)) return false;

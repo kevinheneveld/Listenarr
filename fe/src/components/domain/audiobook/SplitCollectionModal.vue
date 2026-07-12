@@ -33,6 +33,28 @@
           to the record it belongs to (files relocate and the destination re-verifies), delete a
           redundant copy, or leave it alone.
         </p>
+        <div class="split-probe-box">
+          <div class="split-probe-head">
+            <span>
+              <strong>Audio probe</strong>
+              <small
+                >When file names carry no information (e.g. everything renamed to
+                "Title-001…NNN"), transcribe the openings of the few boundary-suspect files —
+                small intro/epilogue stubs, encoding changes, whole-book-length files — and
+                split by what the audio itself announces.</small
+              >
+            </span>
+            <button
+              type="button"
+              class="split-change-btn"
+              :disabled="applying || probeStopRequested"
+              @click="runAudioProbe"
+            >
+              {{ probing ? 'Stop' : 'Probe audio boundaries' }}
+            </button>
+          </div>
+          <div v-if="probeStatus" class="split-probe-status">{{ probeStatus }}</div>
+        </div>
         <div class="split-clusters">
           <div v-for="c in clusters" :key="c.key" class="split-cluster">
             <div class="split-cluster-head">
@@ -97,6 +119,9 @@
                 </button>
               </template>
             </div>
+            <blockquote v-if="c.transcript" class="split-transcript">
+              “{{ c.transcript }}”
+            </blockquote>
             <details class="split-files">
               <summary>files</summary>
               <div class="split-file" v-for="name in c.fileNames" :key="name">{{ name }}</div>
@@ -141,6 +166,8 @@ interface ClusterRow {
   action: GroupAction
   editing: boolean
   query: string
+  /** Opening transcript snippet that justified this group (audio probe only). */
+  transcript?: string | null
 }
 
 const props = defineProps<{
@@ -162,6 +189,13 @@ const clusters = ref<ClusterRow[]>([])
 const applying = ref(false)
 const progressText = ref('')
 
+// Audio-probe state: one whisper run per request (~40s each), looped
+// client-side with a Stop escape — the same proxy-safe pattern as the AI
+// library sweep.
+const probing = ref(false)
+const probeStopRequested = ref(false)
+const probeStatus = ref<string | null>(null)
+
 const moveCount = computed(
   () => clusters.value.filter((c) => c.action === 'move' && c.targetId).length,
 )
@@ -182,6 +216,9 @@ watch(
     error.value = null
     clusters.value = []
     applying.value = false
+    probing.value = false
+    probeStopRequested.value = false
+    probeStatus.value = null
     if (libraryStore.audiobooks.length === 0) {
       void libraryStore.fetchLibrary().catch(() => {})
     }
@@ -263,6 +300,78 @@ function pickTarget(c: ClusterRow, cand: { id: number; title: string }) {
   c.editing = false
 }
 
+async function runAudioProbe() {
+  const book = props.audiobook
+  if (!book) return
+  if (probing.value) {
+    // Button doubles as Stop: the in-flight probe finishes, then the loop
+    // exits and plans from what was collected so far.
+    probeStopRequested.value = true
+    probeStatus.value = 'Stopping after the current file…'
+    return
+  }
+
+  probing.value = true
+  probeStopRequested.value = false
+  probeStatus.value = 'Finding boundary-suspect files…'
+  try {
+    const { whisperAvailable, candidates, totalFiles } = await apiService.getSplitProbeCandidates(
+      book.id,
+    )
+    if (!whisperAvailable) {
+      probeStatus.value = 'Whisper is not available on the server — audio probing needs it.'
+      return
+    }
+    if (candidates.length === 0) {
+      probeStatus.value = 'No boundary suspects found — the files look uniform.'
+      return
+    }
+
+    const probes: Array<{ fileId: number; transcript: string | null }> = []
+    for (const [index, candidate] of candidates.entries()) {
+      if (probeStopRequested.value || !props.visible) break
+      probeStatus.value = `Transcribing ${candidate.fileName} (${index + 1}/${candidates.length}, ${candidate.reason})…`
+      try {
+        const result = await apiService.probeSplitBoundary(book.id, candidate.fileId)
+        probes.push(result)
+      } catch {
+        // A single unreadable file must not sink the run — the planner
+        // treats a missing probe as "no evidence here".
+        probes.push({ fileId: candidate.fileId, transcript: null })
+      }
+    }
+
+    const heard = probes.filter((p) => p.transcript).length
+    if (heard === 0) {
+      probeStatus.value = 'No transcripts recovered — nothing to split by.'
+      return
+    }
+
+    probeStatus.value = 'Building groups from what the audio says…'
+    const plan = await apiService.planSplitFromProbes(book.id, probes)
+    clusters.value = plan.clusters.map((c) =>
+      reactive({
+        key: c.key,
+        displayName: c.displayName,
+        fileIds: c.fileIds,
+        fileNames: c.fileNames,
+        targetId: c.suggestedTargetId ?? null,
+        targetTitle: c.suggestedTargetTitle ?? null,
+        action: (c.suggestedTargetId ? 'move' : 'none') as GroupAction,
+        editing: false,
+        query: c.label ?? c.displayName,
+        transcript: c.boundaryTranscript ?? null,
+      }),
+    )
+    probeStatus.value = `${plan.clusters.length} group(s) from ${heard} probed opening(s) across ${totalFiles} files. Review below — the quoted openings are what the audio itself says.`
+  } catch (err) {
+    probeStatus.value = err instanceof Error ? err.message : 'Audio probe failed.'
+  } finally {
+    probing.value = false
+    probeStopRequested.value = false
+  }
+}
+
 async function apply() {
   const book = props.audiobook
   if (!book || applying.value) return
@@ -337,6 +446,50 @@ function onClose() {
   color: #adb5bd;
   font-size: 0.9rem;
   margin: 0 0 1rem;
+}
+
+.split-probe-box {
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 0.55rem 0.75rem;
+  margin: 0 0 0.8rem;
+}
+
+.split-probe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.split-probe-head span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  color: #d8dee6;
+  font-size: 0.9rem;
+}
+
+.split-probe-head small {
+  color: #8a93a0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.split-probe-status {
+  margin-top: 0.45rem;
+  color: #4dabf7;
+  font-size: 0.85rem;
+}
+
+.split-transcript {
+  margin: 0.45rem 0 0;
+  padding: 0.35rem 0.6rem;
+  border-left: 2px solid rgba(77, 171, 247, 0.5);
+  color: #aab6c3;
+  font-size: 0.82rem;
+  font-style: italic;
+  overflow-wrap: anywhere;
 }
 
 .split-clusters {

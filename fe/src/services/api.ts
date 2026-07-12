@@ -1442,6 +1442,51 @@ class ApiService {
     return this.request(`/library/${id}/split/preview`)
   }
 
+  // Audio-probe mode for Split Collection: shape-derived boundary suspects,
+  // one whisper probe per request (each is a ~40s transcription — batching
+  // would outlive reverse-proxy timeouts), then a plan from the transcripts.
+  async getSplitProbeCandidates(id: number): Promise<{
+    audiobookId: number
+    whisperAvailable: boolean
+    totalFiles: number
+    candidates: Array<{ fileId: number; fileName: string; reason: string }>
+  }> {
+    return this.request(`/library/${id}/split/probe/candidates`)
+  }
+
+  async probeSplitBoundary(
+    id: number,
+    fileId: number,
+    seconds?: number,
+  ): Promise<{ fileId: number; transcript: string | null }> {
+    return this.request(`/library/${id}/split/probe`, {
+      method: 'POST',
+      body: JSON.stringify({ fileId, seconds }),
+    })
+  }
+
+  async planSplitFromProbes(
+    id: number,
+    probes: Array<{ fileId: number; transcript: string | null }>,
+  ): Promise<{
+    audiobookId: number
+    clusters: Array<{
+      key: string
+      displayName: string
+      label?: string | null
+      fileIds: number[]
+      fileNames: string[]
+      boundaryTranscript?: string | null
+      suggestedTargetId?: number | null
+      suggestedTargetTitle?: string | null
+    }>
+  }> {
+    return this.request(`/library/${id}/split/probe/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ probes }),
+    })
+  }
+
   async transferAudiobookFiles(
     sourceId: number,
     targetAudiobookId: number,

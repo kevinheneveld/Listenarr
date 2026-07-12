@@ -159,7 +159,30 @@ namespace Listenarr.Application.Metadata.Audible
                 {
                     var t = title.Trim();
                     var ci = CultureInfo.InvariantCulture.CompareInfo;
-                    filtered = filtered.Where(r => !string.IsNullOrWhiteSpace(r.Title) && ci.IndexOf(r.Title, t, CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) >= 0);
+                    // Substring first (diacritic-insensitive), then token
+                    // overlap: editions title the same book differently
+                    // ("20,000 Leagues…" vs "Twenty Thousand Leagues…"), and
+                    // strict containment silently dropped the variants.
+                    var titleFiltered = filtered
+                        .Where(r => !string.IsNullOrWhiteSpace(r.Title)
+                            && (ci.IndexOf(r.Title, t, CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) >= 0
+                                || Listenarr.Application.Search.TitleMatcher.MostlyMatches(r.Title, r.Subtitle, t)))
+                        .ToList();
+                    if (titleFiltered.Count == 0)
+                    {
+                        // A title matching NOTHING on the author's own shelf
+                        // is far more likely misspelled than absent (live
+                        // case: "20,000 Leages" [sic] returned an empty list
+                        // and dead-ended the user). Return the full shelf so
+                        // the book can be spotted by eye.
+                        _logger.LogInformation(
+                            "Title '{Title}' matched none of the {Count} book(s) found for author '{Author}'; returning the unfiltered author list",
+                            LogRedaction.SanitizeText(t), filtered.Count(), LogRedaction.SanitizeText(author));
+                    }
+                    else
+                    {
+                        filtered = titleFiltered;
+                    }
                 }
 
                 // If title looks like an ASIN, prefer exact ASIN match

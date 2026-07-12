@@ -30,6 +30,12 @@ namespace Listenarr.Tests.Builders
             return this;
         }
 
+        public AudiobookFileBuilder WithDuration(double seconds)
+        {
+            _audiobookFile.DurationSeconds = seconds;
+            return this;
+        }
+
         public AudiobookFileBuilder WithFormat(string value)
         {
             _audiobookFile.Format = value;
