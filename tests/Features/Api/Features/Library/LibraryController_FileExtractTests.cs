@@ -175,6 +175,18 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.NotNull(payload.DestinationAudiobookId);
             Assert.NotEqual(existing.Id, payload.DestinationAudiobookId);
             Assert.Equal(DuplicateStrategy.Duplicate, payload.AppliedStrategy);
+
+            // The duplicate must NOT carry the contested ASIN: the DB's
+            // partial unique index (absent from this InMemory test double,
+            // which is how the original regression slipped through) rejects a
+            // second row with the same ASIN outright. The existing record
+            // keeps it; the duplicate coexists ASIN-less as a title+author
+            // duplicate group.
+            var duplicate = await _audiobookRepository.GetByIdAsync(payload.DestinationAudiobookId!.Value);
+            Assert.NotNull(duplicate);
+            Assert.True(string.IsNullOrEmpty(duplicate!.Asin));
+            var reloadedExisting = await _audiobookRepository.GetByIdAsync(existing.Id);
+            Assert.Equal("B000EXTRACT2", reloadedExisting!.Asin);
         }
 
         [Fact]

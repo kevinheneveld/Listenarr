@@ -140,6 +140,23 @@ namespace Listenarr.Application.Audiobooks.Files
             else
             {
                 // Either no existing match, or user explicitly chose Duplicate. Either way, create new.
+                //
+                // A duplicate CANNOT carry the contested ASIN: the DB's partial
+                // unique index on Audiobooks.Asin rejects the insert outright,
+                // and LibraryAddService's race recovery then converts that
+                // rejection into "already exists" — which bounced the modal
+                // straight back to the conflict step in a loop (live case:
+                // every "Make a duplicate" click flashed and returned).
+                // BypassDuplicateCheck only ever skipped the app-level dedup;
+                // the index is deliberate and non-negotiable. So the duplicate
+                // record is created WITHOUT the ASIN — the existing record
+                // keeps it, both coexist as a title+author duplicate group,
+                // and Settings → Duplicates can settle the pair later.
+                if (request.DuplicateStrategy == DuplicateStrategy.Duplicate && existingMatch != null)
+                {
+                    request.Metadata.Asin = null;
+                }
+
                 var addResult = await _libraryAddService.AddToLibraryAsync(new LibraryAddOperationRequest
                 {
                     Metadata = request.Metadata,

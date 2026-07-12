@@ -321,7 +321,8 @@
               Creates a separate audiobook record
               <span v-if="conflict.proposedDestinationFolder">
                 at <code>{{ conflict.proposedDestinationFolder }}</code></span
-              >.
+              >. The ASIN stays with the existing record — the new one is created without it, and
+              both show up together under Settings → Duplicates to settle later.
             </span>
             <span v-if="normalizedRecommendation === 'duplicate'" class="badge">Recommended</span>
           </button>
