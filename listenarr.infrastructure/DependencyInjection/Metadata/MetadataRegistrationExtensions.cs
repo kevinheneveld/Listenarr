@@ -30,6 +30,13 @@ internal static class MetadataRegistrationExtensions
         services.AddHttpClient<IAudnexusService, AudnexusService>()
             .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler)
             .AddPolicyHandler(retryPolicy);
+        // No retry policy: a bot-walled or missing Amazon page won't improve
+        // on retry, and this only runs after every real provider came up
+        // empty — the user is already waiting at the end of the chain.
+        services.AddHttpClient<
+            Listenarr.Application.Metadata.Amazon.IAmazonProductMetadataService,
+            Listenarr.Infrastructure.Metadata.Providers.Amazon.AmazonProductMetadataService>()
+            .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler);
         // No retry policy: LLM generation is slow, and every consumer already
         // degrades to deterministic behavior on failure — retrying would just
         // triple a timeout nobody is waiting on.

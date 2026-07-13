@@ -27,17 +27,20 @@ namespace Listenarr.Application.Metadata.Core
         private readonly ISearchService _searchService;
         private readonly AudibleService _audibleService;
         private readonly IAudnexusService _audnexusService;
+        private readonly Amazon.IAmazonProductMetadataService? _amazonService;
         private readonly ILogger<AudiobookMetadataService> _logger;
 
         public AudiobookMetadataService(
             ISearchService searchService,
             AudibleService audibleService,
             IAudnexusService audnexusService,
-            ILogger<AudiobookMetadataService> logger)
+            ILogger<AudiobookMetadataService> logger,
+            Amazon.IAmazonProductMetadataService? amazonService = null)
         {
             _searchService = searchService;
             _audibleService = audibleService;
             _audnexusService = audnexusService;
+            _amazonService = amazonService;
             _logger = logger;
         }
 
@@ -130,6 +133,27 @@ namespace Listenarr.Application.Metadata.Core
                 {
                     _logger.LogWarning(sourceEx, "Failed to fetch metadata from {SourceName}, trying next source", source.Name);
                     continue;
+                }
+            }
+
+            // Last resort, outside the configured-source list on purpose:
+            // Amazon sells audiobooks no Audible catalog carries (live case:
+            // an Amazon-exclusive HarperVoyager edition returning an empty
+            // stub from all ten regional Audible APIs while its dp page is
+            // fully populated). Only consulted when every real provider came
+            // up empty, so the fragile scrape never shadows a clean API.
+            if (_amazonService != null)
+            {
+                var amazon = await _amazonService.GetBookMetadataAsync(asin);
+                if (amazon != null)
+                {
+                    _logger.LogInformation("Amazon product-page fallback supplied metadata for ASIN: {Asin}", asin);
+                    return new
+                    {
+                        metadata = amazon,
+                        source = "Amazon",
+                        sourceUrl = $"https://www.amazon.com/dp/{asin}"
+                    };
                 }
             }
 

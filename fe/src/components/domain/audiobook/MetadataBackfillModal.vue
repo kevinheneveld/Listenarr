@@ -270,7 +270,7 @@ function parseAsinFromInput(raw: string): string | null {
 function loadFromPaste() {
   const asin = parsedPasteAsin.value
   if (!asin) {
-    pasteAsinError.value = 'Paste an Audible URL or a 10-character ASIN (e.g. B0CSV7NJMB).'
+    pasteAsinError.value = 'Paste an Audible or Amazon URL, or a 10-character ASIN (e.g. B0CSV7NJMB).'
     return
   }
   pasteAsinError.value = null
@@ -1258,7 +1258,7 @@ function candidateYear(c: AudibleSearchResult): string {
                  uses. -->
             <form class="paste-asin-form" @submit.prevent="loadFromPaste">
               <label class="paste-asin-field">
-                <span class="paste-asin-label">Or paste an Audible link / ASIN</span>
+                <span class="paste-asin-label">Or paste an Audible/Amazon link / ASIN</span>
                 <input
                   v-model="pasteAsinInput"
                   type="text"
@@ -1273,7 +1273,7 @@ function candidateYear(c: AudibleSearchResult): string {
                 :title="
                   parsedPasteAsin
                     ? `Load metadata for ${parsedPasteAsin}`
-                    : 'Paste an Audible URL or ASIN first'
+                    : 'Paste an Audible/Amazon URL or ASIN first'
                 "
               >
                 <PhDownloadSimple />

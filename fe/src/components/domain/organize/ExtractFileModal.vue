@@ -108,7 +108,7 @@
         <div class="extract-search-row extract-paste-row">
           <div class="extract-search-field">
             <label class="field-label" for="extract-asin-input"
-              >Or paste an Audible link / ASIN</label
+              >Or paste an Audible/Amazon link / ASIN</label
             >
             <input
               id="extract-asin-input"
@@ -594,7 +594,7 @@ async function onSearch() {
 function onLoadPastedAsin() {
   const match = (pasteAsinInput.value || '').trim().match(ASIN_TOKEN_REGEX)
   if (!match) {
-    searchError.value = 'Paste an Audible URL or a 10-character ASIN (e.g. B0CSV7NJMB).'
+    searchError.value = 'Paste an Audible or Amazon URL, or a 10-character ASIN (e.g. B0CSV7NJMB).'
     return
   }
   searchError.value = null
