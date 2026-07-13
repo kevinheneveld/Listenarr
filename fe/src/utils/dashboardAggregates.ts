@@ -147,6 +147,11 @@ export interface VerificationCounts {
 export function verificationCounts(items: Audiobook[]): VerificationCounts {
   const counts: VerificationCounts = { verified: 0, flagged: 0, unverifiable: 0, unverified: 0 }
   for (const b of items) {
+    // Verification describes AUDIO — a record whose files were since
+    // deleted/transferred keeps its old verdict in the DB, but counting it
+    // here reads as nonsense ("842 verified" on a 727-book library; live
+    // case: 115 file-less records still carrying verified verdicts).
+    if ((b.fileCount ?? 0) === 0) continue
     switch (b.verificationStatus) {
       case 'agentVerified':
       case 'manuallyVerified':

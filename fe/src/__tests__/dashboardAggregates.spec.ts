@@ -52,12 +52,24 @@ describe('seriesHealth', () => {
 describe('verificationCounts', () => {
   it('buckets statuses; no-spoken-credits is not flagged', () => {
     const counts = verificationCounts([
-      book({ id: 1, verificationStatus: 'agentVerified' }),
-      book({ id: 2, verificationStatus: 'agentFlagged' }),
-      book({ id: 3, verificationStatus: 'agentUnverifiable' }),
-      book({ id: 4 }),
+      book({ id: 1, fileCount: 1, verificationStatus: 'agentVerified' }),
+      book({ id: 2, fileCount: 1, verificationStatus: 'agentFlagged' }),
+      book({ id: 3, fileCount: 1, verificationStatus: 'agentUnverifiable' }),
+      book({ id: 4, fileCount: 1 }),
     ])
     expect(counts).toEqual({ verified: 1, flagged: 1, unverifiable: 1, unverified: 1 })
+  })
+
+  it('ignores file-less records — a stale verdict on deleted audio is not library health', () => {
+    // Live case: "842 verified" on a 727-book library, inflated by records
+    // whose files had been transferred or deleted after verification.
+    const counts = verificationCounts([
+      book({ id: 1, fileCount: 1, verificationStatus: 'agentVerified' }),
+      book({ id: 2, fileCount: 0, verificationStatus: 'agentVerified' }),
+      book({ id: 3, verificationStatus: 'manuallyVerified' }), // fileCount absent = none
+      book({ id: 4, fileCount: 0 }),
+    ])
+    expect(counts).toEqual({ verified: 1, flagged: 0, unverifiable: 0, unverified: 0 })
   })
 })
 

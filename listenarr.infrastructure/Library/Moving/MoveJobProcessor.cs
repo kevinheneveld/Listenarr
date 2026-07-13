@@ -109,7 +109,16 @@ namespace Listenarr.Infrastructure.Library.Moving
                     return;
                 }
 
-                if (FileUtils.IsPathInsideOf(target, source) || FileUtils.IsPathInsideOf(source, target))
+                // Target nested INSIDE the source is a legitimate organize
+                // shape: naming templates that append subfolders produce
+                // ".../Book" -> ".../Book/Narrator" (live case: 97 organize
+                // jobs all failed on this). The copy walk below can't do it
+                // (it would recurse into its own output, then the source
+                // cleanup would delete the result), but two same-volume
+                // renames can — handled by the descend branch further down.
+                var descendMove = FileUtils.IsPathInsideOf(target, source);
+
+                if (!descendMove && FileUtils.IsPathInsideOf(source, target))
                 {
                     await moveQueueService.UpdateJobStatusAsync(job.Id, "Failed", "Source and target paths overlap", stoppingToken);
                     metrics.Increment("worker.move.job.failed");
@@ -130,7 +139,10 @@ namespace Listenarr.Infrastructure.Library.Moving
                     return;
                 }
 
-                if (!Directory.Exists(targetParent)) Directory.CreateDirectory(targetParent);
+                // Descend moves recreate the vacated parent chain themselves —
+                // pre-creating intermediates here would plant empty dirs inside
+                // the source that the rename-aside then drags along.
+                if (!descendMove && !Directory.Exists(targetParent)) Directory.CreateDirectory(targetParent);
 
                 // Populated targets fail unless the organize flow flagged a replaceable
                 // metadata stub (see the TargetGate partial for the reclaim rules).
@@ -152,6 +164,12 @@ namespace Listenarr.Infrastructure.Library.Moving
                 // Copy recursively with retries per file
                 try
                 {
+                    if (descendMove)
+                    {
+                        ExecuteDescendMove(job, source, target, targetParent);
+                    }
+                    else
+                    {
                     // Only create tempName if target doesn't exist; otherwise copy directly into existing empty target
                     var useTemp = !Directory.Exists(target);
                     var copyDest = useTemp ? tempName : target;
@@ -261,6 +279,7 @@ namespace Listenarr.Infrastructure.Library.Moving
                     }
 
                     Directory.Delete(source, true);
+                    }
 
                     await MovedAudiobookPathRewriter.RewriteAsync(
                         audiobook,
