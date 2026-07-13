@@ -25,7 +25,7 @@
   cookie fallback so no header plumbing is needed on this side.
 -->
 <template>
-  <Modal :visible="visible" size="md" @close="onClose">
+  <Modal :visible="visible" size="md" :overlay-z-index="overlayZIndex" @close="onClose">
     <template #header>
       <ModalHeader :title="title" @close="onClose" />
     </template>
@@ -86,6 +86,8 @@ interface Props {
   audiobookId: number | null
   file: FileLike | null
   audiobookTitle?: string | null
+  /** Forwarded to the shared Modal for modal-over-modal stacking. */
+  overlayZIndex?: number
 }
 
 interface Emits {

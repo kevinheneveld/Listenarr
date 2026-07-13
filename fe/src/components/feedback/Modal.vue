@@ -17,7 +17,12 @@
 -->
 <template>
   <teleport to="body">
-    <div v-if="visible" class="modal-overlay" @click.self="onClose">
+    <div
+      v-if="visible"
+      class="modal-overlay"
+      :style="overlayZIndex != null ? { zIndex: overlayZIndex } : undefined"
+      @click.self="onClose"
+    >
       <div
         ref="contentRef"
         class="modal-content"
@@ -70,6 +75,11 @@ const props = defineProps({
   title: { type: String, default: '' },
   showClose: { type: Boolean, default: true },
   size: { type: String as () => 'sm' | 'md' | 'lg', default: 'md' },
+  // Stacking override for modal-over-modal cases (the global .modal-overlay
+  // is z-index 3000; a modal opened FROM another modal must beat its
+  // parent's override or it renders underneath — live case: the file
+  // preview player hidden behind the compare-metadata modal at 3100).
+  overlayZIndex: { type: Number, default: null as number | null },
 })
 const emit = defineEmits(['close'])
 
