@@ -1573,6 +1573,12 @@ class ApiService {
     })
   }
 
+  // Mark every Failed move job "Dismissed" — for failures a retry can't fix
+  // (source folder gone, record deleted); retried jobs supersede themselves.
+  async dismissFailedMoveJobs(): Promise<{ dismissed: number }> {
+    return this.request<{ dismissed: number }>('/library/move/failed/dismiss', { method: 'POST' })
+  }
+
   async getMoveQueueSummary(recentLimit = 5): Promise<MoveQueueSummary> {
     return this.request<MoveQueueSummary>(
       `/library/move/summary?recentLimit=${encodeURIComponent(String(recentLimit))}`,

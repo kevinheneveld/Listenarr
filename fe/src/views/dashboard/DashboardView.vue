@@ -116,6 +116,16 @@
             <PhXCircle />
             <strong>{{ moveSummary?.failed }}</strong> moves failed
           </RouterLink>
+          <button
+            v-if="(moveSummary?.failed ?? 0) > 0"
+            type="button"
+            class="health-chip"
+            :disabled="dismissingFailedMoves"
+            title="Mark all failed move jobs as dismissed — for failures a retry can't fix (source folder gone, record deleted). Retried jobs clear themselves."
+            @click="dismissFailedMoves"
+          >
+            {{ dismissingFailedMoves ? 'Clearing…' : 'Clear failed' }}
+          </button>
 
           <button
             v-if="duplicates === null"
@@ -433,6 +443,21 @@ const toast = useToast()
 
 const loading = ref(true)
 const moveSummary = ref<MoveQueueSummary | null>(null)
+const dismissingFailedMoves = ref(false)
+
+async function dismissFailedMoves() {
+  if (dismissingFailedMoves.value) return
+  dismissingFailedMoves.value = true
+  try {
+    const result = await apiService.dismissFailedMoveJobs()
+    toast.success('Failed moves cleared', `${result.dismissed} job(s) dismissed.`)
+    moveSummary.value = await apiService.getMoveQueueSummary(3)
+  } catch (err) {
+    toast.error('Could not clear failed moves', err instanceof Error ? err.message : 'Unknown error')
+  } finally {
+    dismissingFailedMoves.value = false
+  }
+}
 const duplicates = ref<LibraryDuplicatesResponse | null>(null)
 const scanningDuplicates = ref(false)
 const showCopyList = ref(false)

@@ -216,6 +216,15 @@ namespace Listenarr.Application.Audiobooks.Jobs
 
             var newJobId = await EnqueueMoveAsync(job.AudiobookId, job.RequestedPath ?? string.Empty, job.SourcePath, job.ReplaceStubTarget);
             _logger.LogInformation("Requeueing move job {OldJobId} as job {NewJobId} for audiobook {AudiobookId}", jobId, newJobId, job.AudiobookId);
+
+            // The replacement supersedes a FAILED original — leaving the old
+            // row Failed counts the same problem twice on the dashboard, and
+            // forever (Failed is terminal; live case: 97 fixed-and-retried
+            // failures that would never leave the badge).
+            if (string.Equals(job.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+            {
+                await UpdateJobStatusAsync(jobId, "Requeued", job.Error);
+            }
             return newJobId;
         }
 

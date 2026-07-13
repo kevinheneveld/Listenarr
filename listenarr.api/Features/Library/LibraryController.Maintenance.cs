@@ -111,6 +111,28 @@ namespace Listenarr.Api.Features.Library
         }
 
         /// <summary>
+        /// Dismiss every Failed move job: marks them "Dismissed" so the
+        /// dashboard badge clears. For failures that can't be fixed by a
+        /// retry (source folder gone, record deleted) — Failed is otherwise
+        /// terminal and the badge would show them forever.
+        /// </summary>
+        [HttpPost("move/failed/dismiss")]
+        public async Task<IActionResult> DismissFailedMoveJobs(
+            [FromServices] IMoveJobRepository moveJobRepository,
+            [FromServices] IMoveQueueService moveQueue,
+            CancellationToken ct = default)
+        {
+            var failed = (await moveJobRepository.GetAllAsync(ct))
+                .Where(j => string.Equals(j.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            foreach (var job in failed)
+            {
+                await moveQueue.UpdateJobStatusAsync(job.Id, "Dismissed", job.Error, ct);
+            }
+            return Ok(new { dismissed = failed.Count });
+        }
+
+        /// <summary>
         /// Resolve duplicate records: merge same-ASIN losers into a winner (files
         /// deleted from disk, downloads/history/move jobs reassigned, rows removed) or
         /// clear the ASIN on rows that share one but are actually different books.
