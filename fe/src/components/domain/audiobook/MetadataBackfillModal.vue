@@ -49,6 +49,7 @@ import { apiService } from '@/services/api'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import { useToast } from '@/services/toastService'
 import { logger } from '@/utils/logger'
+import { parseVerificationDetail } from '@/utils/verificationStatus'
 import type { Audiobook, AudibleSearchResult, EmbeddedFileMetadata, AsinConflictSide } from '@/types'
 
 interface Props {
@@ -393,27 +394,54 @@ const sourceNarrators = computed<string[]>(() => {
   return unique
 })
 
+// The narrator whisper actually HEARD in the audio ("narrated by X" in the
+// verification transcript's spoken credits). This outranks both the DB
+// field and the file tags in candidate ranking: when the record was
+// mismatched, its stored narrator describes the WRONG book, while the heard
+// narrator describes the audio we're trying to relabel.
+const heardNarrator = computed<string | null>(() => {
+  const book = props.audiobook
+  if (!book) return null
+  const heard = parseVerificationDetail(book)?.heardCredits?.narrator?.trim()
+  return heard || null
+})
+
 const rankedCandidates = computed<AudibleSearchResult[]>(() => {
   const list = candidates.value.slice()
-  if (sourceNarrators.value.length === 0) return list
+  if (sourceNarrators.value.length === 0 && !heardNarrator.value) return list
   return list
     .map((candidate, index) => ({
       candidate,
       index,
-      matches: candidateMatchesNarrator(candidate),
+      // Two tiers: heard-in-audio beats library/file-tag matches.
+      tier: candidateMatchesHeardNarrator(candidate)
+        ? 2
+        : candidateMatchesNarrator(candidate)
+          ? 1
+          : 0,
     }))
-    .sort((a, b) => (b.matches ? 1 : 0) - (a.matches ? 1 : 0) || a.index - b.index)
+    .sort((a, b) => b.tier - a.tier || a.index - b.index)
     .map((entry) => entry.candidate)
 })
+
+function candidateMatchesHeardNarrator(candidate: AudibleSearchResult): boolean {
+  const heard = normalizeForMatch(heardNarrator.value)
+  if (!heard) return false
+  return candidateNarratorNames(candidate).some((cn) => cn.includes(heard) || heard.includes(cn))
+}
 
 function candidateMatchesNarrator(candidate: AudibleSearchResult): boolean {
   const sources = sourceNarrators.value.map(normalizeForMatch).filter(Boolean) as string[]
   if (sources.length === 0) return false
-  const candidateNames = (candidate.narrators || [])
-    .map((n) => normalizeForMatch(n?.name))
-    .filter(Boolean) as string[]
+  const candidateNames = candidateNarratorNames(candidate)
   if (candidateNames.length === 0) return false
   return candidateNames.some((cn) => sources.some((sn) => cn.includes(sn) || sn.includes(cn)))
+}
+
+function candidateNarratorNames(candidate: AudibleSearchResult): string[] {
+  return (candidate.narrators || [])
+    .map((n) => normalizeForMatch(n?.name))
+    .filter(Boolean) as string[]
 }
 
 function normalizeForMatch(value: unknown): string {
@@ -1151,19 +1179,32 @@ function candidateYear(c: AudibleSearchResult): string {
               This book doesn't have an ASIN. Refine the title or author below if needed, then pick
               the matching result to load its metadata.
             </p>
-            <p v-if="sourceNarrators.length" class="narrator-hint">
-              <strong>Narrator:</strong> {{ sourceNarrators.join(', ') }}
-              <span class="narrator-hint-source muted">
-                ({{
-                  embedded?.narrator
-                    ? audiobook?.narrators?.length
-                      ? 'file tags + library'
-                      : 'from file tags'
-                    : 'from library'
-                }})
-              </span>
+            <p v-if="sourceNarrators.length || heardNarrator" class="narrator-hint">
+              <strong>Narrator:</strong>
+              <template v-if="heardNarrator">
+                {{ heardNarrator }}
+                <span class="narrator-hint-source muted">(heard in the audio)</span>
+                <template v-if="sourceNarrators.length">·</template>
+              </template>
+              <template v-if="sourceNarrators.length">
+                {{ sourceNarrators.join(', ') }}
+                <span class="narrator-hint-source muted">
+                  ({{
+                    embedded?.narrator
+                      ? audiobook?.narrators?.length
+                        ? 'file tags + library'
+                        : 'from file tags'
+                      : 'from library'
+                  }})
+                </span>
+              </template>
               <span class="narrator-hint-detail muted">
-                — candidates whose narrator matches will be shown first.
+                —
+                {{
+                  heardNarrator
+                    ? 'candidates matching the narrator heard in the audio are shown first.'
+                    : 'candidates whose narrator matches will be shown first.'
+                }}
               </span>
             </p>
             <form class="candidate-search-form" @submit.prevent="searchCandidates">
@@ -1274,7 +1315,8 @@ function candidateYear(c: AudibleSearchResult): string {
                 class="candidate-item"
                 :class="{
                   disabled: !c.asin,
-                  'candidate-item--narrator-match': candidateMatchesNarrator(c),
+                  'candidate-item--narrator-match':
+                    candidateMatchesHeardNarrator(c) || candidateMatchesNarrator(c),
                 }"
                 @click="pickCandidate(c.asin)"
               >
@@ -1285,7 +1327,10 @@ function candidateYear(c: AudibleSearchResult): string {
                   <div class="candidate-title">
                     {{ c.title }}
                     <span v-if="c.subtitle" class="candidate-subtitle">— {{ c.subtitle }}</span>
-                    <span v-if="candidateMatchesNarrator(c)" class="candidate-badge">
+                    <span v-if="candidateMatchesHeardNarrator(c)" class="candidate-badge">
+                      Narrator matches audio
+                    </span>
+                    <span v-else-if="candidateMatchesNarrator(c)" class="candidate-badge">
                       Narrator matches
                     </span>
                   </div>
