@@ -223,6 +223,10 @@ const OMNIBUS_RUNTIME_RATIO = 3
 const OMNIBUS_STICKY_FIELDS: ReadonlyArray<FieldKey> = ['title', 'subtitle', 'runtime']
 const omnibusSuspected = ref(false)
 const omnibusRatio = ref<number | null>(null)
+// The minutes the heuristic actually compared against (file duration when
+// known, stored runtime otherwise) — the banner must show the same number
+// the decision used.
+const omnibusOwnMinutes = ref<number | null>(null)
 
 // In-browser audio preview of the owned file. Lets the user audition the
 // narrator before committing to a candidate — Audible often lists multiple
@@ -354,6 +358,7 @@ function reset() {
   // leak into the next session.
   omnibusSuspected.value = false
   omnibusRatio.value = null
+  omnibusOwnMinutes.value = null
 }
 
 // ── Candidate ranking by narrator overlap ──────────────────────────────────
@@ -749,14 +754,22 @@ function applyOmnibusHeuristic(
 ): void {
   omnibusSuspected.value = false
   omnibusRatio.value = null
+  omnibusOwnMinutes.value = null
   if (!book || !metadata) return
-  const cur = typeof book.runtime === 'number' ? book.runtime : 0
+  // Prefer the ACTUAL audio duration on disk over the record's stored
+  // runtime — the stored value may itself be leftovers from a previous
+  // wrong match (live case: a 7.8h file whose record said 21 min tripped
+  // the banner against the correct full-novel edition).
+  const fileMinutes =
+    (book.files ?? []).reduce((s, f) => s + (f.durationSeconds ?? 0), 0) / 60
+  const cur = fileMinutes > 0 ? fileMinutes : typeof book.runtime === 'number' ? book.runtime : 0
   const fresh = typeof metadata.runtime === 'number' ? metadata.runtime : 0
   if (cur <= 0 || fresh <= 0) return
   const ratio = fresh / cur
   if (ratio < OMNIBUS_RUNTIME_RATIO) return
   omnibusSuspected.value = true
   omnibusRatio.value = ratio
+  omnibusOwnMinutes.value = cur
   for (const key of OMNIBUS_STICKY_FIELDS) selection.delete(key)
 }
 
@@ -1429,7 +1442,7 @@ function candidateYear(c: AudibleSearchResult): string {
                   <strong>This Audible record is much longer than your file</strong>
                   <span class="muted">
                     ({{ formatHoursForRuntime(fresh?.runtime) }} vs
-                    {{ formatHoursForRuntime(audiobook?.runtime) }})
+                    {{ formatHoursForRuntime(omnibusOwnMinutes ?? audiobook?.runtime) }})
                   </span>
                   — likely an omnibus or anthology that contains your story. We've pre-unchecked
                   <strong>Title</strong>, <strong>Subtitle</strong>, and <strong>Runtime</strong> so

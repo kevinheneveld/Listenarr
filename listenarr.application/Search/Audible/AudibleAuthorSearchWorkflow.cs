@@ -191,6 +191,17 @@ namespace Listenarr.Application.Search.Audible
             {
                 authorFiltered = await FilterByIsbnAsync(aggregated, authorFiltered, isbn, candidateLimit, region, language, detailedMetaByAsin);
             }
+            else if (!string.IsNullOrWhiteSpace(title))
+            {
+                // The author page is a curated shelf, not the catalog: keyword
+                // search surfaces editions the shelf omits (live case: a 4th
+                // "The Deep Range" edition Audible's search returns that
+                // Clarke's author page doesn't list). Merge keyword hits for
+                // the same title, deduped by ASIN, shelf entries first.
+                // Fail-open: a search hiccup keeps the shelf-only behavior.
+                authorFiltered = await MergeKeywordEditionsAsync(
+                    authorFiltered, title, author, candidateLimit, region, language);
+            }
 
             try { _logger.LogInformation("[DBG] authorFiltered count after language/title/isbn filtering: {Count}", authorFiltered.Count()); }
             catch (Exception caughtEx) when (caughtEx is not OperationCanceledException && caughtEx is not OutOfMemoryException && caughtEx is not StackOverflowException)
@@ -207,6 +218,79 @@ namespace Listenarr.Application.Search.Audible
                 continueOnConversionError: true);
 
             return converted.Any() ? SearchResultConverters.ToMetadataList(converted) : null;
+        }
+
+        /// <summary>
+        /// Appends keyword-search editions of <paramref name="title"/> that the
+        /// author-page shelf missed. Keyword hits must still agree with the
+        /// title (substring or token overlap) AND name the requested author —
+        /// keyword search is fuzzy and would otherwise leak unrelated books
+        /// into a picker that claims to show editions of one work.
+        /// </summary>
+        private async Task<IEnumerable<AudibleSearchResult>> MergeKeywordEditionsAsync(
+            IEnumerable<AudibleSearchResult> shelf,
+            string title,
+            string author,
+            int candidateLimit,
+            string region,
+            string? language)
+        {
+            var shelfList = shelf as IList<AudibleSearchResult> ?? shelf.ToList();
+            try
+            {
+                var keyword = await _audibleService.SearchBooksAsync(
+                    $"{title} {author}", page: 1, limit: candidateLimit, region: region, language: language);
+                var keywordResults = keyword?.Results;
+                if (keywordResults is not { Count: > 0 }) return shelfList;
+
+                var seen = new HashSet<string>(
+                    shelfList.Where(b => !string.IsNullOrWhiteSpace(b.Asin)).Select(b => b.Asin!),
+                    StringComparer.OrdinalIgnoreCase);
+                var extras = keywordResults
+                    .Where(b => !string.IsNullOrWhiteSpace(b.Asin) && !seen.Contains(b.Asin!))
+                    .Where(b => (!string.IsNullOrWhiteSpace(b.Title) && b.Title.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0)
+                        || TitleMatcher.MostlyMatches(b.Title, b.Subtitle, title))
+                    .Where(b => AuthorAgrees(b, author))
+                    .ToList();
+                if (extras.Count == 0) return shelfList;
+
+                var languageFiltered = ApplyStrictLanguageFilter(extras, language).ToList();
+                if (languageFiltered.Count == 0) return shelfList;
+
+                _logger.LogInformation(
+                    "AUTHOR_TITLE merged {Count} keyword-search edition(s) of '{Title}' missing from the author page",
+                    languageFiltered.Count, title);
+                return shelfList.Concat(languageFiltered).ToList();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "AUTHOR_TITLE keyword edition merge failed; keeping author-page results only");
+                return shelfList;
+            }
+        }
+
+        /// <summary>
+        /// True when the candidate names the requested author (normalized
+        /// containment either way) or lists no authors at all — absence is
+        /// treated as agreement because some catalog entries omit
+        /// contributors, and this gate only guards against confidently
+        /// DIFFERENT authors sneaking in from fuzzy keyword search.
+        /// </summary>
+        internal static bool AuthorAgrees(AudibleSearchResult candidate, string author)
+        {
+            var names = (candidate.Authors ?? new List<AudibleAuthor>())
+                .Select(a => a?.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+            if (names.Count == 0) return true;
+            var wanted = TitleMatcher.Normalize(author);
+            if (wanted.Length == 0) return true;
+            return names.Any(n =>
+            {
+                var have = TitleMatcher.Normalize(n);
+                return have.Contains(wanted, StringComparison.Ordinal)
+                    || wanted.Contains(have, StringComparison.Ordinal);
+            });
         }
 
         private async Task<List<MetadataSearchResult>?> FallbackKeywordSearchAsync(
