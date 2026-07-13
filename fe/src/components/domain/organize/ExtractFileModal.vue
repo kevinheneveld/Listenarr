@@ -160,6 +160,9 @@
             <div class="extract-candidate-body">
               <div class="extract-candidate-title">
                 {{ candidate.title || '(untitled)' }}
+                <span v-if="candidate.subtitle" class="extract-candidate-subtitle"
+                  >— {{ candidate.subtitle }}</span
+                >
                 <span
                   v-if="candidateMatchesEmbeddedNarrator(candidate)"
                   class="extract-candidate-badge"
@@ -957,6 +960,11 @@ function stripSubtitlePart(title: string): string {
   flex-direction: column;
   gap: 0.25rem;
   min-width: 0;
+}
+
+.extract-candidate-subtitle {
+  color: #adb5bd;
+  font-weight: 400;
 }
 
 .extract-candidate-title {

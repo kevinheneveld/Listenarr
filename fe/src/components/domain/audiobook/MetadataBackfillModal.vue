@@ -1284,6 +1284,7 @@ function candidateYear(c: AudibleSearchResult): string {
                 <div class="candidate-meta">
                   <div class="candidate-title">
                     {{ c.title }}
+                    <span v-if="c.subtitle" class="candidate-subtitle">— {{ c.subtitle }}</span>
                     <span v-if="candidateMatchesNarrator(c)" class="candidate-badge">
                       Narrator matches
                     </span>
@@ -1737,6 +1738,11 @@ function candidateYear(c: AudibleSearchResult): string {
 .candidate-meta {
   min-width: 0;
 }
+.candidate-subtitle {
+  color: #adb5bd;
+  font-weight: 400;
+}
+
 .candidate-title {
   color: #fff;
   font-weight: 500;

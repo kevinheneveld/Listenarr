@@ -1169,6 +1169,13 @@ export interface AudibleSearchResponse {
 export interface AudibleSearchResult {
   asin?: string
   title?: string
+  /**
+   * Audible sometimes numbers series entries here instead of the title —
+   * live case: "Favorite Science Fiction Stories" volumes 3 and 8 carry
+   * "Volume 3"/"Volume 8" ONLY as subtitles, making them indistinguishable
+   * in a candidate list that hides this field.
+   */
+  subtitle?: string
   authors?: AudibleAuthor[]
   imageUrl?: string
   lengthMinutes?: number
