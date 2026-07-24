@@ -80,34 +80,7 @@ namespace Listenarr.Infrastructure.Library.Scanning
                     return;
                 }
 
-                var scanRoot = job.Path;
-                var usedBasePath = false;
-
-                // If audiobook has a BasePath configured, always scan that path for safety
-                // and to avoid scanning the global output root which may be large/unrelated.
-                if (!string.IsNullOrEmpty(audiobook.BasePath))
-                {
-                    scanRoot = audiobook.BasePath;
-                    usedBasePath = true;
-                    _logger.LogDebug("Using audiobook BasePath as scan root for job {JobId}: {ScanRoot}", job.Id, scanRoot);
-                }
-                else
-                {
-                    // No BasePath - allow explicit job path, otherwise fall back to settings OutputPath
-                    if (string.IsNullOrEmpty(scanRoot))
-                    {
-                        try
-                        {
-                            var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
-                            var settings = await configService.GetApplicationSettingsAsync();
-                            scanRoot = settings.OutputPath;
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                        {
-                            _logger.LogWarning(ex, "Failed to read settings for scan job {JobId}", job.Id);
-                        }
-                    }
-                }
+                var (scanRoot, usedBasePath) = await ResolveScanRootAsync(job, audiobook, scope);
 
                 if (usedBasePath && (string.IsNullOrEmpty(scanRoot) || !Directory.Exists(scanRoot)) && job.SkipMissingBasePathCleanup)
                 {

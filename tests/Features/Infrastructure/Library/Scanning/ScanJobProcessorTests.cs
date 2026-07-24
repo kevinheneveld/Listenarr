@@ -124,6 +124,41 @@ namespace Listenarr.Tests.Features.Infrastructure.Library.Scanning
             Assert.Single(files);
         }
 
+        [Fact]
+        public async Task ProcessJobAsync_ExplicitPath_WinsOverBasePath()
+        {
+            // The documented contract of POST /library/{id}/scan { path } is
+            // "scan a specific folder" — the operator escape hatch for
+            // reclaiming files that live OUTSIDE the record's folder.
+            // Regression: the processor silently overrode the explicit path
+            // with BasePath, turning every such reclaim into a no-op against
+            // the record's own folder (live case: 139 reclaim scans that all
+            // "completed" without importing a single file).
+            var basePath = FileService.GetTempDirectory("scan-explicit-base");
+            var elsewhere = FileService.GetTempDirectory("scan-explicit-elsewhere");
+            var audioPath = Path.Join(elsewhere, "Reclaimed Book-01.mp3");
+            await File.WriteAllTextAsync(audioPath, "audio");
+
+            var audiobook = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Reclaimed Book")
+                .WithBasePath(basePath) // set, non-empty, and NOT where the audio is
+                .Build());
+
+            var queue = Assert.IsType<ScanQueueService>(_provider.GetRequiredService<IScanQueueService>());
+            var jobId = await queue.EnqueueScanAsync(audiobook, elsewhere);
+            Assert.True(queue.Reader.TryRead(out var job));
+            Assert.Equal(jobId, job.Id);
+
+            var processor = _provider.GetRequiredService<IScanJobProcessor>();
+            await processor.ProcessJobAsync(job, CancellationToken.None);
+
+            Assert.True(queue.TryGetJob(job.Id, out var updatedJob));
+            Assert.Equal("Completed", updatedJob!.Status);
+            var files = await _audiobookFileRepository.GetByAudiobookIdAsync(audiobook.Id);
+            var file = Assert.Single(files);
+            Assert.Equal(audioPath, file.Path);
+        }
+
         private async Task<(ScanQueueService Queue, ScanJob Job)> CreateQueuedScanJobAsync(Audiobook audiobook)
         {
             var queue = Assert.IsType<ScanQueueService>(_provider.GetRequiredService<IScanQueueService>());
