@@ -204,5 +204,45 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.NotNull(match);
             Assert.Null(match!.MatchedText);
         }
+
+        [Fact]
+        public void MatchTitle_AsrFusedCompound_MatchesSpacedTitle()
+        {
+            // Live case: whisper wrote "Homefront" for a book titled
+            // "Home Front" — a perfect announcement scored ~0 because the
+            // two-token window compared "home" against "homefront".
+            var tokens = TranscriptMatcher.Tokenize(
+                "podium audio presents homefront book 7 of the star kingdom series written by lindsay buroker");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "Home Front");
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.9, $"expected fused-compound match, got {match.Score}");
+        }
+
+        [Fact]
+        public void MatchTitle_AsrSplitCompound_MatchesFusedTitle()
+        {
+            // The mirror image: a one-word title heard as two words.
+            var tokens = TranscriptMatcher.Tokenize("this is star dust by neil gaiman");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "Stardust");
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.9, $"expected split-compound match, got {match.Score}");
+        }
+
+        [Fact]
+        public void MatchTitle_Fusion_CannotInventAMatch()
+        {
+            // Fusion removes the tokenization penalty; it must not let an
+            // unrelated pair of words impersonate a title.
+            var tokens = TranscriptMatcher.Tokenize("a completely different story about gardens");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "Home Front");
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score < 0.35, $"expected no match, got {match.Score}");
+        }
     }
 }

@@ -175,23 +175,16 @@ namespace Listenarr.Application.Audiobooks.Verification
 
             var bestScore = 0.0;
             var bestStart = -1;
-            var lastStart = Math.Max(0, transcriptTokens.Count - targetTokens.Count);
+            var bestConsumed = 0;
 
-            for (var start = 0; start <= lastStart; start++)
+            for (var start = 0; start < transcriptTokens.Count; start++)
             {
-                var sum = 0.0;
-                for (var i = 0; i < targetTokens.Count; i++)
-                {
-                    var transcriptIndex = start + i;
-                    sum += transcriptIndex < transcriptTokens.Count
-                        ? TokenSimilarity(targetTokens[i], transcriptTokens[transcriptIndex], nameMode)
-                        : 0;
-                }
-                var score = sum / targetTokens.Count;
+                var (score, consumed) = AlignFrom(transcriptTokens, targetTokens, start, nameMode);
                 if (score > bestScore)
                 {
                     bestScore = score;
                     bestStart = start;
+                    bestConsumed = consumed;
                 }
             }
 
@@ -200,11 +193,89 @@ namespace Listenarr.Application.Audiobooks.Verification
             string? matchedText = null;
             if (bestStart >= 0 && bestScore >= 0.35)
             {
-                var length = Math.Min(targetTokens.Count, transcriptTokens.Count - bestStart);
+                var length = Math.Min(Math.Max(bestConsumed, 1), transcriptTokens.Count - bestStart);
                 matchedText = string.Join(' ', transcriptTokens.Skip(bestStart).Take(length));
             }
 
             return new VerificationFieldMatch(Math.Round(bestScore, 3), matchedText);
+        }
+
+        /// <summary>
+        /// Aligns the target tokens against the transcript starting at
+        /// <paramref name="start"/>, allowing 2↔1 token FUSION in either
+        /// direction — ASR freely merges and splits compounds, so a spoken
+        /// "Home Front" often lands as the single token "homefront" (live
+        /// case: a perfect announcement scored ~0 on title because the
+        /// two-token window compared "home" against "homefront") and a
+        /// one-word "Stardust" can land as "star dust". Fused comparisons
+        /// still pass through the same similarity gates, so fusion cannot
+        /// invent matches — it only removes the tokenization penalty.
+        /// Returns the average per-target-token similarity and how many
+        /// transcript tokens the best alignment consumed.
+        /// </summary>
+        private static (double Score, int Consumed) AlignFrom(
+            IReadOnlyList<string> transcript, IReadOnlyList<string> target, int start, bool nameMode)
+        {
+            var span = Math.Min(transcript.Count - start, target.Count * 2 + 1);
+            var dp = new double[target.Count + 1, span + 1];
+            for (var i = 0; i <= target.Count; i++)
+                for (var j = 0; j <= span; j++)
+                    dp[i, j] = double.NegativeInfinity;
+            dp[0, 0] = 0;
+
+            for (var i = 0; i < target.Count; i++)
+            {
+                for (var j = 0; j <= span; j++)
+                {
+                    if (double.IsNegativeInfinity(dp[i, j])) continue;
+
+                    if (j < span)
+                    {
+                        // 1:1
+                        var one = dp[i, j] + TokenSimilarity(target[i], transcript[start + j], nameMode);
+                        if (one > dp[i + 1, j + 1]) dp[i + 1, j + 1] = one;
+
+                        // 2:1 — two target tokens fused against one heard token
+                        if (i + 1 < target.Count)
+                        {
+                            var fusedTarget = dp[i, j] + 2 * TokenSimilarity(target[i] + target[i + 1], transcript[start + j], nameMode);
+                            if (fusedTarget > dp[i + 2, j + 1]) dp[i + 2, j + 1] = fusedTarget;
+                        }
+                    }
+
+                    // 1:2 — one target token against two heard tokens fused.
+                    // In name mode, never fuse across stopwords: gluing
+                    // "and"+"the" into "andthe" bypasses the stopword guard
+                    // and can phonetic-match a first name (live regression:
+                    // "Andy" scoring 0.85 against "and the").
+                    if (j + 1 < span
+                        && !(nameMode && (NameStopWords.Contains(transcript[start + j]) || NameStopWords.Contains(transcript[start + j + 1]))))
+                    {
+                        var fusedHeard = dp[i, j] + TokenSimilarity(target[i], transcript[start + j] + transcript[start + j + 1], nameMode);
+                        if (fusedHeard > dp[i + 1, j + 2]) dp[i + 1, j + 2] = fusedHeard;
+                    }
+                }
+            }
+
+            // Best full alignment; when the transcript runs out early the
+            // remaining target tokens simply score 0 (same as the old code).
+            var best = 0.0;
+            var consumed = 0;
+            for (var i = 0; i <= target.Count; i++)
+            {
+                for (var j = 0; j <= span; j++)
+                {
+                    if (double.IsNegativeInfinity(dp[i, j])) continue;
+                    if (i < target.Count && j < span) continue; // only boundary states are terminal
+                    var score = dp[i, j] / target.Count;
+                    if (score > best)
+                    {
+                        best = score;
+                        consumed = j;
+                    }
+                }
+            }
+            return (best, consumed);
         }
 
         private static double TokenSimilarity(string target, string heard, bool nameMode)
