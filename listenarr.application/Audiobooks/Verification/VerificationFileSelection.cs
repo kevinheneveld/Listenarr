@@ -76,6 +76,61 @@ namespace Listenarr.Application.Audiobooks.Verification
             return (legacy, legacy);
         }
 
+        /// <summary>Cap on how many consecutive files feed one sample window.</summary>
+        public const int MaxWindowFiles = 4;
+
+        /// <summary>
+        /// The files whose audio feeds each verification window, in play
+        /// order. A window keeps consuming consecutive files until it has
+        /// enough seconds: retail rips often front a book with a seconds-long
+        /// ident stub, and sampling only file one made the ENTIRE opening
+        /// transcript "This is Audible." — the title announcement sat unheard
+        /// in file two and the book auto-flagged (live case: a 2s ident, an
+        /// 18s announcement file, then chapters). Files with unknown duration
+        /// are assumed to fill the window (the legacy single-file behavior).
+        /// </summary>
+        public static (IReadOnlyList<string> OpeningFiles, IReadOnlyList<string> ClosingFiles) SelectSampleFiles(
+            Audiobook audiobook, int openingSeconds, int closingSeconds)
+        {
+            var ordered = AudiobookFileOrdering.InNaturalOrder(audiobook.Files)
+                .Where(f => !string.IsNullOrWhiteSpace(f.Path))
+                .ToList();
+
+            if (ordered.Count == 0)
+            {
+                var legacy = string.IsNullOrWhiteSpace(audiobook.FilePath)
+                    ? Array.Empty<string>()
+                    : new[] { audiobook.FilePath! };
+                return (legacy, legacy);
+            }
+
+            var byPlayOrder = ordered
+                .Select((f, index) => (f, index, rank: ClassifyPlayOrder(f.Path!, audiobook.Title)))
+                .OrderBy(x => x.rank)
+                .ThenBy(x => x.index)
+                .Select(x => x.f)
+                .ToList();
+
+            var opening = AccumulateWindow(byPlayOrder, openingSeconds);
+            var closingReversed = AccumulateWindow(((IEnumerable<AudiobookFile>)byPlayOrder).Reverse().ToList(), closingSeconds);
+            closingReversed.Reverse(); // back to play order, ending at the last file
+            return (opening, closingReversed);
+        }
+
+        private static List<string> AccumulateWindow(IReadOnlyList<AudiobookFile> files, int windowSeconds)
+        {
+            var result = new List<string>();
+            double covered = 0;
+            foreach (var f in files)
+            {
+                result.Add(f.Path!);
+                if (f.DurationSeconds is not > 0) break; // unknown: assume it fills the window
+                covered += f.DurationSeconds.Value;
+                if (covered >= windowSeconds || result.Count >= MaxWindowFiles) break;
+            }
+            return result;
+        }
+
         /// <summary>0 = front matter, 1 = content, 2 = back matter.</summary>
         private static int ClassifyPlayOrder(string path, string? title)
         {

@@ -98,6 +98,112 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
     {
         private static AudiobookFile FileAt(string path) => new() { Path = path };
 
+        private static AudiobookFile FileAt(string path, double seconds) => new() { Path = path, DurationSeconds = seconds };
+
+        [Fact]
+        public void SelectSampleFiles_TinyIdentStub_SpillsIntoFollowingFiles()
+        {
+            // Live case (record shape): a 2s "This is Audible." stub as file
+            // 001, an 18s title announcement as 002, then chapters. The old
+            // first-file-only window transcribed exactly "This is Audible."
+            // and the book auto-flagged.
+            var book = new Audiobook
+            {
+                Title = "Home Front",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/a/Home Front-001.mp3", 2),
+                    FileAt("/a/Home Front-002.mp3", 18),
+                    FileAt("/a/Home Front-003.mp3", 1520),
+                    FileAt("/a/Home Front-004.mp3", 1800),
+                }
+            };
+
+            var (opening, closing) = VerificationFileSelection.SelectSampleFiles(book, 90, 30);
+
+            // 2 + 18 < 90, so the window needs the third file too.
+            Assert.Equal(new[] { "/a/Home Front-001.mp3", "/a/Home Front-002.mp3", "/a/Home Front-003.mp3" }, opening);
+            // The last file alone covers 30s.
+            Assert.Equal(new[] { "/a/Home Front-004.mp3" }, closing);
+        }
+
+        [Fact]
+        public void SelectSampleFiles_LongFirstFile_SingleFileWindows()
+        {
+            var book = new Audiobook
+            {
+                Title = "Normal Book",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/a/Normal Book-001.mp3", 1800),
+                    FileAt("/a/Normal Book-002.mp3", 1800),
+                }
+            };
+
+            var (opening, closing) = VerificationFileSelection.SelectSampleFiles(book, 90, 30);
+
+            Assert.Equal(new[] { "/a/Normal Book-001.mp3" }, opening);
+            Assert.Equal(new[] { "/a/Normal Book-002.mp3" }, closing);
+        }
+
+        [Fact]
+        public void SelectSampleFiles_UnknownDurations_LegacySingleFileBehavior()
+        {
+            var book = new Audiobook
+            {
+                Title = "No Durations",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/a/No Durations-001.mp3"),
+                    FileAt("/a/No Durations-002.mp3"),
+                }
+            };
+
+            var (opening, closing) = VerificationFileSelection.SelectSampleFiles(book, 90, 30);
+
+            Assert.Equal(new[] { "/a/No Durations-001.mp3" }, opening);
+            Assert.Equal(new[] { "/a/No Durations-002.mp3" }, closing);
+        }
+
+        [Fact]
+        public void SelectSampleFiles_AllTinyFiles_CapsTheWindow()
+        {
+            // A pathological many-tiny-files rip must not schedule dozens of
+            // ffmpeg clips for one window.
+            var book = new Audiobook
+            {
+                Title = "Tiny",
+                Files = Enumerable.Range(1, 20)
+                    .Select(i => FileAt($"/a/Tiny-{i:D3}.mp3", 3))
+                    .ToList()
+            };
+
+            var (opening, _) = VerificationFileSelection.SelectSampleFiles(book, 90, 30);
+
+            Assert.Equal(VerificationFileSelection.MaxWindowFiles, opening.Count);
+        }
+
+        [Fact]
+        public void SelectSampleFiles_ClosingSpillsBackwardAcrossTinyTailFiles()
+        {
+            // Outro stub at the end: the closing window must reach back into
+            // the preceding file, and come back in play order.
+            var book = new Audiobook
+            {
+                Title = "Tail Stub",
+                Files = new List<AudiobookFile>
+                {
+                    FileAt("/a/Tail Stub-001.mp3", 1800),
+                    FileAt("/a/Tail Stub-002.mp3", 1800),
+                    FileAt("/a/Tail Stub-003.mp3", 5),
+                }
+            };
+
+            var (_, closing) = VerificationFileSelection.SelectSampleFiles(book, 90, 30);
+
+            Assert.Equal(new[] { "/a/Tail Stub-002.mp3", "/a/Tail Stub-003.mp3" }, closing);
+        }
+
         [Fact]
         public void SelectFirstAndLast_UsesNaturalOrder_NotAlphabetical()
         {

@@ -243,7 +243,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
 
             var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
             var extractor = new Mock<IAudioSampleExtractor>();
-            extractor.Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(samples);
 
             var configuration = new Mock<IConfigurationService>();
@@ -275,7 +275,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
 
             var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
             var extractor = new Mock<IAudioSampleExtractor>();
-            extractor.Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(samples);
 
             var configuration = new Mock<IConfigurationService>();
@@ -302,7 +302,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
 
             var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
             var extractor = new Mock<IAudioSampleExtractor>();
-            extractor.Setup(e => e.ExtractAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(samples);
 
             var configuration = new Mock<IConfigurationService>();

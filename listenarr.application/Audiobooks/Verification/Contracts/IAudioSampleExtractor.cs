@@ -70,5 +70,17 @@ namespace Listenarr.Application.Audiobooks.Verification.Contracts
         /// null rather than failing the whole set.
         /// </summary>
         Task<AudioSampleSet> ExtractAsync(string firstFilePath, string? lastFilePath, AudioSampleStrategy strategy, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Multi-file variant: the opening window reads
+        /// <paramref name="openingFiles"/> in order, spilling into the next
+        /// file until the window is filled — retail rips often front a book
+        /// with a seconds-long ident stub ("This is Audible.") whose only
+        /// content would otherwise BE the whole opening sample, with the
+        /// title announcement unheard in file two. The closing window
+        /// symmetrically accumulates tails across
+        /// <paramref name="closingFiles"/> (given in play order).
+        /// </summary>
+        Task<AudioSampleSet> ExtractAsync(IReadOnlyList<string> openingFiles, IReadOnlyList<string> closingFiles, AudioSampleStrategy strategy, CancellationToken cancellationToken = default);
     }
 }

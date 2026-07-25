@@ -47,7 +47,14 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
             _logger = logger;
         }
 
-        public async Task<AudioSampleSet> ExtractAsync(string firstFilePath, string? lastFilePath, AudioSampleStrategy strategy, CancellationToken cancellationToken = default)
+        public Task<AudioSampleSet> ExtractAsync(string firstFilePath, string? lastFilePath, AudioSampleStrategy strategy, CancellationToken cancellationToken = default)
+        {
+            var opening = new[] { firstFilePath };
+            var closing = new[] { lastFilePath ?? firstFilePath };
+            return ExtractAsync(opening, closing, strategy, cancellationToken);
+        }
+
+        public async Task<AudioSampleSet> ExtractAsync(IReadOnlyList<string> openingFiles, IReadOnlyList<string> closingFiles, AudioSampleStrategy strategy, CancellationToken cancellationToken = default)
         {
             var ffmpegPath = await _ffmpegService.EnsureFfmpegInstalledAsync();
             if (ffmpegPath == null)
@@ -68,18 +75,132 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
 
             string? opening = null, closing = null;
 
-            if (strategy.OpeningSeconds > 0 && File.Exists(firstFilePath))
+            if (strategy.OpeningSeconds > 0)
             {
-                opening = await ClipAsync(ffmpegPath, firstFilePath, tempDir, fromEnd: false, strategy.OpeningSeconds, priorityClass, cancellationToken);
+                opening = await ClipAcrossAsync(ffmpegPath, openingFiles, tempDir, fromEnd: false, strategy.OpeningSeconds, priorityClass, cancellationToken);
             }
 
-            var closingSource = lastFilePath ?? firstFilePath;
-            if (strategy.ClosingSeconds > 0 && File.Exists(closingSource))
+            if (strategy.ClosingSeconds > 0)
             {
-                closing = await ClipAsync(ffmpegPath, closingSource, tempDir, fromEnd: true, strategy.ClosingSeconds, priorityClass, cancellationToken);
+                closing = await ClipAcrossAsync(ffmpegPath, closingFiles, tempDir, fromEnd: true, strategy.ClosingSeconds, priorityClass, cancellationToken);
             }
 
             return new AudioSampleSet(TryDeleteClip) { OpeningClipPath = opening, ClosingClipPath = closing };
+        }
+
+        /// <summary>
+        /// Clips one window across consecutive files: forward from the start
+        /// for openings, backward accumulating tails for closings, spilling
+        /// into the next file until the window's seconds are covered. Pieces
+        /// are plain 16 kHz mono s16le WAVs, so multi-file windows are joined
+        /// by payload concatenation — no re-encode. A single readable file
+        /// short-circuits to the untouched single-clip path.
+        /// </summary>
+        private async Task<string?> ClipAcrossAsync(
+            string ffmpegPath, IReadOnlyList<string> files, string tempDir,
+            bool fromEnd, int seconds, ProcessPriorityClass? priorityClass, CancellationToken ct)
+        {
+            var existing = files.Where(File.Exists).ToList();
+            if (existing.Count == 0) return null;
+            if (existing.Count == 1)
+            {
+                return await ClipAsync(ffmpegPath, existing[0], tempDir, fromEnd, seconds, priorityClass, ct);
+            }
+
+            var order = fromEnd ? ((IEnumerable<string>)existing).Reverse().ToList() : existing;
+            var pieces = new List<string>();
+            try
+            {
+                double remaining = seconds;
+                foreach (var file in order)
+                {
+                    if (remaining < 1) break;
+                    var piece = await ClipAsync(ffmpegPath, file, tempDir, fromEnd, (int)Math.Ceiling(remaining), priorityClass, ct);
+                    if (piece == null) continue; // unreadable source — try the next
+                    pieces.Add(piece);
+                    remaining -= WavSeconds(piece);
+                }
+
+                if (pieces.Count == 0) return null;
+                if (pieces.Count == 1)
+                {
+                    var only = pieces[0];
+                    pieces.Clear(); // keep it out of the finally-cleanup
+                    return only;
+                }
+
+                if (fromEnd) pieces.Reverse(); // tails were gathered backwards
+                var joined = Path.Join(tempDir, $"{Guid.NewGuid():N}.wav");
+                ConcatWavs(pieces, joined);
+                return joined;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "Multi-file clip failed; no window produced");
+                return null;
+            }
+            finally
+            {
+                foreach (var piece in pieces) TryDeleteClip(piece);
+            }
+        }
+
+        /// <summary>Seconds of audio in a 16 kHz mono s16le WAV (32,000 bytes/s).</summary>
+        internal static double WavSeconds(string wavPath)
+        {
+            var located = Whisper.WhisperService.TryLocateDataChunk(wavPath);
+            return located == null ? 0 : located.Value.DataSize / 32000.0;
+        }
+
+        /// <summary>
+        /// Joins same-format WAVs by copying the first piece's header and
+        /// appending every data payload, RIFF/data sizes patched. Chunk
+        /// offsets come from real chunk-walking (ffmpeg inserts LIST/INFO
+        /// chunks between fmt and data — assuming the canonical 44-byte
+        /// header corrupts the clip; see the whisper head-probe history).
+        /// </summary>
+        internal static void ConcatWavs(IReadOnlyList<string> pieces, string outputPath)
+        {
+            var located = new List<(string Path, long Offset, long Size)>();
+            foreach (var piece in pieces)
+            {
+                var loc = Whisper.WhisperService.TryLocateDataChunk(piece);
+                if (loc != null && loc.Value.DataSize > 0)
+                {
+                    located.Add((piece, loc.Value.ChunkOffset, loc.Value.DataSize));
+                }
+            }
+            if (located.Count == 0)
+            {
+                throw new IOException("No readable WAV pieces to concatenate");
+            }
+
+            var totalData = located.Sum(x => x.Size);
+            var first = located[0];
+            var prefix = new byte[first.Offset + 8];
+            using (var head = File.OpenRead(first.Path))
+            {
+                head.ReadExactly(prefix);
+            }
+            BitConverter.GetBytes((uint)(first.Offset + totalData)).CopyTo(prefix, 4);
+            BitConverter.GetBytes((uint)totalData).CopyTo(prefix, (int)first.Offset + 4);
+
+            using var output = File.Create(outputPath);
+            output.Write(prefix);
+            var buffer = new byte[81920];
+            foreach (var (path, offset, size) in located)
+            {
+                using var source = File.OpenRead(path);
+                source.Seek(offset + 8, SeekOrigin.Begin);
+                var left = size;
+                while (left > 0)
+                {
+                    var read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, left));
+                    if (read <= 0) break;
+                    output.Write(buffer, 0, read);
+                    left -= read;
+                }
+            }
         }
 
         private async Task<string?> ClipAsync(string ffmpegPath, string sourcePath, string tempDir, bool fromEnd, int seconds, ProcessPriorityClass? priorityClass, CancellationToken ct)

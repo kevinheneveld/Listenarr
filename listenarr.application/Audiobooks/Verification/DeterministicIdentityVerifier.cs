@@ -75,9 +75,19 @@ namespace Listenarr.Application.Audiobooks.Verification
                 OpeningSeconds: Math.Clamp(settings?.VerificationOpeningSeconds ?? 90, 0, 600),
                 ClosingSeconds: Math.Clamp(settings?.VerificationClosingSeconds ?? 30, 0, 600));
 
-            var (_, lastFile) = VerificationFileSelection.SelectFirstAndLast(audiobook);
+            // Windows may span several consecutive files: retail rips front
+            // books with seconds-long ident stubs, and a window locked to
+            // file one heard nothing but "This is Audible." (see
+            // VerificationFileSelection.SelectSampleFiles).
+            var (openingFiles, closingFiles) = VerificationFileSelection.SelectSampleFiles(
+                audiobook, strategy.OpeningSeconds, strategy.ClosingSeconds);
+            if (openingFiles.Count == 0)
+            {
+                openingFiles = new[] { audioFilePath };
+                closingFiles = openingFiles;
+            }
 
-            await using var samples = await _extractor.ExtractAsync(audioFilePath, lastFile, strategy, cancellationToken);
+            await using var samples = await _extractor.ExtractAsync(openingFiles, closingFiles, strategy, cancellationToken);
             if (samples.IsEmpty)
             {
                 return Inconclusive("clip extraction produced no audio windows");
