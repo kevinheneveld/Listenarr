@@ -30,6 +30,7 @@ vi.mock('@/services/api', () => ({
     getBootstrapConfig: vi.fn(async () => ({})),
     getStartupConfig: vi.fn(async () => ({})),
     getApplicationSettings: vi.fn(async () => ({})),
+    getSeriesHealth: vi.fn(async () => ({ region: 'us', rows: [] })),
   },
 }))
 
@@ -400,6 +401,8 @@ describe('AudiobooksView Grouping', () => {
     const seriesOpt = (vm.sortOptions || []).map((o: unknown) => o.value)
     expect(seriesOpt).toContain('title')
     expect(seriesOpt).toContain('count')
+    expect(seriesOpt).toContain('completion')
+    expect(seriesOpt).toContain('missing')
     expect(seriesOpt).not.toContain('author-last')
 
     // Series default should be `title` ascending and the control should NOT be active

@@ -190,6 +190,14 @@
             class="toolbar-custom-select"
             aria-label="Sort by"
           />
+          <CustomSelect
+            v-if="groupBy === 'series'"
+            v-model="seriesCompletionFilter"
+            :options="seriesCompletionFilterOptions"
+            :active="seriesCompletionFilter !== 'all'"
+            class="toolbar-custom-select"
+            aria-label="Filter series by completion"
+          />
         </div>
       </div>
     </div>
@@ -311,6 +319,13 @@
               >{{ collection.readyCount }}</span
             >
             / {{ collection.count }} book{{ collection.count !== 1 ? 's' : '' }}
+            <span
+              v-if="groupBy === 'series' && seriesBadge(collection.name)"
+              class="series-list-completion"
+              :class="{ complete: seriesHealthFor(collection.name)?.complete }"
+            >
+              · {{ seriesBadge(collection.name) }}
+            </span>
           </div>
         </div>
       </div>
@@ -517,6 +532,13 @@
               <p class="series-bottom-title">{{ collection.name }}</p>
               <p class="series-bottom-count">
                 {{ collection.count }} book{{ collection.count !== 1 ? 's' : '' }}
+              </p>
+              <p
+                v-if="groupBy === 'series' && seriesBadge(collection.name)"
+                class="series-bottom-completion"
+                :class="{ complete: seriesHealthFor(collection.name)?.complete }"
+              >
+                {{ seriesBadge(collection.name) }}
               </p>
             </div>
           </div>
@@ -1058,6 +1080,7 @@ import { useConfigurationStore } from '@/stores/configuration'
 import { useRootFoldersStore } from '@/stores/rootFolders'
 import { useDownloadsStore } from '@/stores/downloads'
 import { apiService } from '@/services/api'
+import type { SeriesHealthApiRow } from '@/types'
 import { signalRService } from '@/services/signalr'
 import { useToast } from '@/services/toastService'
 import { buildApiPath } from '@/services/apiBase'
@@ -1826,6 +1849,82 @@ function getAudiobookStatus(audiobook: Audiobook): AudiobookStatus {
   return audiobookStatusById.value.get(audiobook.id) ?? computeAudiobookStatusRaw(audiobook)
 }
 
+// ── Series completion (health) ──────────────────────────────────────────────
+// Best-edition completion per series, fetched once when entering the series
+// group — powers the "Closest to complete" sort, the completion filter, and
+// the per-card badge. Null until loaded / on failure (UI degrades silently).
+const seriesHealthByName = ref<Map<string, SeriesHealthApiRow> | null>(null)
+let seriesHealthRequested = false
+watch(
+  () => groupBy.value,
+  (g) => {
+    if (g !== 'series' || seriesHealthRequested) return
+    seriesHealthRequested = true
+    void apiService
+      .getSeriesHealth()
+      .then((resp) => {
+        const map = new Map<string, SeriesHealthApiRow>()
+        for (const row of resp.rows) map.set(row.name.toLowerCase(), row)
+        seriesHealthByName.value = map
+      })
+      .catch(() => {})
+  },
+  { immediate: true },
+)
+
+function seriesHealthFor(name: string): SeriesHealthApiRow | null {
+  return seriesHealthByName.value?.get((name || '').toLowerCase()) ?? null
+}
+
+/** Effective completion for prioritization: best run first, overall second. */
+function seriesCompletionScore(row: SeriesHealthApiRow | null): number | null {
+  if (!row) return null
+  return row.bestRun?.completion ?? row.completion ?? null
+}
+
+/** Compact badge: "7/9 · 78% — Ray Porter run". Null when nothing is known. */
+function seriesBadge(name: string): string | null {
+  const row = seriesHealthFor(name)
+  if (!row) return null
+  if (row.catalogTotal == null) {
+    return row.missingTracked > 0 ? `${row.owned} owned · ${row.missingTracked} tracked missing` : null
+  }
+  const run = row.bestRun
+  const owned = run ? run.owned : row.owned
+  const total = run ? run.total : row.catalogTotal
+  const pct = Math.round(((run ? run.completion : (row.completion ?? 0)) as number) * 100)
+  const runLabel = run && run.narrators.length > 0 ? ` — ${run.narrators[0]}` : ''
+  return `${owned}/${total} · ${pct}%${runLabel}`
+}
+
+const seriesCompletionFilter = ref('all')
+const seriesCompletionFilterOptions = [
+  { value: 'all', label: 'All series' },
+  { value: 'nearly', label: 'Nearly complete (≥75%)' },
+  { value: 'progress', label: 'In progress' },
+  { value: 'complete', label: 'Complete' },
+  { value: 'nocatalog', label: 'No catalog total' },
+]
+
+function seriesMatchesCompletionFilter(name: string): boolean {
+  if (seriesCompletionFilter.value === 'all') return true
+  const row = seriesHealthFor(name)
+  const score = seriesCompletionScore(row)
+  switch (seriesCompletionFilter.value) {
+    case 'complete':
+      return !!row?.complete
+    case 'nearly':
+      return !!row && !row.complete && score != null && score >= 0.75
+    case 'progress':
+      return !!row && !row.complete && score != null && score < 0.75
+    case 'nocatalog':
+      return !row || row.catalogTotal == null
+    default:
+      return true
+  }
+}
+
+
 const groupedCollections = computed(() => {
   if (groupBy.value === 'books') return []
 
@@ -1948,11 +2047,38 @@ const groupedCollections = computed(() => {
     }
   })
 
-  const vals = Array.from(groups.values())
+  let vals = Array.from(groups.values())
+
+  if (groupBy.value === 'series' && seriesCompletionFilter.value !== 'all') {
+    vals = vals.filter((v) => seriesMatchesCompletionFilter(v.name))
+  }
 
   // For grouped views (authors/series), respect toolbar sortKey for collection sorting
   const order = sortOrder.value === 'asc' ? 1 : -1
   switch (sortKey.value) {
+    case 'completion': {
+      // Ascending = priority order: incomplete series closest to complete
+      // first, complete ones after, unknown-catalog last.
+      const rank = (name: string): number => {
+        const row = seriesHealthFor(name)
+        if (row?.complete) return 1.5
+        const score = seriesCompletionScore(row)
+        if (score == null) return 2
+        return 1 - score
+      }
+      vals.sort((a, b) => (rank(a.name) - rank(b.name)) * order || a.name.localeCompare(b.name))
+      break
+    }
+    case 'missing': {
+      const missingOf = (name: string): number => {
+        const row = seriesHealthFor(name)
+        if (!row) return Number.MAX_SAFE_INTEGER
+        if (row.catalogTotal != null) return Math.max(0, row.catalogTotal - row.owned)
+        return row.missingTracked
+      }
+      vals.sort((a, b) => (missingOf(a.name) - missingOf(b.name)) * order || a.name.localeCompare(b.name))
+      break
+    }
     case 'count':
       vals.sort((a, b) => (a.count - b.count) * order)
       break
@@ -2085,6 +2211,8 @@ const sortOptions = computed(() => {
   return [
     { value: 'title', label: 'Series' }, // sort by series name
     { value: 'count', label: 'Books' }, // number of books in the collection
+    { value: 'completion', label: 'Closest to complete' }, // prioritize nearly-filled editions
+    { value: 'missing', label: 'Fewest missing' },
   ]
 })
 
@@ -3526,6 +3654,20 @@ defineExpose({
   margin: 0 0 4px 0;
   font-weight: 500;
   text-align: center;
+}
+
+.series-bottom-completion {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  color: #f0ad4e;
+}
+.series-bottom-completion.complete,
+.series-list-completion.complete {
+  color: #69db7c;
+}
+.series-list-completion {
+  color: #f0ad4e;
+  font-size: 0.85em;
 }
 
 .series-bottom-count {

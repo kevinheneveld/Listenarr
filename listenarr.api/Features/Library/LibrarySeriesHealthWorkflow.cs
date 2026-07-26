@@ -144,6 +144,22 @@ namespace Listenarr.Api.Features.Library
                 monitored.Select(m => m.SeriesName.Trim()),
                 StringComparer.OrdinalIgnoreCase);
 
+            // Best-edition completion per series — the "one more grab
+            // finishes it" number. Computed from the cached catalog entries
+            // (no network) inside this memoized refresh; a series whose best
+            // narrator run is 8/9 must rank above 8 books scattered across
+            // three incompatible runs.
+            var bestRuns = new Dictionary<string, Application.Audiobooks.Series.SeriesRunCompletion.BestRunSummary?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var acc in bySeries.Values)
+            {
+                var summary = catalogSummaries.TryGetValue(acc.Name, out var found) ? found : null;
+                if (summary?.Works is > 0)
+                {
+                    var entries = await _repo.GetSeriesCatalogEntriesAsync(acc.Name, region, ct);
+                    bestRuns[acc.Name] = Application.Audiobooks.Series.SeriesRunCompletion.BestRun(entries, acc.OwnedWorks);
+                }
+            }
+
             var rows = bySeries.Values
                 .Select(acc =>
                 {
@@ -155,6 +171,7 @@ namespace Listenarr.Api.Features.Library
                     var complete = catalogTotal.HasValue
                         ? ownedWorks >= catalogTotal.Value
                         : missingTracked == 0;
+                    var bestRun = bestRuns.TryGetValue(acc.Name, out var br) ? br : null;
                     return new
                     {
                         name = acc.Name,
@@ -163,7 +180,19 @@ namespace Listenarr.Api.Features.Library
                         catalogTotal,
                         editions = summary?.Editions,
                         monitored = monitoredNames.Contains(acc.Name),
-                        complete
+                        complete,
+                        completion = catalogTotal is > 0
+                            ? Math.Round(Math.Min(1.0, (double)ownedWorks / catalogTotal.Value), 3)
+                            : (double?)null,
+                        bestRun = bestRun == null ? null : new
+                        {
+                            label = bestRun.Label,
+                            kind = bestRun.Kind,
+                            narrators = bestRun.Narrators,
+                            owned = bestRun.OwnedWorks,
+                            total = bestRun.TotalWorks,
+                            completion = Math.Round(bestRun.Completion, 3)
+                        }
                     };
                 })
                 .OrderByDescending(r => (r.catalogTotal ?? (r.owned + r.missingTracked)) - r.owned)

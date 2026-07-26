@@ -1344,6 +1344,17 @@ export interface SeriesHealthApiRow {
   editions?: number | null
   monitored: boolean
   complete: boolean
+  /** Owned works / catalog total (0..1); null when no catalog is cached. */
+  completion?: number | null
+  /** The user's most-built recording edition — the "one more grab finishes it" number. */
+  bestRun?: {
+    label: string
+    kind: string
+    narrators: string[]
+    owned: number
+    total: number
+    completion: number
+  } | null
 }
 
 /** Add-ready metadata for one missing work within a recording run. */
