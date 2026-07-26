@@ -1897,7 +1897,21 @@ function seriesBadge(name: string): string | null {
   return `${owned}/${total} · ${pct}%${runLabel}`
 }
 
-const seriesCompletionFilter = ref('all')
+const SERIES_COMPLETION_FILTER_KEY = 'audiobooks-series-completion-filter'
+const seriesCompletionFilter = ref(
+  (() => {
+    try {
+      return localStorage.getItem(SERIES_COMPLETION_FILTER_KEY) || 'all'
+    } catch {
+      return 'all'
+    }
+  })(),
+)
+watch(seriesCompletionFilter, (v) => {
+  try {
+    localStorage.setItem(SERIES_COMPLETION_FILTER_KEY, v)
+  } catch {}
+})
 const seriesCompletionFilterOptions = [
   { value: 'all', label: 'All series' },
   { value: 'nearly', label: 'Nearly complete (≥75%)' },
@@ -2576,7 +2590,55 @@ onMounted(async () => {
   }
 })
 
+// ── Back-navigation scroll memory ───────────────────────────────────────────
+// The books view scrolls an inner virtualized container and the grouped
+// views scroll the document — the browser can restore neither across a
+// detail-page round trip (an inner div is invisible to native restoration,
+// and the virtualized content isn't laid out yet when the browser tries).
+// Saved per visit in sessionStorage on unmount; restored once after the
+// library finishes loading, and only when the grouping still matches.
+const SCROLL_MEMORY_KEY = 'audiobooks-scroll-memory'
+let scrollRestored = false
+
+function saveScrollMemory() {
+  try {
+    sessionStorage.setItem(
+      SCROLL_MEMORY_KEY,
+      JSON.stringify({
+        group: groupBy.value,
+        inner: scrollContainer.value?.scrollTop ?? 0,
+        outer: document.scrollingElement?.scrollTop ?? window.scrollY ?? 0,
+      }),
+    )
+  } catch {}
+}
+
+watch(
+  () => loading.value,
+  async (isLoading) => {
+    if (isLoading || scrollRestored) return
+    scrollRestored = true
+    try {
+      const raw = sessionStorage.getItem(SCROLL_MEMORY_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw) as { group?: string; inner?: number; outer?: number }
+      if (saved.group !== groupBy.value) return
+      await nextTick()
+      await nextTick()
+      if (saved.inner && scrollContainer.value) {
+        scrollContainer.value.scrollTop = saved.inner
+        updateVisibleRange()
+      }
+      if (saved.outer && document.scrollingElement) {
+        document.scrollingElement.scrollTop = saved.outer
+      }
+    } catch {}
+  },
+  { immediate: true },
+)
+
 onUnmounted(() => {
+  saveScrollMemory()
   try {
     resizeObserver?.disconnect()
   } catch {}

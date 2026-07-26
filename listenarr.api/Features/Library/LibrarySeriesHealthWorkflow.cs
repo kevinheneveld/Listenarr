@@ -156,7 +156,16 @@ namespace Listenarr.Api.Features.Library
                 if (summary?.Works is > 0)
                 {
                     var entries = await _repo.GetSeriesCatalogEntriesAsync(acc.Name, region, ct);
-                    bestRuns[acc.Name] = Application.Audiobooks.Series.SeriesRunCompletion.BestRun(entries, acc.OwnedWorks);
+                    var run = Application.Audiobooks.Series.SeriesRunCompletion.BestRun(entries, acc.OwnedWorks);
+                    // When every run covers a single work (each book has its
+                    // own narrator), "best edition" is meaningless — a 1/1
+                    // badge on a four-book series reads as 100% complete.
+                    // Drop it so consumers fall back to overall completion.
+                    if (run != null && run.TotalWorks == 1 && summary.Works > 1)
+                    {
+                        run = null;
+                    }
+                    bestRuns[acc.Name] = run;
                 }
             }
 
