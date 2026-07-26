@@ -2066,7 +2066,18 @@ async function loadIdentifiersForDetail() {
 }
 
 function goBack() {
-  router.push('/audiobooks')
+  // Return to wherever the user actually came from — a series collection,
+  // a narrator page, search results — not a hardcoded library root
+  // (live complaint: series page → book → Back landed on the whole-library
+  // series grid instead of the series just left). Vue Router records the
+  // previous in-app route in history.state.back; '/audiobooks' remains the
+  // fallback for deep links and fresh tabs, where there is nothing to
+  // return to.
+  if (window.history.state?.back) {
+    router.back()
+  } else {
+    router.push('/audiobooks')
+  }
 }
 
 function goToAuthorCollection(author: string | undefined | null) {
