@@ -1914,9 +1914,11 @@ function seriesMatchesCompletionFilter(name: string): boolean {
     case 'complete':
       return !!row?.complete
     case 'nearly':
-      return !!row && !row.complete && score != null && score >= 0.75
+      // A fully-owned run on an incomplete series is not "nearly complete"
+      // — there is nothing left to grab in that edition.
+      return !!row && !row.complete && score != null && score >= 0.75 && score < 1
     case 'progress':
-      return !!row && !row.complete && score != null && score < 0.75
+      return !!row && !row.complete && score != null && (score < 0.75 || score >= 1)
     case 'nocatalog':
       return !row || row.catalogTotal == null
     default:
@@ -2064,6 +2066,10 @@ const groupedCollections = computed(() => {
         if (row?.complete) return 1.5
         const score = seriesCompletionScore(row)
         if (score == null) return 2
+        // Best run fully owned but the series has more works: nothing left
+        // to grab IN that edition, so it must not outrank a true 9/10
+        // (live: eight 100%-run rows buried Amber at 9/10).
+        if (score >= 1) return 1.3
         return 1 - score
       }
       vals.sort((a, b) => (rank(a.name) - rank(b.name)) * order || a.name.localeCompare(b.name))
