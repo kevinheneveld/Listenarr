@@ -37,9 +37,41 @@ namespace Listenarr.Infrastructure.Configuration.Paths
             return await remotePathMappingRepository.GetByIdAsync(id);
         }
 
+        // Serializes cache-miss loads: the parallel client-queue poll calls
+        // translate for several clients at once, and two concurrent misses
+        // would race on the same scoped DbContext.
+        private static readonly SemaphoreSlim MappingLoadLock = new(1, 1);
+
         public async Task<List<RemotePathMapping>> GetPathMappingByClientAsync(DownloadClientConfiguration client)
         {
-            return await remotePathMappingRepository.GetByClientIdAsync(client.Id);
+            // Writers already invalidate this key on every mutation — but the
+            // read side never populated it, so every translated queue item
+            // hit the DbContext. Under the parallel client-queue poll that
+            // meant two threads on one context ("A second operation was
+            // started on this context instance", ~130/day) surfacing as a
+            // phantom "NZBGet client error" banner. Mappings change rarely;
+            // the short TTL keeps even a missed invalidation harmless.
+            var key = $"rpm_client_{client.Id}";
+            if (cache.TryGetValue(key, out List<RemotePathMapping>? cached) && cached != null)
+            {
+                return cached;
+            }
+
+            await MappingLoadLock.WaitAsync();
+            try
+            {
+                if (cache.TryGetValue(key, out cached) && cached != null)
+                {
+                    return cached;
+                }
+                var mappings = await remotePathMappingRepository.GetByClientIdAsync(client.Id);
+                cache.Set(key, mappings, TimeSpan.FromMinutes(5));
+                return mappings;
+            }
+            finally
+            {
+                MappingLoadLock.Release();
+            }
         }
 
         public async Task<RemotePathMapping> CreateAsync(RemotePathMapping mapping)
