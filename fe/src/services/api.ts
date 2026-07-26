@@ -1395,6 +1395,54 @@ class ApiService {
     })
   }
 
+  // Manual import: upload one file straight into an audiobook's library
+  // folder. Uses XHR instead of fetch so large files (audiobooks routinely
+  // run hundreds of MB) get real upload-progress events.
+  async uploadAudiobookFile(
+    id: number,
+    file: File,
+    onProgress?: (fraction: number) => void,
+  ): Promise<{
+    message: string
+    uploaded: number
+    skipped: Array<{ name: string; reason: string }>
+    audiobook?: Audiobook
+  }> {
+    const send = (token: string | null) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', buildApiRequestUrl(`/library/${id}/files/upload`))
+        xhr.withCredentials = true
+        if (token) xhr.setRequestHeader('X-XSRF-TOKEN', token)
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
+        }
+        xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText })
+        xhr.onerror = () => reject(new Error('Network error'))
+        const formData = new FormData()
+        formData.append('files', file, file.name)
+        xhr.send(formData)
+      })
+
+    let token = this.antiforgeryToken ?? (await this.fetchAntiforgeryToken())
+    let resp = await send(token)
+    if (resp.status === 400 && /csrf|xsrf|antiforgery/i.test(resp.body)) {
+      token = await this.fetchAntiforgeryToken()
+      if (token) resp = await send(token)
+    }
+    if (resp.status < 200 || resp.status >= 300) {
+      let message = `Upload failed (${resp.status})`
+      try {
+        const parsed = JSON.parse(resp.body)
+        if (parsed?.message) message = parsed.message
+      } catch {
+        // non-JSON error body; keep the generic message
+      }
+      throw Object.assign(new Error(message), { status: resp.status })
+    }
+    return JSON.parse(resp.body)
+  }
+
   async updateAudiobook(
     id: number,
     audiobook: Partial<Audiobook>,

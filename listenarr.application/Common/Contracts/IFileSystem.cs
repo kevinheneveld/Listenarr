@@ -25,6 +25,7 @@ public interface IFileSystem
     string ReadAllText(string path);
     byte[] ReadAllBytes(string path);
     void WriteAllText(string path, string contents);
+    Stream OpenWriteStream(string path);
     void DeleteFile(string path);
     void CreateDirectory(string path);
     void DeleteDirectory(string path, bool recursive);

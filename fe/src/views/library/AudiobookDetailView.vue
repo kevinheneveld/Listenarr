@@ -573,6 +573,13 @@
             </div>
           </div>
         </div>
+        <!-- Manual import: files bought outside the download pipeline (libro.fm
+             etc.) get dragged here and are filed into this book's folder. -->
+        <AudiobookFileUploadZone
+          v-if="audiobook.id"
+          :audiobook-id="audiobook.id"
+          @uploaded="loadAudiobook"
+        />
         <!-- Bulk-selection toolbar: pick a range of files (shift-click extends) and move
              or delete them together, instead of one action at a time. -->
         <div
@@ -1045,6 +1052,7 @@ import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
 import MetadataBackfillModal from '@/components/domain/audiobook/MetadataBackfillModal.vue'
 import NotAudiobookAction from '@/components/library/NotAudiobookAction.vue'
+import AudiobookFileUploadZone from '@/components/library/AudiobookFileUploadZone.vue'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import RenameFileModal from '@/components/domain/organize/RenameFileModal.vue'
 import ExtractFileModal from '@/components/domain/organize/ExtractFileModal.vue'

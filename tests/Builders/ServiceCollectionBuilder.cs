@@ -202,6 +202,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryScanQueueWorkflow>();
             services.AddSingleton<LibraryAddWorkflow>();
             services.AddSingleton<LibraryManualScanWorkflow>();
+            services.AddSingleton<LibraryUploadWorkflow>();
             services.AddSingleton<LibraryBulkEditWorkflow>();
             services.AddSingleton<LibraryMoveWorkflow>();
             services.AddSingleton<LibraryDeleteWorkflow>();
