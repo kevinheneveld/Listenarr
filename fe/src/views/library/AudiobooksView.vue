@@ -1412,19 +1412,29 @@ const filteredAndSortedAudiobooks = computed(() => {
     } else if (sid === 'needs-review') {
       // Audio verification (ADR-0001): books the agent flagged (mismatch or
       // uncertain) that a human hasn't ruled on yet. agentUnverifiable is
-      // deliberately NOT included — no spoken credits is not a flag.
-      filtered = filtered.filter((b) => b.verificationStatus === 'agentFlagged')
+      // deliberately NOT included — no spoken credits is not a flag. A book
+      // with no files is excluded: its verdict describes audio that's gone
+      // (deleted/reaped), so there is nothing left to review.
+      filtered = filtered.filter(
+        (b) => b.verificationStatus === 'agentFlagged' && getAudiobookStatus(b) !== 'no-file',
+      )
     } else if (sid === 'no-spoken-credits') {
       // Neutral bucket: the audio never announces itself; browse separately.
-      filtered = filtered.filter((b) => b.verificationStatus === 'agentUnverifiable')
+      filtered = filtered.filter(
+        (b) => b.verificationStatus === 'agentUnverifiable' && getAudiobookStatus(b) !== 'no-file',
+      )
     } else if (sid === 'verified') {
       // Confirmed one way or another: the agent matched it, or a human ruled it good.
       filtered = filtered.filter(
         (b) =>
-          b.verificationStatus === 'agentVerified' || b.verificationStatus === 'manuallyVerified',
+          (b.verificationStatus === 'agentVerified' ||
+            b.verificationStatus === 'manuallyVerified') &&
+          getAudiobookStatus(b) !== 'no-file',
       )
     } else if (sid === 'manually-verified') {
-      filtered = filtered.filter((b) => b.verificationStatus === 'manuallyVerified')
+      filtered = filtered.filter(
+        (b) => b.verificationStatus === 'manuallyVerified' && getAudiobookStatus(b) !== 'no-file',
+      )
     } else if (sid === 'rejected') {
       filtered = filtered.filter((b) => b.verificationStatus === 'rejected')
     } else {

@@ -356,6 +356,8 @@ namespace Listenarr.Application.Audiobooks.Files
                 logger.LogDebug(hx, "Failed to create history entry for removed audiobook file {Path}", LogRedaction.SanitizeFilePath(file.Path));
             }
 
+            await ClearAgentVerdictIfLastFileRemovedAsync(audiobook, ct);
+
             return new DeleteAudiobookFileResult
             {
                 Outcome = DeleteAudiobookFileOutcome.Deleted,
@@ -363,6 +365,49 @@ namespace Listenarr.Application.Audiobooks.Files
                 Path = file.Path,
                 Warnings = warnings
             };
+        }
+
+        /// <summary>
+        /// A verification verdict describes the audio that was checked. Once the
+        /// last tracked file is gone (deleted, purged, reaped), an agent verdict
+        /// would keep the book in the review/verified buckets with nothing left
+        /// to listen to — clear it back to Unverified. Manual states
+        /// (ManuallyVerified, Rejected) are sticky by design and survive: the
+        /// wrong-content flow deliberately leaves Rejected on purged records.
+        /// Transcript and detail fields are kept as the audit trail of the last
+        /// agent pass, mirroring the manual 'clear' action.
+        /// </summary>
+        private async Task ClearAgentVerdictIfLastFileRemovedAsync(Audiobook audiobook, CancellationToken ct)
+        {
+            try
+            {
+                if (audiobook.VerificationStatus is not (VerificationStatus.AgentVerified
+                    or VerificationStatus.AgentFlagged
+                    or VerificationStatus.AgentUnverifiable))
+                {
+                    return;
+                }
+
+                var remaining = await audiobookFileRepository.GetByAudiobookIdAsync(audiobook.Id, ct);
+                if (remaining.Count > 0)
+                {
+                    return;
+                }
+
+                audiobook.VerificationStatus = VerificationStatus.Unverified;
+                audiobook.VerificationConfidence = null;
+                audiobook.VerifiedAt = null;
+                audiobook.VerifiedBy = null;
+                audiobook.VerificationMethod = null;
+                await audiobookRepository.UpdateAsync(audiobook);
+                logger.LogInformation(
+                    "Cleared agent verification verdict for audiobook {AudiobookId}: last tracked file was removed",
+                    audiobook.Id);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogWarning(ex, "Failed to clear agent verdict after last-file removal for audiobook {AudiobookId}", audiobook.Id);
+            }
         }
     }
 }
