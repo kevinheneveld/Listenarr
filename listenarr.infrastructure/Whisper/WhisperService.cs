@@ -230,8 +230,12 @@ namespace Listenarr.Infrastructure.Whisper
                                 priorityClass,
                                 cancellationToken);
                             var probeText = NormalizeTranscriptOutput(headStdout);
-                            var firstText = segments.OrderBy(s => s.Start).First().Text;
-                            if (HeadProbeRecoversNewText(firstText, probeText))
+                            // Compare against the WHOLE clip transcript: a long
+                            // announcement spans several segments, and judging
+                            // the probe against only the first one prepended
+                            // near-verbatim doubles (live case "Holy Island").
+                            var mainText = string.Join(" ", segments.OrderBy(s => s.Start).Select(s => s.Text));
+                            if (HeadProbeRecoversNewText(mainText, probeText))
                             {
                                 _logger.LogInformation(
                                     "whisper head probe: triggered ({Reason}), recovered {Chars} chars from 0–{End:0.0}s of {Path}",

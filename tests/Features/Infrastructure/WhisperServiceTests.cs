@@ -177,6 +177,55 @@ namespace Listenarr.Tests.Features.Infrastructure
         }
 
         [Fact]
+        public void HeadProbeRecoversNewText_AnnouncementSpanningMultipleSegments_False()
+        {
+            // Live case "Holy Island": the main decode split a long compiled-by
+            // announcement across several segments, so first-segment containment
+            // failed and the probe text was prepended as a near-verbatim double.
+            // Judged against the whole transcript it is nothing new. Note the
+            // probe clip ends mid-URL (15s boundary) and spells "BipolarBob"
+            // without the space — both must not defeat the match.
+            var transcript =
+                "This audio book was compiled by Bipolar Bob specifically for members of the Pirate Bay, " +
+                "using technologies developed by Microsoft and Amazon. You can visit Bob's website at " +
+                "www.bipolarbob.me. This product has also been published in EPUB format for those who " +
+                "prefer a more conventional read. Holy Island A DC Iron Mystery by L. J. Ross";
+            var probe =
+                "This audio book was compiled by BipolarBob specifically for members of the Pirate Bay, " +
+                "using technologies developed by Microsoft and Amazon. You can visit Bob's website at www.";
+
+            Assert.False(WhisperService.HeadProbeRecoversNewText(transcript, probe));
+        }
+
+        [Fact]
+        public void HeadProbeRecoversNewText_SingleVariantWord_False()
+        {
+            // Two decodes of the same audio differ in odd words; one variant
+            // word must not resurrect the duplicate (n-gram coverage, not
+            // exact containment).
+            var transcript =
+                "Penguin Audio presents Escaping Home by A. American, read by Duke Fontaine. " +
+                "Chapter one. The morning air was cold.";
+            var probe =
+                "Penguin Audio presents Escaping Home by Jay American, read by Duke Fontaine.";
+
+            Assert.False(WhisperService.HeadProbeRecoversNewText(transcript, probe));
+        }
+
+        [Fact]
+        public void HeadProbeRecoversNewText_GenuineRecoveryAgainstFullTranscript_True()
+        {
+            // The real swallow shape: main decode carries ONLY story text and
+            // the probe surfaces an announcement heard nowhere in it.
+            var transcript =
+                "I guess, said Jerry Garfield, cutting the engines, that this is the end of the line. " +
+                "The hovercraft sank slowly onto the rocks.";
+            var probe = "Before Eden, by Arthur C. Clarke";
+
+            Assert.True(WhisperService.HeadProbeRecoversNewText(transcript, probe));
+        }
+
+        [Fact]
         public void HeadProbeRecoversNewText_TrivialRecovery_False()
         {
             // Decode noise ("[Music]", a stray word) is not a credits announcement.

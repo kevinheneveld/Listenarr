@@ -166,16 +166,50 @@ namespace Listenarr.Infrastructure.Whisper
 
         /// <summary>
         /// True when the head probe surfaced text worth prepending: non-trivial
-        /// after normalization and not already contained (normalized) in the
-        /// first segment — a probe that just re-hears the story opening must not
-        /// duplicate it. Public + pure for unit testing.
+        /// after normalization and not already present (normalized) in the
+        /// clip's transcript — a probe that re-hears audio the main decode
+        /// already transcribed must not duplicate it. The main decode may split
+        /// a long announcement across several segments, so the comparison runs
+        /// against the WHOLE clip transcript, not just the first segment (live
+        /// case "Holy Island": a 15s compiled-by announcement spanning several
+        /// segments failed the first-segment containment check and was
+        /// prepended as a near-verbatim double). Exact containment is backed by
+        /// an n-gram coverage measure, because two decodes of the same audio
+        /// differ in odd words and a single variant word must not resurrect the
+        /// duplicate. Public + pure for unit testing.
         /// </summary>
-        public static bool HeadProbeRecoversNewText(string firstSegmentText, string? probeText)
+        public static bool HeadProbeRecoversNewText(string transcriptText, string? probeText)
         {
             var probe = NormalizeForComparison(probeText);
             if (probe.Length < MinHeadRecoveryChars) return false;
-            var first = NormalizeForComparison(firstSegmentText);
-            return !first.Contains(probe, StringComparison.Ordinal);
+            var transcript = NormalizeForComparison(transcriptText);
+            if (transcript.Length == 0) return true;
+            if (transcript.Contains(probe, StringComparison.Ordinal)) return false;
+
+            // n-gram coverage: how much of the probe already appears somewhere
+            // in the transcript. 12-char grams are long enough that story text
+            // can't match an announcement by coincidence; sampling every 4
+            // chars keeps it cheap.
+            const int gram = 12;
+            if (probe.Length <= gram)
+            {
+                return true; // short and not contained → genuinely new
+            }
+
+            var sampled = 0;
+            var hits = 0;
+            for (var i = 0; i + gram <= probe.Length; i += 4)
+            {
+                sampled++;
+                if (transcript.Contains(probe.Substring(i, gram), StringComparison.Ordinal))
+                {
+                    hits++;
+                }
+            }
+
+            // Mostly present already → prepending would duplicate; the few
+            // missing grams are decode variance, not a swallowed announcement.
+            return hits < sampled * 0.6;
         }
 
         // Lowercased letters/digits only (punctuation and whitespace removed) —
