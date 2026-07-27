@@ -337,9 +337,17 @@ namespace Listenarr.Api.Features.Images
                                     }
                                     else
                                     {
-                                        // Try dynamic access
-                                        dynamic env = metadataEnvelope;
-                                        object? mdObj = env.metadata;
+                                        // Reflection, NOT dynamic: the envelope is an anonymous
+                                        // type declared in listenarr.application — anonymous types
+                                        // are internal to their assembly, and the dynamic binder
+                                        // enforces accessibility across assemblies, so `env.metadata`
+                                        // threw RuntimeBinderException (surfacing as a 500) for
+                                        // every uncached cover that reached this fallback.
+                                        // Reflection reads public properties of internal types
+                                        // without that accessibility check.
+                                        object? mdObj = metadataEnvelope.GetType()
+                                            .GetProperty("metadata")
+                                            ?.GetValue(metadataEnvelope);
 
                                         // If it's already the Audible type, use it
                                         if (mdObj is AudibleBookResponse mdMeta)
@@ -378,8 +386,12 @@ namespace Listenarr.Api.Features.Images
                                         _logger.LogDebug("Fallback metadata returned no image URL for {Identifier}", LogRedaction.SanitizeText(identifier));
                                     }
                                 }
-                                catch (Exception ex) when (ImageIdentifierHelper.IsRecoverableImageLookupException(ex))
+                                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                                 {
+                                    // Best-effort parse of an optional fallback source — no
+                                    // failure here may take down the whole image request (the
+                                    // RuntimeBinderException above escaped the narrower filter
+                                    // and 500'd every uncached cover).
                                     _logger.LogDebug(ex, "Failed to parse fallback metadata envelope for {Identifier}", LogRedaction.SanitizeText(identifier));
                                 }
                             }
