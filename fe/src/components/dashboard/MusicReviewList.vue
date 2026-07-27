@@ -25,8 +25,9 @@
   <div class="music-review">
     <div class="music-review-head">
       <span class="music-review-title">
-        Likely music — review before sweeping. Sweeping deletes the files from disk, blocklists the
-        delivering release, and re-searches for the real book.
+        Likely wrong content (music albums / text-to-speech rips) — review before sweeping.
+        Sweeping deletes the files from disk, blocklists the delivering release, and re-searches
+        for the real book.
       </span>
       <button
         v-if="rows.length > 1"
@@ -45,6 +46,9 @@
       <RouterLink :to="`/audiobooks/${row.id}`" class="music-row-title">
         {{ row.title || `Book ${row.id}` }}
       </RouterLink>
+      <span class="music-row-kind" :class="row.kind || 'music'">
+        {{ row.kind === 'tts' ? 'TTS' : 'music' }}
+      </span>
       <span class="music-row-evidence">
         <strong>{{ Math.round(row.score * 100) }}%</strong>
         · {{ row.fileCount }} files · median {{ formatMedian(row.medianDurationSeconds) }}
@@ -209,6 +213,25 @@ async function runSweep(targets: MusicCandidate[]) {
 
 .music-row-title:hover {
   text-decoration: underline;
+}
+
+.music-row-kind {
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.music-row-kind.music {
+  color: #c084fc;
+  border: 1px solid rgba(192, 132, 252, 0.35);
+}
+
+.music-row-kind.tts {
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.35);
 }
 
 .music-row-evidence {

@@ -1405,10 +1405,12 @@ export interface SearchActivityResponse {
   recent: SearchActivityEvent[]
 }
 
-/** One row from GET /library/music-candidates — a book that "smells like music". */
+/** One row from GET /library/music-candidates — a book that "smells like music" or a TTS rip. */
 export interface MusicCandidate {
   id: number
   title: string | null
+  /** Which detector flagged it: a music album or a text-to-speech rip. */
+  kind?: 'music' | 'tts'
   /** 0..1 detector score; >= 0.5 surfaced for review. */
   score: number
   reasons: string[]

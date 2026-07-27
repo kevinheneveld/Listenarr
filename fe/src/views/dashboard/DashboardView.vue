@@ -167,7 +167,7 @@
           >
             <PhSpinner v-if="scanningMusic" class="ph-spin" />
             <PhMusicNotes v-else />
-            {{ scanningMusic ? 'Scanning…' : 'Scan for music' }}
+            {{ scanningMusic ? 'Scanning…' : 'Scan for music / TTS' }}
           </button>
           <button
             v-else
@@ -177,7 +177,7 @@
             @click="showMusicList = !showMusicList"
           >
             <PhMusicNotes />
-            <strong>{{ musicCandidates.length }}</strong> likely music
+            <strong>{{ musicCandidates.length }}</strong> likely music / TTS
           </button>
         </div>
         <MusicReviewList

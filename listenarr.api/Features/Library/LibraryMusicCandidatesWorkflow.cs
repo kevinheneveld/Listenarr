@@ -22,10 +22,12 @@ using Microsoft.AspNetCore.Mvc;
 namespace Listenarr.Api.Features.Library
 {
     /// <summary>
-    /// Read-only sweep for books that "smell like music": runs
-    /// <see cref="MusicSmellDetector"/> over flagged/unverifiable books with
-    /// files, reusing the verification artifacts already stored on each record
-    /// (file durations, transcript, heard credits) — no new transcription.
+    /// Read-only sweep for books that "smell like wrong content": runs
+    /// <see cref="MusicSmellDetector"/> over flagged/unverifiable books and
+    /// <see cref="TtsSmellDetector"/> over ALL agent-statused books (TTS rips
+    /// usually pass verification — the synthetic announcement matches the
+    /// metadata), reusing the verification artifacts already stored on each
+    /// record (file durations, transcript, file paths) — no new transcription.
     /// Feeds the dashboard's review list; the destructive action stays behind
     /// the human-confirmed not-audiobook sweep.
     /// </summary>
@@ -55,8 +57,14 @@ namespace Listenarr.Api.Features.Library
         private async Task<object> ComputeCandidatesPayloadAsync(CancellationToken ct)
         {
             var books = await _repo.GetAllAsync();
+            // Includes AgentVerified: the music detector guards internally
+            // (a Match can't smell like music), but the TTS detector must see
+            // verified books — a synthetic announcement stating the right
+            // title/author verifies cleanly.
             var eligible = books
-                .Where(b => b.VerificationStatus is VerificationStatus.AgentFlagged or VerificationStatus.AgentUnverifiable)
+                .Where(b => b.VerificationStatus is VerificationStatus.AgentVerified
+                    or VerificationStatus.AgentFlagged
+                    or VerificationStatus.AgentUnverifiable)
                 .ToList();
 
             if (eligible.Count == 0)
@@ -81,7 +89,7 @@ namespace Listenarr.Api.Features.Library
 
                 var (heardTitle, heardAuthor) = ReadHeardCredits(book.VerificationDetailJson);
                 var durations = bookFiles.Select(f => f.DurationSeconds).ToList();
-                var result = MusicSmellDetector.Score(
+                var music = MusicSmellDetector.Score(
                     book.VerificationStatus,
                     durations,
                     book.VerificationTranscript,
@@ -89,26 +97,37 @@ namespace Listenarr.Api.Features.Library
                     heardAuthor,
                     book.Title,
                     book.Authors?.FirstOrDefault());
+                var tts = TtsSmellDetector.Score(
+                    book.VerificationStatus,
+                    book.VerificationTranscript,
+                    bookFiles.Select(f => f.Path).ToList());
 
-                if (!result.IsCandidate)
+                if (!music.IsCandidate && !tts.IsCandidate)
                 {
                     continue;
                 }
 
+                // A book can trip both (a TTS rip of short tracks); label it by
+                // the stronger smell and keep every reason for the human.
+                var kind = tts.Score >= music.Score ? "tts" : "music";
+                var score = Math.Max(music.Score, tts.Score);
+                var reasons = music.Reasons.Concat(tts.Reasons).ToList();
+
                 var known = durations.Where(d => d is > 0).Select(d => d!.Value).OrderBy(d => d).ToList();
-                scored.Add((result.Score, new
+                scored.Add((score, new
                 {
                     id = book.Id,
                     title = book.Title,
-                    score = Math.Round(result.Score, 2),
-                    reasons = result.Reasons,
+                    kind,
+                    score = Math.Round(score, 2),
+                    reasons,
                     fileCount = bookFiles.Count,
                     medianDurationSeconds = known.Count > 0 ? Math.Round(known[known.Count / 2]) : 0
                 }));
             }
 
             _logger.LogInformation(
-                "Music-candidate sweep: {Eligible} flagged/unverifiable books scanned, {Candidates} candidate(s) at threshold {Threshold}",
+                "Wrong-content candidate sweep: {Eligible} agent-statused books scanned, {Candidates} music/TTS candidate(s) at threshold {Threshold}",
                 eligible.Count, scored.Count, MusicSmellDetector.CandidateThreshold);
 
             return new
