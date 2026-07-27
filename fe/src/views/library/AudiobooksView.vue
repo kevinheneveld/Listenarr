@@ -1721,6 +1721,15 @@ try {
   const initialFilter = route.query.filter
   if (typeof initialFilter === 'string' && initialFilter.trim()) {
     selectedFilterId.value = initialFilter.trim()
+    // Persist immediately: the persist watcher below only sees *changes*, so
+    // without this a deep-linked filter never reaches storage and a later
+    // bare /audiobooks navigation silently reverts to a stale filter.
+    if (
+      BUILTIN_FILTER_IDS.has(selectedFilterId.value) ||
+      customFilters.value.some((x) => x.id === selectedFilterId.value)
+    ) {
+      localStorage.setItem(SELECTED_FILTER_KEY, selectedFilterId.value)
+    }
   } else {
     const storedFilter = localStorage.getItem(SELECTED_FILTER_KEY)
     if (
@@ -1743,10 +1752,22 @@ try {
       /* ignore malformed stored sort */
     }
   }
-  if (!initialGroup) {
-    router.replace({ path: '/audiobooks', query: { group: groupBy.value } })
-  } else if (route.query.group !== initialGroup) {
-    router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: initialGroup } })
+  // Normalize the URL so this history entry self-describes the view (group +
+  // filter): Back from a detail page then restores the exact filtered view
+  // from the URL alone, with no dependence on client storage. Never rebuild
+  // the query from scratch — a group-less deep link (?filter=needs-review)
+  // used to have its filter stripped here.
+  const normalizedQuery: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query || {})) {
+    if (typeof v === 'string') normalizedQuery[k] = v
+  }
+  normalizedQuery.group = groupBy.value
+  if (selectedFilterId.value) normalizedQuery.filter = selectedFilterId.value
+  if (
+    route.query.group !== normalizedQuery.group ||
+    route.query.filter !== normalizedQuery.filter
+  ) {
+    router.replace({ path: '/audiobooks', query: normalizedQuery })
   }
 } catch {}
 
@@ -1771,6 +1792,39 @@ watch(selectedFilterId, (v) => {
     else localStorage.removeItem(SELECTED_FILTER_KEY)
   } catch {}
 })
+
+// State → URL: mirror the active filter into the query (replace, so no extra
+// history entries pile up). Every history entry for this view then carries
+// its own filter, and Back from a detail page restores the exact view even
+// in a fresh tab, another browser, or a shared link.
+watch(selectedFilterId, (v) => {
+  try {
+    if (route.path !== '/audiobooks') return
+    const current = typeof route.query.filter === 'string' ? route.query.filter : undefined
+    if ((v || undefined) === current) return
+    const q: Record<string, string> = {}
+    for (const [k, val] of Object.entries(route.query || {})) {
+      if (typeof val === 'string') q[k] = val
+    }
+    if (v) q.filter = v
+    else delete q.filter
+    void router.replace({ path: '/audiobooks', query: q })
+  } catch {}
+})
+
+// URL → state: browser Back/Forward between differently-filtered library URLs
+// reuses this component instance (same route record, no re-mount), so the
+// init block above never re-runs — adopt query changes here instead. The
+// path guard keeps navigation *away* (detail pages carry no filter query)
+// from clearing the selection.
+watch(
+  () => route.query.filter,
+  (qf) => {
+    if (route.path !== '/audiobooks') return
+    const target = typeof qf === 'string' && qf.trim() ? qf.trim() : null
+    if (target !== selectedFilterId.value) selectedFilterId.value = target
+  },
+)
 
 // Selecting "Recently Imported" switches the sort to newest-import-first, so the
 // single filter delivers the expected outcome (owned books, most recent first) in

@@ -1008,3 +1008,92 @@ describe('AudiobooksView Grouping', () => {
     },
   )
 })
+
+describe('AudiobooksView filter/URL sync', () => {
+  beforeEach(() => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    localStorage.clear()
+    if (
+      typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver === 'undefined'
+    ) {
+      ;(globalThis as unknown as Record<string, unknown>).ResizeObserver = class {
+        observe() {}
+        disconnect() {}
+      }
+    }
+    if (typeof (globalThis as unknown as { WebSocket?: unknown }).WebSocket === 'undefined') {
+      ;(globalThis as unknown as Record<string, unknown>).WebSocket = function () {
+        /* noop */
+      }
+    }
+  })
+
+  async function mountAt(path: string) {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'home', component: { template: '<div />' } },
+        { path: '/audiobooks', name: 'audiobooks', component: AudiobooksView },
+      ],
+    })
+    await router.push(path)
+    await router.isReady().catch(() => {})
+    const store = useLibraryStore()
+    store.audiobooks = [] as unknown as import('@/types').Audiobook[]
+    store.fetchLibrary = vi.fn(async () => undefined)
+    const wrapper = mount(AudiobooksView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: [
+          'BulkEditModal',
+          'EditAudiobookModal',
+          'CustomFilterModal',
+          'FiltersDropdown',
+          'CustomSelect',
+        ],
+      },
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    return { wrapper, router }
+  }
+
+  it('persists a deep-linked filter to localStorage and keeps it in the URL', async () => {
+    const { router } = await mountAt('/audiobooks?filter=needs-review')
+    await new Promise((r) => setTimeout(r, 0))
+
+    // The deep-linked filter must survive into storage (a later bare visit
+    // restores it) and stay in the normalized URL alongside the added group.
+    expect(localStorage.getItem('listenarr.selectedFilter')).toBe('needs-review')
+    expect(router.currentRoute.value.query.filter).toBe('needs-review')
+    expect(typeof router.currentRoute.value.query.group).toBe('string')
+  })
+
+  it('mirrors a filter change into the URL so history entries self-describe', async () => {
+    const { wrapper, router } = await mountAt('/audiobooks?group=books')
+    const vm = wrapper.vm as unknown as { selectedFilterId: string | null }
+
+    vm.selectedFilterId = 'needs-review'
+    await new Promise((r) => setTimeout(r, 0))
+    expect(router.currentRoute.value.query.filter).toBe('needs-review')
+    expect(router.currentRoute.value.query.group).toBe('books')
+
+    vm.selectedFilterId = null
+    await new Promise((r) => setTimeout(r, 0))
+    expect(router.currentRoute.value.query.filter).toBeUndefined()
+    expect(router.currentRoute.value.query.group).toBe('books')
+  })
+
+  it('adopts the filter from the URL on back/forward without remounting', async () => {
+    const { wrapper, router } = await mountAt('/audiobooks?group=books&filter=needs-review')
+    const vm = wrapper.vm as unknown as { selectedFilterId: string | null }
+    expect(vm.selectedFilterId).toBe('needs-review')
+
+    // Same route record with a different query — component is reused.
+    await router.replace('/audiobooks?group=books&filter=missing')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(vm.selectedFilterId).toBe('missing')
+  })
+})
