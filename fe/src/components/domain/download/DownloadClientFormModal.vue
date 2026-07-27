@@ -206,6 +206,44 @@
             </div>
           </FormSection>
 
+          <!-- Seeding limits (qBittorrent): per-torrent share limits stamped on
+               every Listenarr grab, so audiobook torrents stop seeding at the
+               configured point without touching the client's global limits
+               (which govern other apps' torrents on a shared instance). -->
+          <FormSection v-if="formData.type === 'qbittorrent'" title="Seeding Limits" :icon="PhTag">
+            <div class="form-group">
+              <label for="seedRatioLimit">Seed ratio limit</label>
+              <input
+                id="seedRatioLimit"
+                v-model="formData.seedRatioLimit"
+                type="number"
+                min="0"
+                step="0.1"
+                placeholder="e.g., 1.0 — blank follows the client's global setting"
+              />
+              <small
+                >Stop seeding once a Listenarr-grabbed torrent reaches this upload/download ratio.
+                Applied per torrent at grab time; other categories are unaffected.</small
+              >
+            </div>
+            <div class="form-group">
+              <label for="seedTimeLimitMinutes">Seed time limit (minutes)</label>
+              <input
+                id="seedTimeLimitMinutes"
+                v-model="formData.seedTimeLimitMinutes"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="e.g., 2880 (48 hours) — blank follows the client's global setting"
+              />
+              <small
+                >Stop seeding after this many minutes, whichever limit is hit first. The torrent is
+                paused in the client when a limit trips; "Completed Download Action" decides
+                whether it is then removed.</small
+              >
+            </div>
+          </FormSection>
+
           <!-- Priority -->
           <FormSection title="Priority" :icon="PhSortAscending">
             <div class="form-group">
@@ -414,6 +452,8 @@ const defaultFormData = {
   useSSL: false,
   isEnabled: true,
   category: '',
+  seedRatioLimit: '',
+  seedTimeLimitMinutes: '',
   tags: '',
   recentPriority: 'default',
   olderPriority: 'default',
@@ -539,6 +579,9 @@ watch(
         useSSL: newClient.useSSL,
         isEnabled: newClient.isEnabled,
         category: (settings?.category as string) || '',
+        seedRatioLimit: settings?.seedRatioLimit != null ? String(settings.seedRatioLimit) : '',
+        seedTimeLimitMinutes:
+          settings?.seedTimeLimitMinutes != null ? String(settings.seedTimeLimitMinutes) : '',
         tags: (settings?.tags as string) || '',
         recentPriority: (settings?.recentPriority as string) || 'default',
         olderPriority: (settings?.olderPriority as string) || 'default',
@@ -598,6 +641,16 @@ const testConnection = async () => {
           : {}),
         ...(formData.value.category && { category: formData.value.category }),
         ...(formData.value.tags && { tags: formData.value.tags }),
+        ...(formData.value.type === 'qbittorrent' &&
+        formData.value.seedRatioLimit !== '' &&
+        !isNaN(Number(formData.value.seedRatioLimit))
+          ? { seedRatioLimit: Number(formData.value.seedRatioLimit) }
+          : {}),
+        ...(formData.value.type === 'qbittorrent' &&
+        formData.value.seedTimeLimitMinutes !== '' &&
+        !isNaN(Number(formData.value.seedTimeLimitMinutes))
+          ? { seedTimeLimitMinutes: Number(formData.value.seedTimeLimitMinutes) }
+          : {}),
         recentPriority: formData.value.recentPriority,
         olderPriority: formData.value.olderPriority,
         removeCompleted: formData.value.removeCompleted,
@@ -658,6 +711,16 @@ const handleSubmit = async () => {
           : {}),
         ...(formData.value.category && { category: formData.value.category }),
         ...(formData.value.tags && { tags: formData.value.tags }),
+        ...(formData.value.type === 'qbittorrent' &&
+        formData.value.seedRatioLimit !== '' &&
+        !isNaN(Number(formData.value.seedRatioLimit))
+          ? { seedRatioLimit: Number(formData.value.seedRatioLimit) }
+          : {}),
+        ...(formData.value.type === 'qbittorrent' &&
+        formData.value.seedTimeLimitMinutes !== '' &&
+        !isNaN(Number(formData.value.seedTimeLimitMinutes))
+          ? { seedTimeLimitMinutes: Number(formData.value.seedTimeLimitMinutes) }
+          : {}),
         recentPriority: formData.value.recentPriority,
         olderPriority: formData.value.olderPriority,
         removeCompleted: formData.value.removeCompleted,

@@ -24,6 +24,12 @@ namespace Listenarr.Infrastructure.DownloadClients.Qbittorrent
     {
         public static HttpContent Build(QbittorrentTorrentAddPlan addPlan)
         {
+            // Per-torrent share limits (qBittorrent honors these over its global
+            // settings): sent only when configured, so an unset field leaves the
+            // torrent on the client default.
+            var ratioLimit = addPlan.SeedRatioLimit?.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture);
+            var seedingTimeLimit = addPlan.SeedTimeLimitMinutes?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
             if (addPlan.TorrentFileData != null)
             {
                 var multipart = new MultipartFormDataContent();
@@ -32,6 +38,10 @@ namespace Listenarr.Infrastructure.DownloadClients.Qbittorrent
                     multipart.Add(new StringContent(addPlan.Category), "category");
                 if (!string.IsNullOrEmpty(addPlan.Tags))
                     multipart.Add(new StringContent(addPlan.Tags), "tags");
+                if (ratioLimit != null)
+                    multipart.Add(new StringContent(ratioLimit), "ratioLimit");
+                if (seedingTimeLimit != null)
+                    multipart.Add(new StringContent(seedingTimeLimit), "seedingTimeLimit");
 
                 var torrentFileName = string.IsNullOrEmpty(addPlan.FileName) ? "download.torrent" : addPlan.FileName;
                 var torrentContent = new ByteArrayContent(addPlan.TorrentFileData);
@@ -52,6 +62,10 @@ namespace Listenarr.Infrastructure.DownloadClients.Qbittorrent
                 formData.Add(new("category", addPlan.Category));
             if (!string.IsNullOrEmpty(addPlan.Tags))
                 formData.Add(new("tags", addPlan.Tags));
+            if (ratioLimit != null)
+                formData.Add(new("ratioLimit", ratioLimit));
+            if (seedingTimeLimit != null)
+                formData.Add(new("seedingTimeLimit", seedingTimeLimit));
 
             return new FormUrlEncodedContent(formData);
         }

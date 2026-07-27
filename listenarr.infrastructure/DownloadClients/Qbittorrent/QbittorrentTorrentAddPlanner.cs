@@ -31,7 +31,30 @@ internal static class QbittorrentTorrentAddPlanner
             tags,
             submission.TorrentBytes,
             submission.MagnetUri,
-            submission.FileName);
+            submission.FileName,
+            ReadDouble(client, "seedRatioLimit"),
+            ReadInt(client, "seedTimeLimitMinutes"));
+    }
+
+    // Per-torrent seed limits from client settings: stamped onto every add so
+    // Listenarr-grabbed torrents stop seeding at the configured point without
+    // touching the client's global limits (which govern other apps' torrents
+    // on a shared instance). Null/absent/garbage → no field sent → torrent
+    // follows the client default.
+    private static double? ReadDouble(DownloadClientConfiguration client, string key)
+    {
+        var raw = client.Settings?.TryGetValue(key, out var v) is true ? v?.ToString() : null;
+        return double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed >= 0
+            ? parsed
+            : null;
+    }
+
+    private static int? ReadInt(DownloadClientConfiguration client, string key)
+    {
+        var raw = client.Settings?.TryGetValue(key, out var v) is true ? v?.ToString() : null;
+        return int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed >= 0
+            ? parsed
+            : null;
     }
 }
 
@@ -42,4 +65,6 @@ internal sealed record QbittorrentTorrentAddPlan(
     string? Tags,
     byte[]? TorrentFileData,
     string? MagnetLink,
-    string? FileName);
+    string? FileName,
+    double? SeedRatioLimit = null,
+    int? SeedTimeLimitMinutes = null);

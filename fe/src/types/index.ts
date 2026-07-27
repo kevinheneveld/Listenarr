@@ -341,6 +341,10 @@ export interface DownloadClientSettings {
   sequentialOrder?: boolean
   firstAndLastFirst?: boolean
   contentLayout?: string
+  // Per-torrent share limits stamped on every grab (qBittorrent):
+  // undefined/blank follows the client's global setting.
+  seedRatioLimit?: number
+  seedTimeLimitMinutes?: number
   // Optional mapping to one or more remote path mapping IDs
   remotePathMappingIds?: number[]
   [key: string]: unknown
