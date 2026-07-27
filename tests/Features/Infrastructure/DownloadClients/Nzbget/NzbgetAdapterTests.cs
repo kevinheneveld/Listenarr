@@ -1168,7 +1168,10 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
             Assert.Equal("0", call.Parameters[5].Element("boolean")?.Value);
             Assert.Equal(string.Empty, call.Parameters[6].Element("string")?.Value);
             Assert.Equal("0", call.Parameters[7].Element("i4")?.Value);
-            Assert.Equal("SCORE", call.Parameters[8].Element("string")?.Value);
+            // FORCE, not SCORE: NZBGet's dupe history must never silently veto a
+            // deliberate Listenarr grab (re-grabs after cleanup vanished as
+            // DELETED/COPY into hidden history).
+            Assert.Equal("FORCE", call.Parameters[8].Element("string")?.Value);
 
             var postProcessingParameter = Assert.Single(
                 call.Parameters[9].Element("array")!.Element("data")!.Elements("value"));

@@ -58,6 +58,14 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
             try
             {
                 logger.LogInformation("Calling NZBGet append via XML-RPC for '{Title}'", LogRedaction.SanitizeText(submission.Title));
+                // dupeMode FORCE: with SCORE, NZBGet consults its own duplicate
+                // history and silently discards the append as DELETED/COPY when a
+                // same-named download ever succeeded — even when the files are
+                // long gone and Listenarr is deliberately re-grabbing (live case:
+                // a re-grab after cleanup vanished into hidden history and the
+                // book just never arrived). Listenarr owns grab policy (its
+                // blocklist and import dedup decide what gets fetched); every
+                // append it sends, manual or automatic, is intentional.
                 var appendResult = await xmlRpcClient.CallAsync(client, "append",
                     nzbFileName,
                     nzbContentBase64,
@@ -67,7 +75,7 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
                     false,
                     string.Empty,
                     0,
-                    "SCORE",
+                    "FORCE",
                     ppParams
                 );
 
