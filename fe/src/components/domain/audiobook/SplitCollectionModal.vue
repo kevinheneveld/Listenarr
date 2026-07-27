@@ -104,6 +104,9 @@
                   >
                     {{ cand.title }}
                     <small>id {{ cand.id }}</small>
+                    <small :class="cand.fileCount > 0 ? 'split-occupied' : 'split-vacant'">
+                      {{ cand.fileCount > 0 ? `${cand.fileCount} files` : 'empty' }}
+                    </small>
                   </button>
                   <div v-if="candidatesFor(c).length === 0" class="split-empty">No matches.</div>
                 </div>
@@ -112,6 +115,16 @@
                 <span v-if="c.targetId" class="split-dest-label">
                   → {{ c.targetTitle }}
                   <small>id {{ c.targetId }}</small>
+                  <small
+                    v-if="fileCountOf(c.targetId) !== null"
+                    :class="(fileCountOf(c.targetId) ?? 0) > 0 ? 'split-occupied' : 'split-vacant'"
+                  >
+                    {{
+                      (fileCountOf(c.targetId) ?? 0) > 0
+                        ? `already has ${fileCountOf(c.targetId)} file(s) — moved files land alongside them`
+                        : 'empty — nothing there yet'
+                    }}
+                  </small>
                 </span>
                 <span v-else class="split-dest-label split-dest-none">no destination</span>
                 <button type="button" class="split-change-btn" @click="c.editing = true">
@@ -271,10 +284,23 @@ const STOPWORDS = new Set([
 ])
 
 function tokenize(text: string): string[] {
+  // Digit tokens are kept at ANY length: in series titles the number is the
+  // only discriminator ("… Volume 4" vs "… Volume 6" — 'volume' is a
+  // stopword, so dropping single-char '4' made every volume tokenize
+  // identically and the picker couldn't tell them apart).
   return (text || '')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t))
+    .filter((t) => (t.length > 1 || /^\d$/.test(t)) && !STOPWORDS.has(t))
+}
+
+// File count for a library record, so destinations can say whether files
+// already live there (move onto an empty record vs. alongside existing ones).
+function fileCountOf(id: number | null | undefined): number | null {
+  if (id == null) return null
+  const b = libraryStore.audiobooks.find((x) => x.id === id)
+  if (!b) return null
+  return b.fileCount ?? b.files?.length ?? 0
 }
 
 function candidatesFor(c: ClusterRow) {
@@ -285,8 +311,18 @@ function candidatesFor(c: ClusterRow) {
     .filter((b) => b.id !== sourceId)
     .map((b) => {
       const titleTokens = new Set(tokenize(b.title || ''))
-      const score = tokens.reduce((s, t) => s + (titleTokens.has(t) ? 1 : 0), 0)
-      return { id: b.id, title: b.title || '', score }
+      // Digit hits count double: matching the volume/book number matters
+      // more than sharing the series words every sibling record shares.
+      const score = tokens.reduce(
+        (s, t) => s + (titleTokens.has(t) ? (/^\d+$/.test(t) ? 2 : 1) : 0),
+        0,
+      )
+      return {
+        id: b.id,
+        title: b.title || '',
+        score,
+        fileCount: b.fileCount ?? b.files?.length ?? 0,
+      }
     })
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
@@ -562,6 +598,16 @@ function onClose() {
 .split-dest-none {
   color: #f39c12;
   font-style: italic;
+}
+
+/* Destination occupancy: amber when files already live there (a move adds
+   alongside — possible duplicate copy), muted green when the record is empty. */
+.split-occupied {
+  color: #f39c12 !important;
+}
+
+.split-vacant {
+  color: #51cf66 !important;
 }
 
 .split-change-btn {
