@@ -129,6 +129,7 @@ namespace Listenarr.Api.Features.Library
                 (isSameAuthor ? sameAuthor : others).Add((candidate.Id, candidate.Title!));
             }
             var titleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Title ?? string.Empty);
+            var subtitleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Subtitle ?? string.Empty);
 
             var deterministic = clusters.Select(cluster => new
             {
@@ -158,6 +159,24 @@ namespace Listenarr.Api.Features.Library
             {
                 var fromAi = aiSuggestions != null && aiSuggestions.TryGetValue(d.Key, out var aiTarget);
                 var suggested = fromAi && aiSuggestions != null ? aiSuggestions[d.Key] : d.Suggested;
+
+                // Digit guard: a suggestion whose number contradicts the
+                // cluster's is always wrong (live case: the AI pass proposed
+                // "… Volume 4" for a "… Volume 1" cluster, and containment
+                // matched a plain-titled sibling whose subtitle said
+                // "Volume 3"). No suggestion beats a wrong one — the picker
+                // is digit-aware now.
+                bool Conflicts(int? sid) => sid.HasValue
+                    && SplitDestinationSuggester.DigitsConflict(
+                        d.DisplayName,
+                        titleById.GetValueOrDefault(sid.Value),
+                        subtitleById.GetValueOrDefault(sid.Value));
+                if (Conflicts(suggested))
+                {
+                    suggested = fromAi && !Conflicts(d.Suggested) ? d.Suggested : null;
+                    fromAi = false;
+                }
+
                 return new
                 {
                     key = d.Key,

@@ -194,6 +194,7 @@ namespace Listenarr.Api.Features.Library
                 (isSameAuthor ? sameAuthor : others).Add((candidate.Id, candidate.Title!));
             }
             var titleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Title ?? string.Empty);
+            var subtitleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Subtitle ?? string.Empty);
 
             var response = groups.Select((g, index) =>
             {
@@ -201,6 +202,17 @@ namespace Listenarr.Api.Features.Library
                     ? null
                     : SplitDestinationSuggester.Suggest(g.Label, sameAuthor)
                         ?? SplitDestinationSuggester.Suggest(g.Label, others);
+                // Digit guard: a spoken label "… Volume 1" must never be
+                // suggested onto a record whose title/subtitle says another
+                // number (see the same guard in the preview workflow).
+                if (suggested.HasValue && g.Label != null
+                    && SplitDestinationSuggester.DigitsConflict(
+                        g.Label,
+                        titleById.GetValueOrDefault(suggested.Value),
+                        subtitleById.GetValueOrDefault(suggested.Value)))
+                {
+                    suggested = null;
+                }
                 return new
                 {
                     key = $"probe-{index}",

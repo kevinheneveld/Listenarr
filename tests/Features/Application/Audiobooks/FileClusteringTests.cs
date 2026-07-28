@@ -388,5 +388,58 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.Equal(415, SplitDestinationSuggester.Suggest(
                 "Robert A. Heinlein - The Moon Is a Harsh Mistress", Library));
         }
+
+        // --- Digit-conflict guard (live case: an AI refinement suggested
+        // "… Volume 4" for a "… Volume 1" cluster; containment matched a
+        // plain-titled sibling whose subtitle said "Volume 3") -------------
+
+        [Fact]
+        public void DigitsConflict_DifferentVolumeNumbers_Conflict()
+        {
+            Assert.True(SplitDestinationSuggester.DigitsConflict(
+                "Favorite Science Fiction Stories: Volume 1",
+                "Favorite Science Fiction Stories, Volume 4"));
+        }
+
+        [Fact]
+        public void DigitsConflict_NumberOnlyInSubtitle_Conflict()
+        {
+            Assert.True(SplitDestinationSuggester.DigitsConflict(
+                "Favorite Science Fiction Stories: Volume 1",
+                "Favorite Science Fiction Stories",
+                "Volume 3"));
+        }
+
+        [Fact]
+        public void DigitsConflict_SameNumber_NoConflict()
+        {
+            Assert.False(SplitDestinationSuggester.DigitsConflict(
+                "Favorite Science Fiction Stories: Volume 1",
+                "Favorite Science Fiction Stories, Volume 1"));
+        }
+
+        [Fact]
+        public void DigitsConflict_LeadingZeros_MatchTheSameNumber()
+        {
+            Assert.False(SplitDestinationSuggester.DigitsConflict(
+                "Going Home 01", "Going Home, Book 1"));
+        }
+
+        [Fact]
+        public void DigitsConflict_CandidateWithoutDigits_NeverConflicts()
+        {
+            // Absence of a number is not evidence of the wrong number.
+            Assert.False(SplitDestinationSuggester.DigitsConflict(
+                "Favorite Science Fiction Stories: Volume 1",
+                "Favorite Science Fiction Stories"));
+        }
+
+        [Fact]
+        public void DigitsConflict_ClusterWithoutDigits_NeverConflicts()
+        {
+            Assert.False(SplitDestinationSuggester.DigitsConflict(
+                "The Moon Is a Harsh Mistress",
+                "20,000 Leagues Under the Sea"));
+        }
     }
 }

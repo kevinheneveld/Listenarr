@@ -54,5 +54,37 @@ namespace Listenarr.Application.Audiobooks
             }
             return best;
         }
+
+        /// <summary>
+        /// True when the cluster name and a candidate's title/subtitle both
+        /// carry numbers but share none. Numbers are the only discriminator
+        /// among series siblings, so a suggestion that contradicts the
+        /// cluster's number is always wrong — live case: an AI refinement
+        /// pass suggested "… Volume 4" for a "… Volume 1" cluster, and the
+        /// containment matcher suggested a plain-titled sibling whose
+        /// SUBTITLE said "Volume 3". Candidates without any digits stay
+        /// eligible — absence of a number is not evidence of the wrong
+        /// number. Leading zeros are ignored ("01" matches "1").
+        /// </summary>
+        public static bool DigitsConflict(string clusterDisplayName, string? candidateTitle, string? candidateSubtitle = null)
+        {
+            var clusterDigits = DigitTokens(clusterDisplayName);
+            if (clusterDigits.Count == 0) return false;
+            var candidateDigits = DigitTokens((candidateTitle ?? string.Empty) + " " + (candidateSubtitle ?? string.Empty));
+            if (candidateDigits.Count == 0) return false;
+            return !clusterDigits.Overlaps(candidateDigits);
+        }
+
+        private static HashSet<string> DigitTokens(string text)
+        {
+            var tokens = new HashSet<string>(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                TitleMatcher.Normalize(text), @"\d+"))
+            {
+                var trimmed = m.Value.TrimStart('0');
+                tokens.Add(trimmed.Length == 0 ? "0" : trimmed);
+            }
+            return tokens;
+        }
     }
 }

@@ -21,6 +21,7 @@
     :visible="modelValue"
     :title="title || 'Confirm'"
     size="sm"
+    :overlay-z-index="3500"
     @close="onCancel"
   >
     <div class="confirm-body">
