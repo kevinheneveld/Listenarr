@@ -118,6 +118,7 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
             var downloadClientGateway = scope.ServiceProvider.GetRequiredService<IDownloadClientGateway>();
             var downloadHistoryService = scope.ServiceProvider.GetRequiredService<IDownloadHistoryService>();
+            var blockedReleaseRepository = scope.ServiceProvider.GetService<IBlockedReleaseRepository>();
 
             var reason = $"Reaped by stall timer: no download progress for >= {options.TimeoutMinutes} minutes";
 
@@ -143,12 +144,72 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                         download.Title ?? "Unknown",
                         reason);
 
+                    // Blocklist the reaped release so the next automatic search
+                    // picks a DIFFERENT one. Without this the cycle never ends:
+                    // reap → book still wanted → re-search → the same dead
+                    // magnet is grabbed again → stalls again (live case: dead
+                    // magnets purged one day were re-grabbed the same night).
+                    await BlocklistReapedReleaseAsync(blockedReleaseRepository, download, cancellationToken);
+
                     _stallSnapshots.TryRemove(download.Id, out _);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                 {
                     logger.LogWarning(ex, "[STALL-REAPER] Failed to reap stalled download {DownloadId}", LogRedaction.SanitizeText(download.Id));
                 }
+            }
+        }
+
+        /// <summary>
+        /// Best-effort blocklist entry for a reaped release, keyed the way the
+        /// search-time blocklist matches: info-hash first (strongest identity,
+        /// parsed from the client item id or the magnet link), release title as
+        /// fallback. Failure to blocklist never blocks the reap itself.
+        /// </summary>
+        private async Task BlocklistReapedReleaseAsync(
+            IBlockedReleaseRepository? repository,
+            Download download,
+            CancellationToken cancellationToken)
+        {
+            if (repository == null || download.AudiobookId is not > 0 || string.IsNullOrWhiteSpace(download.Title))
+            {
+                return;
+            }
+
+            try
+            {
+                var hash = download.GetMetadataString("TorrentHash");
+                if (string.IsNullOrWhiteSpace(hash))
+                {
+                    var externalId = download.GetExternalId();
+                    if (!string.IsNullOrWhiteSpace(externalId)
+                        && System.Text.RegularExpressions.Regex.IsMatch(externalId, "^[0-9a-fA-F]{40}$"))
+                    {
+                        hash = externalId;
+                    }
+                }
+                if (string.IsNullOrWhiteSpace(hash) && !string.IsNullOrWhiteSpace(download.OriginalUrl))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(
+                        download.OriginalUrl, @"btih:([0-9a-fA-F]{40})");
+                    if (m.Success) hash = m.Groups[1].Value;
+                }
+
+                await repository.AddAsync(new BlockedRelease
+                {
+                    AudiobookId = download.AudiobookId.Value,
+                    ReleaseTitle = download.Title!,
+                    TorrentHash = string.IsNullOrWhiteSpace(hash) ? null : hash,
+                    Reason = "Reaped by stall timer (dead/stalled release)"
+                }, cancellationToken);
+
+                logger.LogInformation(
+                    "[STALL-REAPER] Blocklisted reaped release for audiobook {AudiobookId}: {Title}",
+                    download.AudiobookId, LogRedaction.SanitizeText(download.Title));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogWarning(ex, "[STALL-REAPER] Failed to blocklist reaped release for download {DownloadId}", LogRedaction.SanitizeText(download.Id));
             }
         }
 

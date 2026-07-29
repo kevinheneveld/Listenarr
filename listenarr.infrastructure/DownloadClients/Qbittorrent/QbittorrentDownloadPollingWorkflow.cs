@@ -251,7 +251,8 @@ namespace Listenarr.Infrastructure.DownloadClients.Qbittorrent
                 return;
             }
 
-            var isComplete = matched.Progress >= 1.0 || matched.AmountLeft == 0;
+            var isComplete = QBittorrentHelpers.IsCompleteCandidate(
+                matched.Progress, matched.AmountLeft, matched.Size, normalizedState);
 
             _logger.LogDebug("Completion check for {DownloadId}: IsComplete={IsComplete}, Progress={Progress:P2}, AmountLeft={AmountLeft}, State={State}",
                 download.Id, isComplete, matched.Progress, matched.AmountLeft, matched.State);

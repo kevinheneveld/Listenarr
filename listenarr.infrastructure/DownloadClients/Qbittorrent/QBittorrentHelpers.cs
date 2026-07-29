@@ -25,6 +25,37 @@ namespace Listenarr.Infrastructure.DownloadClients.Qbittorrent
     /// </summary>
     public static class QBittorrentHelpers
     {
+        // Client states in which AmountLeft is meaningless: the torrent has no
+        // (verified) content yet, so "0 bytes left" describes ignorance, not
+        // completion.
+        private static readonly HashSet<string> PreContentStates = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "metaDL",             // fetching metadata from the swarm — size unknown
+            "forcedMetaDL",
+            "allocating",
+            "checkingDL",
+            "checkingUP",
+            "checkingResumeData",
+        };
+
+        /// <summary>
+        /// True when a torrent's reported numbers actually mean "download
+        /// finished". A torrent still fetching its metadata reports
+        /// AmountLeft == 0 because the client doesn't know the size yet —
+        /// treating that as completion marked dead magnets Complete at 0%
+        /// (live case: import jobs ground forever against an empty content
+        /// path, and cleaning the client entry re-triggered a search that
+        /// re-grabbed the same dead magnet). Real completion requires actual
+        /// content (Size &gt; 0) in a post-metadata state. Pure for unit
+        /// testing.
+        /// </summary>
+        public static bool IsCompleteCandidate(double progress, long amountLeft, long size, string? state)
+        {
+            if (size <= 0) return false;
+            if (!string.IsNullOrWhiteSpace(state) && PreContentStates.Contains(state.Trim())) return false;
+            return progress >= 1.0 || amountLeft == 0;
+        }
+
         /// <summary>
         /// Builds a URL parameter string for qBittorrent category filtering.
         /// Extracts the category from client settings and returns a properly formatted parameter.
