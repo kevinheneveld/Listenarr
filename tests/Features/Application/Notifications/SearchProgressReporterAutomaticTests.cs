@@ -68,5 +68,40 @@ namespace Listenarr.Tests.Features.Application.Notifications
             Assert.Null(current);
             Assert.Empty(recent);
         }
+
+        [Fact(DisplayName = "A stale 'searching' event is not reported as current")]
+        public void Snapshot_StaleSearching_ReportsNoCurrent()
+        {
+            // Live case: a per-book "Search now" emitted 'searching' but its
+            // code path never sent a terminal outcome — the sidebar showed
+            // "Searching 3 indexers…" overnight. A searching event older than
+            // any plausible real fan-out must not be reported as current.
+            var tracker = new SearchActivityTracker();
+            tracker.Record(new SearchActivityEvent(
+                "Searching 3 indexers for 15th Affair James Patterson", "searching",
+                null, null, DateTime.UtcNow.AddHours(-16)), addToFeed: false);
+
+            var (current, _) = tracker.Snapshot();
+            Assert.Null(current);
+        }
+
+        [Fact(DisplayName = "A fresh 'searching' event stays current; stale terminal stages are kept")]
+        public void Snapshot_FreshSearchingAndOldOutcomes_Kept()
+        {
+            var tracker = new SearchActivityTracker();
+            tracker.Record(new SearchActivityEvent(
+                "Grabbed 1 release(s) for Old Book", "grabbed", 1, null,
+                DateTime.UtcNow.AddHours(-16)));
+            var (current, _) = tracker.Snapshot();
+            // Terminal stages describe the PAST truthfully — age doesn't lie.
+            Assert.NotNull(current);
+
+            tracker.Record(new SearchActivityEvent(
+                "Searching 3 indexers for X", "searching", null, null,
+                DateTime.UtcNow.AddMinutes(-1)), addToFeed: false);
+            (current, _) = tracker.Snapshot();
+            Assert.NotNull(current);
+            Assert.Equal("searching", current!.Stage);
+        }
     }
 }

@@ -67,6 +67,22 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 audiobook.LastSearchTime = DateTime.UtcNow;
                 await audiobookRepository.SetLastSearchTimeAsync(audiobook.Id, audiobook.LastSearchTime.Value);
 
+                // Close the live-activity loop the same way the sweep does.
+                // The indexer fan-out broadcast a transient "Searching …" for
+                // this book; without a terminal outcome + idle here, the
+                // sidebar pill showed that search as running until the NEXT
+                // sweep — hours later (live case: a 16:28 "Search now" pinned
+                // "Searching 3 indexers…" on screen overnight).
+                var reporter = scope.ServiceProvider.GetService<Listenarr.Application.Notifications.Progress.SearchProgressReporter>();
+                if (reporter != null)
+                {
+                    var (outcomeMessage, outcomeStage) = queued > 0
+                        ? ($"Grabbed {queued} release(s) for {audiobook.Title}", "grabbed")
+                        : ($"No results for {audiobook.Title}", "no_results");
+                    await reporter.BroadcastAutomaticAsync(outcomeMessage, outcomeStage, audiobook.Id, audiobook.Asin);
+                    await reporter.BroadcastAutomaticAsync("Search idle", "idle", addToFeed: false);
+                }
+
                 return new AutomaticSearchBookResult
                 {
                     AudiobookId = audiobookId,

@@ -89,11 +89,22 @@ namespace Listenarr.Application.Notifications.Progress
             }
         }
 
+        // A real indexer fan-out finishes in seconds to a couple of minutes; a
+        // "searching" event this old means its emitter never sent a terminal
+        // outcome (crash, or a code path that forgot). Reporting it as current
+        // pins a phantom "Searching …" on the sidebar for hours.
+        private static readonly TimeSpan SearchingStaleness = TimeSpan.FromMinutes(30);
+
         public (SearchActivityEvent? Current, IReadOnlyList<SearchActivityEvent> Recent) Snapshot()
         {
             lock (_gate)
             {
-                return (_current, _recent.ToList());
+                var current = _current;
+                if (current is { Stage: "searching" } && DateTime.UtcNow - current.Timestamp > SearchingStaleness)
+                {
+                    current = null;
+                }
+                return (current, _recent.ToList());
             }
         }
     }
