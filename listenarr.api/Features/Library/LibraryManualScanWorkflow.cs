@@ -76,7 +76,8 @@ namespace Listenarr.Api.Features.Library
 
             _logger.LogInformation("Scanning for audiobook files for '{Title}' under: {Path}", LogRedaction.SanitizeText(audiobook.Title), LogRedaction.SanitizeFilePath(scanRoot));
 
-            var foundFilesResult = FindMatchingAudioFiles(audiobook, scanRoot);
+            var acceptAllFiles = await ScanRootBelongsExclusivelyToAsync(scanRoot, audiobook);
+            var foundFilesResult = FindMatchingAudioFiles(audiobook, scanRoot, acceptAllFiles);
             if (foundFilesResult.ErrorResult != null)
             {
                 return foundFilesResult.ErrorResult;
@@ -182,7 +183,46 @@ namespace Listenarr.Api.Features.Library
             return new OkObjectResult(new { message = "Scan complete", scannedPath = scanRoot, found = foundFiles.Count, created = created.Count, audiobook = updated });
         }
 
-        private (List<string> FoundFiles, IActionResult? ErrorResult) FindMatchingAudioFiles(Audiobook audiobook, string scanRoot)
+        /// <summary>
+        /// True when the scan root is this record's private territory: not the
+        /// output root, and no other record's BasePath at/under/above it. Then
+        /// the name filter is skipped — the caller pointed the scan at THIS
+        /// book's own folder, so every audio file in it belongs to the book
+        /// regardless of what a renamer called it. Shared folders keep the
+        /// filter (the shelf-hijack guard).
+        /// </summary>
+        private async Task<bool> ScanRootBelongsExclusivelyToAsync(string scanRoot, Audiobook audiobook)
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+                var settings = await configService.GetApplicationSettingsAsync();
+                var normalizedRoot = Path.GetFullPath(scanRoot);
+                if (!string.IsNullOrWhiteSpace(settings.OutputPath)
+                    && string.Equals(
+                        normalizedRoot.TrimEnd(Path.DirectorySeparatorChar),
+                        Path.GetFullPath(settings.OutputPath).TrimEnd(Path.DirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var all = await _repo.GetAllAsync();
+                return !all.Any(other =>
+                    other.Id != audiobook.Id
+                    && !string.IsNullOrWhiteSpace(other.BasePath)
+                    && (FileUtils.IsPathSameOrInside(Path.GetFullPath(other.BasePath!), normalizedRoot)
+                        || FileUtils.IsPathSameOrInside(normalizedRoot, Path.GetFullPath(other.BasePath!))));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "Exclusive-ownership check failed; keeping the name filter");
+                return false;
+            }
+        }
+
+        private (List<string> FoundFiles, IActionResult? ErrorResult) FindMatchingAudioFiles(Audiobook audiobook, string scanRoot, bool acceptAllFiles = false)
         {
             var titleToken = (audiobook.Title ?? string.Empty).Replace("\"", string.Empty).Trim();
             var authorToken = audiobook.Authors?.FirstOrDefault() ?? string.Empty;
@@ -207,6 +247,14 @@ namespace Listenarr.Api.Features.Library
                             {
                                 var ext = Path.GetExtension(file);
                                 if (!exts.Contains(ext, StringComparer.OrdinalIgnoreCase)) continue;
+                                if (acceptAllFiles)
+                                {
+                                    // The scan root is this book's private folder
+                                    // (see ScanRootBelongsExclusivelyToAsync) — no
+                                    // name filter needed.
+                                    foundFiles.Add(file);
+                                    continue;
+                                }
                                 var fname = Path.GetFileNameWithoutExtension(file);
                                 if (!string.IsNullOrEmpty(titleToken) && fname.IndexOf(titleToken, StringComparison.OrdinalIgnoreCase) >= 0)
                                 {

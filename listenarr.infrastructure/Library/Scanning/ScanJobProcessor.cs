@@ -94,11 +94,29 @@ namespace Listenarr.Infrastructure.Library.Scanning
 
                 if (usedBasePath && (string.IsNullOrEmpty(scanRoot) || !Directory.Exists(scanRoot)))
                 {
+                    // Belt: a missing BasePath does not prove the FILES are gone —
+                    // only that the pointer is stale (live case: a move relocated
+                    // files, BasePath lagged one poll, and this cleanup wiped 13
+                    // records' rows). If any tracked file still exists on disk,
+                    // refuse the cascade and leave the rows for a correctly-
+                    // pathed scan to reconcile.
+                    var trackedFiles = await fileRepository.GetByAudiobookIdAsync(audiobook.Id);
+                    var survivors = trackedFiles.Count(f =>
+                        !string.IsNullOrWhiteSpace(f.Path) && Path.IsPathRooted(f.Path!) && File.Exists(f.Path!));
+                    if (survivors > 0)
+                    {
+                        _logger.LogWarning(
+                            "Audiobook BasePath missing for job {JobId} ({Path}) but {Survivors} tracked file(s) still exist on disk — refusing cleanup",
+                            job.Id, LogRedaction.SanitizeFilePath(scanRoot), survivors);
+                        _queue.UpdateJobStatus(job.Id, "Failed", "BasePath missing but tracked files still exist on disk");
+                        return;
+                    }
+
                     _logger.LogWarning("Audiobook BasePath missing for job {JobId}: {Path}. Removing tracked files.", job.Id, LogRedaction.SanitizeFilePath(scanRoot));
 
                     try
                     {
-                        var existingFiles = await fileRepository.GetByAudiobookIdAsync(audiobook.Id);
+                        var existingFiles = trackedFiles;
 
                         List<object> removedFilesDto = new();
                         if (existingFiles.Count > 0)
@@ -191,11 +209,13 @@ namespace Listenarr.Infrastructure.Library.Scanning
                     return;
                 }
 
+                var acceptAllFiles = await ScanRootBelongsExclusivelyToAsync(scanRoot, audiobook, scope);
                 var foundFiles = ScanFileDiscovery.FindMatchingAudioFiles(
                     scanRoot,
                     audiobook,
                     job.Id,
-                    _logger);
+                    _logger,
+                    acceptAllFiles);
 
                 // Calculate base path for the audiobook files
                 var basePath = ScanPathPlanner.CalculateBasePath(foundFiles);

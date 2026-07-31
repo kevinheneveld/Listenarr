@@ -73,5 +73,49 @@ namespace Listenarr.Infrastructure.Library.Scanning
                 return (null, false);
             }
         }
+
+        /// <summary>
+        /// True when <paramref name="scanRoot"/> is this record's private
+        /// territory: not the library output root, and no OTHER record's
+        /// BasePath sits at, under, or above it. In that case the name filter
+        /// (filename must contain the title) is counterproductive — the caller
+        /// pointed the scan at THIS book's own folder, so every audio file in
+        /// it belongs to the book regardless of what a renamer called it
+        /// (live case: files named "…Volume 1-111.mp3" in a "…Volume 5"
+        /// record's folder were unmatchable and the record stranded at 0
+        /// files). Shared folders keep the filter — it is the shelf-hijack
+        /// guard (#766).
+        /// </summary>
+        private async Task<bool> ScanRootBelongsExclusivelyToAsync(
+            string scanRoot, Audiobook audiobook, IServiceScope scope)
+        {
+            try
+            {
+                var configService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+                var settings = await configService.GetApplicationSettingsAsync();
+                var normalizedRoot = Path.GetFullPath(scanRoot);
+                if (!string.IsNullOrWhiteSpace(settings.OutputPath)
+                    && string.Equals(
+                        normalizedRoot.TrimEnd(Path.DirectorySeparatorChar),
+                        Path.GetFullPath(settings.OutputPath).TrimEnd(Path.DirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
+                var all = await audiobookRepository.GetAllAsync();
+                return !all.Any(other =>
+                    other.Id != audiobook.Id
+                    && !string.IsNullOrWhiteSpace(other.BasePath)
+                    && (FileUtils.IsPathSameOrInside(Path.GetFullPath(other.BasePath!), normalizedRoot)
+                        || FileUtils.IsPathSameOrInside(normalizedRoot, Path.GetFullPath(other.BasePath!))));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogDebug(ex, "Exclusive-ownership check failed for scan root; keeping the name filter");
+                return false;
+            }
+        }
     }
 }

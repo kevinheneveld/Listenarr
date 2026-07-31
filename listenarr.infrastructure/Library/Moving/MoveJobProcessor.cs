@@ -368,7 +368,8 @@ namespace Listenarr.Infrastructure.Library.Moving
                         // Enqueue a scan job and broadcast an immediate AudiobookUpdate so detail views update promptly
                         try
                         {
-                            var scanJobId = await scanQueueService.EnqueueScanAsync(audiobook, null);
+                            // Explicit target path — never a (stale) BasePath fallback; see MovedAudiobookPathRewriter.
+                            var scanJobId = await scanQueueService.EnqueueScanAsync(audiobook, target);
                             logger.LogInformation("Enqueued scan job {ScanJobId} for audiobook {AudiobookId} after move", scanJobId, audiobook.Id);
 
                             // Load latest audiobook state and broadcast a full DTO so clients can update instantly without fetching
@@ -400,7 +401,6 @@ namespace Listenarr.Infrastructure.Library.Moving
                     await moveQueueService.UpdateJobStatusAsync(job.Id, "Completed", cancellationToken: stoppingToken);
                     metrics.Increment("worker.move.job.completed");
                     logger.LogInformation("Move job {JobId} completed: {Source} -> {Target}", job.Id, LogRedaction.SanitizeFilePath(source), LogRedaction.SanitizeFilePath(target));
-                    // Completed move job — status updated and broadcasted where configured
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                 {

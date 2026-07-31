@@ -162,5 +162,30 @@ namespace Listenarr.Tests.Features.Infrastructure.Library.Scanning
 
             Assert.Empty(found);
         }
+
+        // -----------------------------------------------------------------
+        // acceptAllFiles: the book's own private folder needs no name filter.
+        // -----------------------------------------------------------------
+
+        [Fact]
+        public void AcceptAllFiles_ClaimsUnmatchableNamesInTheBooksOwnFolder()
+        {
+            // Live case: a renamer stamped every file of a multi-volume split
+            // "…Volume 1-NNN.mp3"; scanned into the "…Volume 5" record's own
+            // folder, the name filter matched nothing and the record stranded
+            // at 0 files. When the caller has established the folder belongs
+            // exclusively to this book, every audio file in it is the book.
+            AddBook("stage", "Favorite Science Fiction Stories, Volume 1-111.mp3",
+                "Favorite Science Fiction Stories, Volume 1-112.mp3");
+
+            var book = Book("Favorite Science Fiction Stories, Volume 5", "Philip K. Dick");
+            var filtered = ScanFileDiscovery.FindMatchingAudioFiles(
+                Path.Combine(_root, "stage"), book, Guid.NewGuid(), NullLogger.Instance);
+            var acceptAll = ScanFileDiscovery.FindMatchingAudioFiles(
+                Path.Combine(_root, "stage"), book, Guid.NewGuid(), NullLogger.Instance, acceptAllFiles: true);
+
+            Assert.Empty(filtered);
+            Assert.Equal(2, acceptAll.Count);
+        }
     }
 }

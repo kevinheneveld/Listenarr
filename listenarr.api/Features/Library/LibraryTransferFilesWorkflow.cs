@@ -36,6 +36,8 @@ namespace Listenarr.Api.Features.Library
         private readonly IHistoryRepository _historyRepository;
         private readonly IFileMover _fileMover;
         private readonly IFileSystem _fileSystem;
+        private readonly IConfigurationService _configurationService;
+        private readonly IFileNamingService _fileNamingService;
         private readonly ILogger<LibraryTransferFilesWorkflow> _logger;
         private readonly Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService? _whisperService;
         private readonly Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService? _verificationQueue;
@@ -46,6 +48,8 @@ namespace Listenarr.Api.Features.Library
             IHistoryRepository historyRepository,
             IFileMover fileMover,
             IFileSystem fileSystem,
+            IConfigurationService configurationService,
+            IFileNamingService fileNamingService,
             ILogger<LibraryTransferFilesWorkflow> logger,
             Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService? whisperService = null,
             Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService? verificationQueue = null)
@@ -55,6 +59,8 @@ namespace Listenarr.Api.Features.Library
             _historyRepository = historyRepository;
             _fileMover = fileMover;
             _fileSystem = fileSystem;
+            _configurationService = configurationService;
+            _fileNamingService = fileNamingService;
             _logger = logger;
             _whisperService = whisperService;
             _verificationQueue = verificationQueue;
@@ -96,6 +102,45 @@ namespace Listenarr.Api.Features.Library
             if (request.FileIds is { Count: > 0 } && toMove.Count != request.FileIds.Distinct().Count())
             {
                 return new BadRequestObjectResult(new { message = "One or more file ids do not belong to this audiobook" });
+            }
+
+            // A target with no folder of its own — a fresh record, or one whose
+            // BasePath sits at the library OUTPUT ROOT — must get a canonical
+            // folder BEFORE any file moves. Joining file names onto the root
+            // physically dumped transferred files loose at /audiobooks (live
+            // case: a collection split scattered ~50 files there, and every
+            // affected record then tripped the organize sweep's
+            // source-at-root refusal).
+            try
+            {
+                var settings = await _configurationService.GetApplicationSettingsAsync();
+                var basePathIsRoot = !string.IsNullOrWhiteSpace(target.BasePath)
+                    && !string.IsNullOrWhiteSpace(settings.OutputPath)
+                    && string.Equals(
+                        Path.GetFullPath(target.BasePath!).TrimEnd(Path.DirectorySeparatorChar),
+                        Path.GetFullPath(settings.OutputPath).TrimEnd(Path.DirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase);
+                if ((string.IsNullOrWhiteSpace(target.BasePath) || basePathIsRoot)
+                    && !string.IsNullOrWhiteSpace(settings.OutputPath))
+                {
+                    var namingPattern = !string.IsNullOrWhiteSpace(settings.FolderNamingPattern)
+                        ? settings.FolderNamingPattern
+                        : settings.FileNamingPattern;
+                    var canonical = LibraryPathPlanner.ComputeAudiobookBaseDirectoryFromPattern(
+                        target, settings.OutputPath, namingPattern, _fileNamingService);
+                    if (!string.IsNullOrWhiteSpace(canonical))
+                    {
+                        target.BasePath = canonical;
+                        await _repo.UpdateAsync(target);
+                        _logger.LogInformation(
+                            "Transfer target {TargetId} had no folder of its own; assigned canonical folder {Path}",
+                            target.Id, LogRedaction.SanitizeFilePath(canonical));
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "Failed to assign canonical folder to transfer target {TargetId}; files will land in its current BasePath", target.Id);
             }
 
             var targetFiles = await _audioFileRepository.GetByAudiobookIdAsync(target.Id, ct);

@@ -18,9 +18,19 @@ internal static class ScanFileDiscovery
         string scanRoot,
         Audiobook audiobook,
         Guid jobId,
-        ILogger logger)
+        ILogger logger,
+        bool acceptAllFiles = false)
     {
         var candidates = CollectCandidates(scanRoot, jobId, logger);
+        // acceptAllFiles: the caller established the scan root is this book's
+        // private folder (see ScanRootBelongsExclusivelyToAsync) — every audio
+        // file in it belongs to the book no matter what a renamer called it.
+        // The name filter below is the shelf-hijack guard for SHARED folders.
+        if (acceptAllFiles)
+        {
+            return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
         var titleToken = (audiobook.Title ?? string.Empty).Replace("\"", string.Empty).Trim();
         var authorToken = audiobook.Authors?.FirstOrDefault() ?? string.Empty;
         if (string.IsNullOrEmpty(titleToken) && string.IsNullOrEmpty(authorToken))

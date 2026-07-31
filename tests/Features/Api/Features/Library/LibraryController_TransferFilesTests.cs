@@ -338,5 +338,53 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal(sourceFile.Path, moved.Path);
             Assert.True(File.Exists(sourceFile.Path));
         }
+
+        [Fact]
+        [Trait("Method", "TransferFiles")]
+        [Trait("Scenario", "TargetWithoutFolder_GetsCanonicalFolder_NotTheOutputRoot")]
+        public async Task TransferFiles_TargetWithoutFolder_GetsCanonicalFolder_NotTheOutputRoot()
+        {
+            // Live case: transferring a collection split into fresh records
+            // whose BasePath defaulted to the output ROOT physically dumped
+            // ~50 files loose at /audiobooks. A folder-less target must get a
+            // canonical folder before any file moves.
+            var outputRoot = FileService.GetTempDirectory("transfer-output-root");
+            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+                .WithOutputPath(outputRoot)
+                .Build());
+
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var sourceFolder = FileService.GetTempDirectory("transfer-src-canon");
+            var source = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Arcanum Unbounded")
+                .WithBasePath(sourceFolder)
+                .Build());
+            var target = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Warbreaker")
+                .WithBasePath(outputRoot) // the live failure mode: BasePath at the root
+                .Build());
+            var file = await AddFileOnDiskAsync(source, "part1.m4b");
+
+            var result = await controller.TransferFiles(
+                source.Id,
+                new LibraryController.TransferFilesRequest { TargetAudiobookId = target.Id },
+                CancellationToken.None);
+
+            Assert.IsType<OkObjectResult>(result);
+
+            var refreshedTarget = await _audiobookRepository.GetByIdAsync(target.Id);
+            Assert.NotNull(refreshedTarget!.BasePath);
+            // No longer the bare root, and inside the root with the title in the path.
+            Assert.NotEqual(
+                Path.GetFullPath(outputRoot).TrimEnd(Path.DirectorySeparatorChar),
+                Path.GetFullPath(refreshedTarget.BasePath!).TrimEnd(Path.DirectorySeparatorChar));
+            Assert.StartsWith(Path.GetFullPath(outputRoot), Path.GetFullPath(refreshedTarget.BasePath!));
+            Assert.Contains("Warbreaker", refreshedTarget.BasePath);
+
+            // The file landed inside the canonical folder, not loose at the root.
+            Assert.False(File.Exists(Path.Join(outputRoot, "part1.m4b")));
+            Assert.True(File.Exists(Path.Join(refreshedTarget.BasePath, "part1.m4b")));
+            _ = file;
+        }
     }
 }

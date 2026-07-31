@@ -16,8 +16,44 @@ internal static class MovedAudiobookPathRewriter
         IAudiobookRepository audiobookRepository,
         ILogger logger)
     {
+        await RewriteBasePathAsync(audiobook, target, audiobookRepository, logger);
         await RewriteImagePathAsync(audiobook, source, target, audiobookRepository, logger);
         await RewriteLegacyFilePathAsync(audiobook, source, target, audiobookRepository, logger);
+    }
+
+    /// <summary>
+    /// The record must follow its files IMMEDIATELY after the physical move.
+    /// The processor's post-move scan resolves a null path to BasePath — a
+    /// stale BasePath pointed that scan at the just-deleted source folder,
+    /// whose missing-folder cleanup then deleted every tracked file row
+    /// (live case: 13 records zeroed to 0 files after their moves
+    /// "completed" successfully).
+    /// </summary>
+    private static async Task RewriteBasePathAsync(
+        Audiobook audiobook,
+        string target,
+        IAudiobookRepository audiobookRepository,
+        ILogger logger)
+    {
+        try
+        {
+            if (string.Equals(audiobook.BasePath, target, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            audiobook.BasePath = target;
+            await audiobookRepository.UpdateAsync(audiobook);
+            logger.LogInformation(
+                "Updated BasePath for audiobook {AudiobookId} to move target", audiobook.Id);
+        }
+        catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException or StackOverflowException))
+        {
+            logger.LogWarning(
+                exception,
+                "Failed to update BasePath after move for audiobook {AudiobookId}",
+                audiobook.Id);
+        }
     }
 
     private static async Task RewriteImagePathAsync(
