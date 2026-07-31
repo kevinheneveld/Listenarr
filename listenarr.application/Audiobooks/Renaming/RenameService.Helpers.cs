@@ -108,12 +108,11 @@ namespace Listenarr.Application.Audiobooks.Renaming
         {
             var usesSubtitleToken = (!string.IsNullOrWhiteSpace(folderPattern) && folderPattern.IndexOf("Subtitle", StringComparison.OrdinalIgnoreCase) >= 0)
                 || (!string.IsNullOrWhiteSpace(filePattern) && filePattern.IndexOf("Subtitle", StringComparison.OrdinalIgnoreCase) >= 0);
-            var combinedTitle = !usesSubtitleToken
-                && !string.IsNullOrWhiteSpace(audiobook.Subtitle)
-                && !string.IsNullOrWhiteSpace(audiobook.Title)
-                && !audiobook.Title.Contains(audiobook.Subtitle, StringComparison.OrdinalIgnoreCase)
-                ? $"{audiobook.Title}: {audiobook.Subtitle}"
-                : audiobook.Title;
+            // Shared {Title} semantics — MUST agree with LibraryPathPlanner
+            // (organize sweep / add / move), or a book organized here still
+            // shows as "Will move" in the sweep. See AudiobookTitleFolding.
+            var combinedTitle = AudiobookTitleFolding.CombinedTitle(
+                audiobook.Title, audiobook.Subtitle, audiobook.Series, usesSubtitleToken);
             var narrator = audiobook.Narrators != null ? string.Join(", ", audiobook.Narrators.Where(n => !string.IsNullOrWhiteSpace(n))) : string.Empty;
 
             return new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)

@@ -65,11 +65,20 @@ namespace Listenarr.Api.Features.Library
                 directoryPattern = CleanDirectoryPattern(directoryPattern);
             }
 
+            // Shared {Title} semantics with the rename flow (the book page's
+            // "Organize Files") — see AudiobookTitleFolding: a subtitle that
+            // carries real information ("Volume 3" on a plain-titled volume)
+            // folds in so sibling volumes can't collide into one folder; a
+            // subtitle that merely echoes the series does not.
+            var usesSubtitleToken = directoryPattern.Contains("Subtitle", StringComparison.OrdinalIgnoreCase);
+            var combinedTitle = Listenarr.Application.Audiobooks.Renaming.AudiobookTitleFolding.CombinedTitle(
+                audiobook.Title, audiobook.Subtitle, audiobook.Series, usesSubtitleToken);
+
             var variables = new Dictionary<string, object>
             {
                 { "Author", SanitizeDirectoryName(audiobook.Authors?.FirstOrDefault() ?? "Unknown Author") },
                 { "Series", SanitizeDirectoryName(!string.IsNullOrWhiteSpace(audiobook.Series) ? audiobook.Series! : string.Empty) },
-                { "Title", SanitizeDirectoryName(audiobook.Title ?? "Unknown Title") },
+                { "Title", SanitizeDirectoryName(combinedTitle) },
                 { "Subtitle", SanitizeDirectoryName(audiobook.Subtitle ?? string.Empty) },
                 { "Edition", SanitizeDirectoryName(audiobook.Edition ?? string.Empty) },
                 { "Narrator", SanitizeDirectoryName((audiobook.Narrators != null && audiobook.Narrators.Any()) ? string.Join(", ", audiobook.Narrators.Where(n => !string.IsNullOrWhiteSpace(n))) : string.Empty) },
