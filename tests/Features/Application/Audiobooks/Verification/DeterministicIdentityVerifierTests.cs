@@ -319,5 +319,85 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
                 w => w.TranscribeWithModelAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
                 Times.Never);
         }
+
+        [Fact]
+        public async Task VerifyAsync_ImplausibleCompleteness_StillTranscribesTheClosingWindow()
+        {
+            // Live case ("Debt of Honor", an abridged cassette rip): perfect
+            // opening credits produced a provisional Match, so the closing was
+            // skipped and escalation never ran — and only THEN did the
+            // completeness gate flag the book. The reviewer got an
+            // opening-only transcript for a review-bound book whose closing
+            // carries the deciding evidence ("…available on audio cassette…").
+            // Completeness must fold in before those decisions.
+            var whisper = new Mock<IWhisperService>();
+            whisper.SetupGet(w => w.ModelName).Returns("base.en");
+            whisper.Setup(w => w.TranscribeAsync("/tmp/opening.wav", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("Audible presents Project Hail Mary by Andy Weir narrated by Ray Porter");
+            whisper.Setup(w => w.TranscribeAsync("/tmp/closing.wav", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("This concludes the abridged presentation of Project Hail Mary on audio cassette");
+
+            var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav", ClosingClipPath = "/tmp/closing.wav" };
+            var extractor = new Mock<IAudioSampleExtractor>();
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(samples);
+
+            var configuration = new Mock<IConfigurationService>();
+            configuration.Setup(c => c.GetApplicationSettingsAsync())
+                .ReturnsAsync(new ApplicationSettings());
+
+            var book = HailMary();
+            book.Runtime = 960; // 16h catalog runtime…
+            book.Files = new List<AudiobookFile>
+            {
+                new() { Path = "/x/part1.mp3", DurationSeconds = 3600, Size = 10_000_000 } // …but only 1h on disk
+            };
+
+            var verifier = new DeterministicIdentityVerifier(
+                extractor.Object, whisper.Object, configuration.Object,
+                NullLogger<DeterministicIdentityVerifier>.Instance);
+
+            var verdict = await verifier.VerifyAsync(book, "/tmp/book.mp3");
+
+            Assert.Equal(VerificationOutcome.Uncertain, verdict.Outcome);
+            whisper.Verify(w => w.TranscribeAsync("/tmp/closing.wav", It.IsAny<CancellationToken>()), Times.Once);
+            Assert.Contains("[closing]", verdict.Transcript);
+        }
+
+        [Fact]
+        public async Task VerifyAsync_EscalatedClosingUnavailable_KeepsFirstPassClosingInTranscript()
+        {
+            // A null escalated window must not erase a good first-pass window:
+            // the escalated verdict used to be built from the escalated texts
+            // alone, dropping the base-tier closing from the stored transcript.
+            var whisper = new Mock<IWhisperService>();
+            whisper.SetupGet(w => w.ModelName).Returns("base.en");
+            whisper.Setup(w => w.TranscribeAsync("/tmp/opening.wav", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("closing even by author c clock some story text follows here");
+            whisper.Setup(w => w.TranscribeAsync("/tmp/closing.wav", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("read by ray porter for the unabridged edition");
+            whisper.Setup(w => w.TranscribeWithModelAsync("/tmp/opening.wav", "small.en", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("Project Hail Mary by Andy Weir narrated by Ray Porter");
+            whisper.Setup(w => w.TranscribeWithModelAsync("/tmp/closing.wav", "small.en", It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string?)null);
+
+            var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav", ClosingClipPath = "/tmp/closing.wav" };
+            var extractor = new Mock<IAudioSampleExtractor>();
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(samples);
+
+            var configuration = new Mock<IConfigurationService>();
+            configuration.Setup(c => c.GetApplicationSettingsAsync())
+                .ReturnsAsync(new ApplicationSettings { VerificationEscalationModel = "small.en" });
+
+            var verifier = new DeterministicIdentityVerifier(
+                extractor.Object, whisper.Object, configuration.Object,
+                NullLogger<DeterministicIdentityVerifier>.Instance);
+
+            var verdict = await verifier.VerifyAsync(HailMary(), "/tmp/book.mp3");
+
+            Assert.Equal("deterministic:whisper-base.en→small.en", verdict.Method);
+            Assert.Contains("unabridged edition", verdict.Transcript);
+        }
     }
 }

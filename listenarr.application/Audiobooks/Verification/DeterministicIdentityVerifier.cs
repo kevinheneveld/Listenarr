@@ -95,20 +95,28 @@ namespace Listenarr.Application.Audiobooks.Verification
 
             // The opening window almost always carries the credits; only spend
             // CPU on the closing window when the opening alone doesn't already
-            // produce a confident match.
+            // produce a confident match. Completeness folds in BEFORE that
+            // decision (and before escalation gating): a perfect opening on an
+            // implausible-runtime set is NOT a confident Match, and deciding
+            // from the raw outcome starved exactly the review-bound books of
+            // their closing window — live case: an abridged cassette rip whose
+            // closing announces the cassette-edition credits was flagged for
+            // coverage with an opening-only transcript, no closing, and no
+            // escalation pass.
+            var completeness = AudioCompletenessEstimator.Estimate(audiobook);
             string? openingText = null, closingText = null;
             if (samples.OpeningClipPath != null)
             {
                 openingText = await _whisper.TranscribeAsync(samples.OpeningClipPath, cancellationToken);
             }
 
-            var verdict = Evaluate(audiobook, openingText, closingText: null);
+            var verdict = ApplyCompleteness(Evaluate(audiobook, openingText, closingText: null), completeness);
             if (verdict.Outcome != VerificationOutcome.Match && samples.ClosingClipPath != null)
             {
                 closingText = await _whisper.TranscribeAsync(samples.ClosingClipPath, cancellationToken);
                 if (!string.IsNullOrWhiteSpace(closingText))
                 {
-                    verdict = Evaluate(audiobook, openingText, closingText);
+                    verdict = ApplyCompleteness(Evaluate(audiobook, openingText, closingText), completeness);
                 }
             }
 
@@ -144,12 +152,15 @@ namespace Listenarr.Application.Audiobooks.Verification
 
                 if (escalatedOpening != null || escalatedClosing != null)
                 {
-                    verdict = Evaluate(audiobook, escalatedOpening, escalatedClosing) with
+                    // Best-available text per window: a null escalated window
+                    // must not erase a good first-pass window from the stored
+                    // verdict/transcript.
+                    openingText = escalatedOpening ?? openingText;
+                    closingText = escalatedClosing ?? closingText;
+                    verdict = ApplyCompleteness(Evaluate(audiobook, openingText, closingText), completeness) with
                     {
                         Method = ComposeEscalatedMethod(_whisper.ModelName, escalationModel!)
                     };
-                    openingText = escalatedOpening ?? openingText;
-                    closingText = escalatedClosing ?? closingText;
                 }
             }
 
@@ -158,11 +169,9 @@ namespace Listenarr.Application.Audiobooks.Verification
             // match" relabel flow with the actual title/author the audio names.
             verdict = verdict with { HeardCredits = SpokenCreditsExtractor.Extract(openingText ?? closingText) };
 
-            // Completeness: a partial set (e.g. parts 10+20 of 20) samples a
-            // mid-book cold open and would read as a confident wrong-content
-            // mismatch; the runtime comparison reframes it as "right book,
-            // most of it missing" — still flagged, but honestly diagnosed.
-            verdict = ApplyCompleteness(verdict, AudioCompletenessEstimator.Estimate(audiobook));
+            // (Completeness was already folded into every Evaluate above so the
+            // closing/escalation gating saw the true outcome; nothing to apply
+            // here.)
 
             _logger.LogInformation(
                 "Verified audiobook {Id}: {Outcome} (confidence {Confidence:0.00}, title {Title:0.00}, author {Author:0.00})",
