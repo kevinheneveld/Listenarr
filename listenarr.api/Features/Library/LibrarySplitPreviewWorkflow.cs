@@ -19,6 +19,7 @@
 using Listenarr.Application.Audiobooks;
 using Listenarr.Domain.Common;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Listenarr.Api.Features.Library
 {
@@ -36,6 +37,7 @@ namespace Listenarr.Api.Features.Library
         private readonly IFfmpegService _ffmpegService;
         private readonly IFileSystem _fileSystem;
         private readonly IAiAssistService _aiAssist;
+        private readonly Microsoft.Extensions.Caching.Memory.IMemoryCache _cache;
         private readonly ILogger<LibrarySplitPreviewWorkflow> _logger;
 
         public LibrarySplitPreviewWorkflow(
@@ -44,6 +46,7 @@ namespace Listenarr.Api.Features.Library
             IFfmpegService ffmpegService,
             IFileSystem fileSystem,
             IAiAssistService aiAssist,
+            Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
             ILogger<LibrarySplitPreviewWorkflow> logger)
         {
             _repo = repo;
@@ -51,6 +54,7 @@ namespace Listenarr.Api.Features.Library
             _ffmpegService = ffmpegService;
             _fileSystem = fileSystem;
             _aiAssist = aiAssist;
+            _cache = cache;
             _logger = logger;
         }
 
@@ -91,8 +95,20 @@ namespace Listenarr.Api.Features.Library
                     {
                         try
                         {
-                            var meta = await _ffmpegService.RunFfprobeAsync(target.path);
-                            var bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
+                            // Cache per file (keyed by path+size — a replaced file
+                            // gets a fresh probe): a cold 100+ file collection costs
+                            // minutes of ffprobe on slow hosts, which is what pushed
+                            // the preview past the reverse proxy's timeout (live
+                            // case: a 131-file collection 504'd). Reopening the
+                            // modal must not pay that again. Empty result is cached
+                            // too — tagless files stay tagless.
+                            var cacheKey = $"split_tag_{target.path}_{_fileSystem.GetFileLength(target.path)}";
+                            if (!_cache.TryGetValue(cacheKey, out string? bookTitle))
+                            {
+                                var meta = await _ffmpegService.RunFfprobeAsync(target.path);
+                                bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
+                                _cache.Set(cacheKey, bookTitle ?? string.Empty, TimeSpan.FromHours(6));
+                            }
                             if (!string.IsNullOrWhiteSpace(bookTitle))
                             {
                                 embeddedTitles[target.Id] = bookTitle!;
