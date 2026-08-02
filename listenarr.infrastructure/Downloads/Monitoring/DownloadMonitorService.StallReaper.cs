@@ -161,57 +161,16 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
         }
 
         /// <summary>
-        /// Best-effort blocklist entry for a reaped release, keyed the way the
-        /// search-time blocklist matches: info-hash first (strongest identity,
-        /// parsed from the client item id or the magnet link), release title as
-        /// fallback. Failure to blocklist never blocks the reap itself.
+        /// Blocklists a reaped release via the shared
+        /// <see cref="FailedReleaseBlocklister"/> (hash-first identity, title
+        /// fallback) so re-search picks a different release.
         /// </summary>
-        private async Task BlocklistReapedReleaseAsync(
+        private Task BlocklistReapedReleaseAsync(
             IBlockedReleaseRepository? repository,
             Download download,
             CancellationToken cancellationToken)
-        {
-            if (repository == null || download.AudiobookId is not > 0 || string.IsNullOrWhiteSpace(download.Title))
-            {
-                return;
-            }
-
-            try
-            {
-                var hash = download.GetMetadataString("TorrentHash");
-                if (string.IsNullOrWhiteSpace(hash))
-                {
-                    var externalId = download.GetExternalId();
-                    if (!string.IsNullOrWhiteSpace(externalId)
-                        && System.Text.RegularExpressions.Regex.IsMatch(externalId, "^[0-9a-fA-F]{40}$"))
-                    {
-                        hash = externalId;
-                    }
-                }
-                if (string.IsNullOrWhiteSpace(hash) && !string.IsNullOrWhiteSpace(download.OriginalUrl))
-                {
-                    var m = System.Text.RegularExpressions.Regex.Match(
-                        download.OriginalUrl, @"btih:([0-9a-fA-F]{40})");
-                    if (m.Success) hash = m.Groups[1].Value;
-                }
-
-                await repository.AddAsync(new BlockedRelease
-                {
-                    AudiobookId = download.AudiobookId.Value,
-                    ReleaseTitle = download.Title!,
-                    TorrentHash = string.IsNullOrWhiteSpace(hash) ? null : hash,
-                    Reason = "Reaped by stall timer (dead/stalled release)"
-                }, cancellationToken);
-
-                logger.LogInformation(
-                    "[STALL-REAPER] Blocklisted reaped release for audiobook {AudiobookId}: {Title}",
-                    download.AudiobookId, LogRedaction.SanitizeText(download.Title));
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
-                logger.LogWarning(ex, "[STALL-REAPER] Failed to blocklist reaped release for download {DownloadId}", LogRedaction.SanitizeText(download.Id));
-            }
-        }
+            => FailedReleaseBlocklister.BlocklistAsync(
+                repository, download, "Reaped by stall timer (dead/stalled release)", logger, cancellationToken);
 
         /// <summary>
         /// One-line diagnostic for a reap candidate used in the dry-run/armed report:

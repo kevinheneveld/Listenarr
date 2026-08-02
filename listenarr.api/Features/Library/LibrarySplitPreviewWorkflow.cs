@@ -107,6 +107,13 @@ namespace Listenarr.Api.Features.Library
                             {
                                 var meta = await _ffmpegService.RunFfprobeAsync(target.path);
                                 bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
+                                // Per-chapter Title tags ("Ch75 - The Hard Way")
+                                // must cluster as the BOOK, not as 77 one-file
+                                // "books" (live case: a chapterized rip offered 77
+                                // groups, one per chapter). Strip the chapter
+                                // marker; a tag that is ONLY a chapter marker
+                                // ("Chapter 12") carries no book identity at all.
+                                bookTitle = EmbeddedTitleNormalizer.StripChapterMarkers(bookTitle);
                                 _cache.Set(cacheKey, bookTitle ?? string.Empty, TimeSpan.FromHours(6));
                             }
                             if (!string.IsNullOrWhiteSpace(bookTitle))

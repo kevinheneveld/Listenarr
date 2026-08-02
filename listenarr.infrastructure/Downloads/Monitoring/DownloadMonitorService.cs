@@ -359,6 +359,18 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                 await downloadClientGateway.RemoveAsync(client, clientItemId, deleteFiles: false, cancellationToken);
             }
 
+            // Blocklist the failed release BEFORE any re-search: the client just
+            // reported this release's content as broken (PAR/health/unpack), so
+            // the next search must pick a DIFFERENT one. Without this, the same
+            // top-scored release was re-grabbed on every failure — three books
+            // cycled the same broken NZBs every ~4 minutes, 59 rows each.
+            await FailedReleaseBlocklister.BlocklistAsync(
+                scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
+                download,
+                $"Client-reported download failure: {errorMessage}",
+                logger,
+                cancellationToken);
+
             if (settings.FailedDownloadAutoSearch && download.AudiobookId.HasValue)
             {
                 try
