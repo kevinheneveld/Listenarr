@@ -83,6 +83,35 @@ namespace Listenarr.Application.Downloads.Submission
                 };
             }
 
+            // Drop blocklisted releases (wrong-content rejections, reaped stalls,
+            // client-reported failures). The sweep path already filters these;
+            // without the same filter here, the post-failure re-search re-grabs
+            // the exact release that just failed, forever.
+            if (blockedReleaseRepository != null)
+            {
+                var blocked = await blockedReleaseRepository.GetByAudiobookIdAsync(audiobook.Id);
+                if (blocked.Count > 0)
+                {
+                    var beforeBlocked = searchResults.Count;
+                    searchResults = searchResults
+                        .Where(r => !Search.BlockedReleaseMatcher.IsBlocked(r.Title, r.MagnetLink, blocked))
+                        .ToList();
+                    if (searchResults.Count < beforeBlocked)
+                    {
+                        logger.LogInformation("Filtered {Removed} blocked release(s) for audiobook '{Title}'",
+                            beforeBlocked - searchResults.Count, LogRedaction.SanitizeText(audiobook.Title));
+                    }
+                    if (!searchResults.Any())
+                    {
+                        return new SearchAndDownloadResult
+                        {
+                            Success = false,
+                            Message = "All results are blocklisted releases"
+                        };
+                    }
+                }
+            }
+
             // Score results against quality profile
             // Score results against quality profile (runtime enables the
             // collection-sized-release rejection).

@@ -39,7 +39,8 @@ namespace Listenarr.Application.Downloads.Submission
         DirectDownloadWorkflow directDownloadWorkflow,
         DownloadRemovalWorkflow downloadRemovalWorkflow,
         Search.Filters.SearchResultFilterPipeline filterPipeline,
-        IAiAssistService aiAssist) : IDownloadService
+        IAiAssistService aiAssist,
+        IBlockedReleaseRepository? blockedReleaseRepository = null) : IDownloadService
     {
         // Cache expiration constants
         private const int QueueCacheExpirationSeconds = 10;

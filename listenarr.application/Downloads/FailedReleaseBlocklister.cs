@@ -49,6 +49,15 @@ namespace Listenarr.Application.Downloads
             try
             {
                 var hash = ResolveHash(download);
+
+                // The same broken release fails once per monitor cycle until the
+                // book grabs something else — blocklist it once, not per cycle.
+                var existing = await repository.GetByAudiobookIdAsync(download.AudiobookId.Value, cancellationToken);
+                if (Search.BlockedReleaseMatcher.IsBlocked(download.Title, hash, existing))
+                {
+                    return;
+                }
+
                 await repository.AddAsync(new BlockedRelease
                 {
                     AudiobookId = download.AudiobookId.Value,
