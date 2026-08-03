@@ -682,10 +682,13 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
         }
 
         [Fact]
-        public async Task FetchDownloadsAsync_HistoryMatching_UsesTitleFallbackWhenCanonicalIdDoesNotMatch()
+        public async Task FetchDownloadsAsync_HistoryMatching_UsesTitleFallbackOnlyForRowsWithoutAClientId()
         {
-            // AC: AC-NZB-009 requires TitleUtils.AreTitlesSimilar as the only fallback after ID mismatch.
-            // Behavior: No canonical ID match -> ordered title fallback -> first similar unmatched object mutates.
+            // AC: AC-NZB-009 — title fallback is reserved for legacy rows that never
+            // recorded a client item id. A row that carries its own id is matched by
+            // id or not at all: title similarity across DIFFERENT ids means a
+            // same-named sibling (live case: seven simultaneous grabs of the same
+            // release for different records cascaded into premature completions).
             // @category: core-functionality
             // @lane: integration
             // @dependency: TitleUtils.AreTitlesSimilar
@@ -704,15 +707,42 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                 ]);
             using var http = new HttpClient(apiMock);
             var adapter = CreateAdapter(http);
-            var download = CreateDownload("title-match", "Fallback Book", "402", 10);
+            var legacy = CreateLegacyDownload("title-match", "Fallback Book", 10);
 
             await adapter.FetchDownloadsAsync(
                 CreateClient(),
-                [download],
+                [legacy],
                 CancellationToken.None);
 
-            Assert.Equal(DownloadStatus.Completed, download.Status);
-            Assert.Equal("/final/title-match", download.DownloadPath);
+            Assert.Equal(DownloadStatus.Completed, legacy.Status);
+            Assert.Equal("/final/title-match", legacy.DownloadPath);
+        }
+
+        [Fact]
+        public async Task FetchDownloadsAsync_HistoryMatching_NeverTitleMatchesASiblingWithADifferentClientId()
+        {
+            using var apiMock = new NzbgetApiMock();
+            QueuePollingResponses(
+                apiMock,
+                [],
+                [
+                    HistoryEntryValue(
+                        nzbId: "999",
+                        title: "Fallback Book",
+                        status: "SUCCESS/UNPACK",
+                        finalDir: "/final/title-match")
+                ]);
+            using var http = new HttpClient(apiMock);
+            var adapter = CreateAdapter(http);
+            var sibling = CreateDownload("sibling", "Fallback Book", "402", 10);
+
+            await adapter.FetchDownloadsAsync(
+                CreateClient(),
+                [sibling],
+                CancellationToken.None);
+
+            Assert.Equal(DownloadStatus.Queued, sibling.Status);
+            Assert.True(string.IsNullOrEmpty(sibling.DownloadPath));
         }
 
         [Fact]
@@ -738,8 +768,8 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                 ]);
             using var http = new HttpClient(apiMock);
             var adapter = CreateAdapter(http);
-            var first = CreateDownload("first-title", "Shared Book", "510", 10);
-            var second = CreateDownload("second-title", "Shared Book Extended", "511", 10);
+            var first = CreateLegacyDownload("first-title", "Shared Book", 10);
+            var second = CreateLegacyDownload("second-title", "Shared Book Extended", 10);
 
             await adapter.FetchDownloadsAsync(
                 CreateClient(),
@@ -895,10 +925,9 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                 []);
             using var http = new HttpClient(apiMock);
             var adapter = CreateAdapter(http);
-            var download = CreateDownload(
+            var download = CreateLegacyDownload(
                 "active-title",
                 "The Great Adventure",
-                "different-id",
                 100);
 
             await adapter.FetchDownloadsAsync(
@@ -1446,8 +1475,8 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
             Assert.Equal("Active Only", itemActive.Title);
             Assert.Equal("queued", queueActive.Status);
             Assert.Equal(DownloadItemStatus.Queued, itemActive.Status);
-            Assert.Equal(Path.Join("/active", "Active Only"), queueActive.ContentPath);
-            Assert.Equal(Path.Join("/active", "Active Only"), itemActive.OutputPath);
+            Assert.Equal("/active", queueActive.ContentPath);
+            Assert.Equal("/active", itemActive.OutputPath);
             Assert.Equal(
                 ["GetQueueAsync", "GetItemsAsync"],
                 logger.Entries
@@ -1605,7 +1634,7 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                             TotalSize = 100L * 1024 * 1024,
                             RemainingSize = 25L * 1024 * 1024,
                             RemainingTime = TimeSpan.FromSeconds(25),
-                            OutputPath = Path.Join("/active/first", "Active First"),
+                            OutputPath = "/active/first",
                             Message = "DOWNLOADING",
                             Progress = 75,
                             DownloadSpeed = 1_048_576,
@@ -1633,7 +1662,7 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                             TotalSize = 80L * 1024 * 1024,
                             RemainingSize = 80L * 1024 * 1024,
                             RemainingTime = TimeSpan.FromSeconds(80),
-                            OutputPath = Path.Join("/active/second", "Active Second"),
+                            OutputPath = "/active/second",
                             Message = "QUEUED",
                             Progress = 0,
                             DownloadSpeed = 1_048_576,
@@ -1891,7 +1920,7 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                     TotalSize = 5L * 1024 * 1024,
                     RemainingSize = 5L * 1024 * 1024,
                     RemainingTime = TimeSpan.FromSeconds(5),
-                    OutputPath = Path.Join("/active", "Active Only"),
+                    OutputPath = "/active",
                     Message = "QUEUED",
                     Progress = 0,
                     DownloadSpeed = 1_048_576,
@@ -2094,7 +2123,7 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                             CanRemove = true,
                             RemotePath = "/active/first",
                             LocalPath = "/active/first",
-                            ContentPath = Path.Join("/active/first", "Active First")
+                            ContentPath = "/active/first"
                         },
                         active);
                 },
@@ -2119,7 +2148,7 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                             CanRemove = true,
                             RemotePath = "/active/second",
                             LocalPath = "/active/second",
-                            ContentPath = Path.Join("/active/second", "Active Second")
+                            ContentPath = "/active/second"
                         },
                         active);
                 },
@@ -2396,7 +2425,7 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
                     CanRemove = true,
                     RemotePath = "/active",
                     LocalPath = "/active",
-                    ContentPath = Path.Join("/active", "Active Only")
+                    ContentPath = "/active"
                 },
                 active);
             var warning = Assert.Single(
@@ -2749,6 +2778,19 @@ namespace Listenarr.Tests.Features.Infrastructure.DownloadClients.Nzbget
             };
             download.SetExternalId(externalId);
             return download;
+        }
+
+        private static Download CreateLegacyDownload(
+            string id,
+            string title,
+            long totalSizeMb)
+        {
+            return new Download
+            {
+                Id = id,
+                Title = title,
+                TotalSize = totalSizeMb * 1024 * 1024
+            };
         }
 
         private static object ActiveGroup(

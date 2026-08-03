@@ -387,9 +387,9 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
             {
                 return idMatch;
             }
-            return FindTitleMatch(trackedDownloads, title, excludedDownloads);
+            return FindTitleMatch(trackedDownloads, canonicalNzbId, title, excludedDownloads);
         }
-        private static Download? FindHistoryDownload(
+        internal static Download? FindHistoryDownload(
             NzbgetHistoryEntry entry,
             IReadOnlyDictionary<string, Download> trackedById,
             IReadOnlyList<Download> trackedDownloads,
@@ -401,10 +401,11 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
                 return matchedDownloads.Contains(idMatch) ? null : idMatch;
             }
 
-            return FindTitleMatch(trackedDownloads, entry.Title, matchedDownloads);
+            return FindTitleMatch(trackedDownloads, entry.CanonicalNzbId, entry.Title, matchedDownloads);
         }
-        private static Download? FindTitleMatch(
+        internal static Download? FindTitleMatch(
             IReadOnlyList<Download> trackedDownloads,
+            string clientItemId,
             string title,
             ISet<Download>? excludedDownloads)
         {
@@ -416,6 +417,20 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
             foreach (var candidate in trackedDownloads)
             {
                 if (excludedDownloads?.Contains(candidate) == true)
+                {
+                    continue;
+                }
+
+                // A download that carries its own client item id is matched by
+                // id or not at all. Title similarity across DIFFERENT ids means
+                // a same-named sibling (live case: seven simultaneous grabs of
+                // "Homer - The Odyssey (64kb)" for different library records —
+                // the first completed entry title-matched the still-downloading
+                // siblings one by one, marking each complete prematurely and
+                // burning their import retries on "not found in history").
+                var candidateId = candidate.GetExternalId();
+                if (!string.IsNullOrEmpty(candidateId) &&
+                    !string.Equals(candidateId, clientItemId, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }

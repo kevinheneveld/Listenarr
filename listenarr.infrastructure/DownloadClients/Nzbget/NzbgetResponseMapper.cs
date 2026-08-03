@@ -68,9 +68,9 @@ internal static class NzbgetResponseMapper
             _ => DownloadItemStatus.Queued
         };
 
-        var contentPath = !string.IsNullOrEmpty(destDir) && !string.IsNullOrEmpty(title)
-            ? FileUtils.CombineWithOptionalBase(destDir, title)
-            : (destDir ?? string.Empty);
+        // NZBGet's DestDir already ends with the per-NZB folder — appending the
+        // NZB name again yields ".../Name/Name", a directory that never exists.
+        var contentPath = destDir ?? string.Empty;
 
         var progress = sizeMb > 0 ? Math.Clamp((sizeMb - remainingMb) / sizeMb * 100, 0, 100) : 0;
 
@@ -142,9 +142,9 @@ internal static class NzbgetResponseMapper
             _ => "queued"
         };
 
-        var contentPath = !string.IsNullOrEmpty(destDir) && !string.IsNullOrEmpty(title)
-            ? FileUtils.CombineWithOptionalBase(destDir, title)
-            : destDir;
+        // NZBGet's DestDir already ends with the per-NZB folder — appending the
+        // NZB name again yields ".../Name/Name", a directory that never exists.
+        var contentPath = destDir;
 
         return new QueueItem
         {
