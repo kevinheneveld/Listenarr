@@ -114,6 +114,21 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
 
             if (movedDownloads.Count == 0) return;
 
+            // Move-mode imports relocate the payload out of the client's save
+            // path, so the client item can never seed again — qBittorrent flags
+            // it "missing files" and it errors forever. There is nothing to
+            // wait for: remove it as soon as the import is done.
+            var importRelocatesFiles = false;
+            try
+            {
+                var settings = await configurationService.GetApplicationSettingsAsync();
+                importRelocatesFiles = settings.CompletedFileAction == Domain.Audiobooks.Enumerations.FileAction.Move;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogDebug(ex, "Failed to load application settings for deferred removal");
+            }
+
             // Pre-load all enabled client configurations for cross-client removal fallback
             List<DownloadClientConfiguration> allEnabledClients;
             try
@@ -152,12 +167,24 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                         canBeRemoved = canRemoveObj is bool b ? b : (canRemoveObj is System.Text.Json.JsonElement je ? je.GetBoolean() : bool.TryParse(canRemoveObj?.ToString(), out var parsed) && parsed);
                     }
 
+                    if (!canBeRemoved && importRelocatesFiles)
+                    {
+                        // The import moved the files away; seeding is impossible
+                        // and the poller will never flip CanBeRemoved.
+                        canBeRemoved = true;
+                    }
+
                     // Fallback: if CanBeRemoved was never set (e.g. download assigned to wrong
                     // client type — NZBGet record for a Transmission torrent — so the correct
                     // poller never updates it), treat as removable after a grace period.
                     // The import is already done (status == Moved), so cleaning up is safe.
-                    var timeSinceCompleted = download.CompletedAt.HasValue
-                        ? DateTime.UtcNow - download.CompletedAt.Value
+                    // Download.CompletedAt is not reliably stamped on the Moved
+                    // transition (live: null on all 249 Moved rows, which parked
+                    // this fallback forever) — fall back to the import job's own
+                    // completion time, which a Completed job always has.
+                    var completedReference = download.CompletedAt ?? completedJob.CompletedAt;
+                    var timeSinceCompleted = completedReference.HasValue
+                        ? DateTime.UtcNow - completedReference.Value
                         : (TimeSpan?)null;
 
                     if (!canBeRemoved && timeSinceCompleted.HasValue && timeSinceCompleted.Value > TimeSpan.FromHours(2))
