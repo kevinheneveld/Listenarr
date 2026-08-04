@@ -1612,6 +1612,37 @@ export interface DuplicateCopyBook {
   fileCount: number
 }
 
+export interface DuplicateCopyCluster {
+  key: string
+  displayName: string
+  fileIds: number[]
+  fileCount: number
+  totalBytes: number
+  totalDurationSeconds: number
+  onDiskCount: number
+}
+
+export interface DuplicateCopyProposal {
+  keeper: DuplicateCopyCluster
+  redundant: DuplicateCopyCluster[]
+  confidence: 'identical' | 'high' | 'review'
+  evidence: string[]
+  reclaimableBytes: number
+}
+
+export interface DuplicateCopyAnalysisRecord {
+  id: number
+  title: string
+  basePath: string | null
+  fileCount: number
+  proposals: DuplicateCopyProposal[]
+}
+
+export interface DuplicateCopyAnalysisResponse {
+  records: DuplicateCopyAnalysisRecord[]
+  totalReclaimableBytes: number
+}
+
 export interface LibraryDuplicatesResponse {
   duplicateGroups: DuplicateGroup[]
   duplicateCopyBooks: DuplicateCopyBook[]

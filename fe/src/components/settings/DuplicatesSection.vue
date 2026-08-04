@@ -112,6 +112,7 @@
           >{{ c.fileCount }} files in {{ c.clusterCount }} groups · id {{ c.id }}</small
         >
       </div>
+      <DuplicateCopyAnalysisPanel v-if="copies.length > 0" />
     </template>
   </div>
 </template>
@@ -121,6 +122,7 @@ import { ref } from 'vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import { showConfirm } from '@/composables/useConfirm'
+import DuplicateCopyAnalysisPanel from './DuplicateCopyAnalysisPanel.vue'
 import type { DuplicateBookSummary, DuplicateGroup, DuplicateCopyBook } from '@/types'
 
 const toast = useToast()

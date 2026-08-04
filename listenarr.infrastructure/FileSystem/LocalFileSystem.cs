@@ -25,6 +25,8 @@ public sealed class LocalFileSystem : IFileSystem
 
     public Stream OpenWriteStream(string path) => File.Create(path);
 
+    public Stream OpenReadStream(string path) => File.OpenRead(path);
+
     public void DeleteFile(string path) => File.Delete(path);
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);

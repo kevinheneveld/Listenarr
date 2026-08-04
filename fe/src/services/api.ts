@@ -79,6 +79,7 @@ import type {
   MoveQueueSummary,
   SeriesEditionsResponse,
   LibraryDuplicatesResponse,
+  DuplicateCopyAnalysisResponse,
   MusicCandidatesResponse,
   DuplicatesMergePair,
   MergeDuplicatesResult,
@@ -1764,6 +1765,10 @@ class ApiService {
 
   async getLibraryDuplicates(): Promise<LibraryDuplicatesResponse> {
     return this.request<LibraryDuplicatesResponse>(`/library/duplicates`)
+  }
+
+  async getDuplicateCopyAnalysis(): Promise<DuplicateCopyAnalysisResponse> {
+    return this.request<DuplicateCopyAnalysisResponse>(`/library/duplicates/copies/analysis`)
   }
 
   async rejectNotAudiobook(id: number): Promise<{

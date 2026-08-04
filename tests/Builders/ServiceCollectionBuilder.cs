@@ -230,6 +230,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryMoveSummaryWorkflow>();
             services.AddSingleton<IOrganizeFilesystem, Listenarr.Infrastructure.Library.Organizing.OrganizeFilesystem>();
             services.AddSingleton<LibraryDuplicatesWorkflow>();
+            services.AddSingleton<LibraryDuplicateCopyAnalysisWorkflow>();
             services.AddSingleton<LibrarySeriesHealthWorkflow>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.IWrongContentAutoRejector, WrongContentAutoRejector>();
             services.AddSingleton<LibraryNotAudiobookWorkflow>();
