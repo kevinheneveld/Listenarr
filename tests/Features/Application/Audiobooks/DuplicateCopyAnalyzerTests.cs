@@ -51,8 +51,10 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         {
             // Live case (Brother Odd): a 9.4h standalone at 272MB vs a 9.4h
             // two-file pair at 185MB — same audio, keep the better encode.
-            var standalone = Cluster("stem:brother-a", 9.4, 272_000_000, 1);
-            var pair = Cluster("stem:brother-b", 9.4, 185_000_000, 2);
+            var standalone = Cluster("stem:brother-a", 9.4, 272_000_000, 1,
+                displayName: "Dean Koontz - Brother Odd");
+            var pair = Cluster("stem:brother-b", 9.4, 185_000_000, 2,
+                displayName: "Brother Odd");
 
             var result = DuplicateCopyAnalyzer.Analyze([standalone, pair]);
 
@@ -66,8 +68,8 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         [Fact]
         public void EqualBitrate_KeeperIsMoreChapterized()
         {
-            var single = Cluster("stem:a", 8.0, 200_000_000, 1);
-            var chapterized = Cluster("stem:b", 8.0, 200_000_000, 24);
+            var single = Cluster("stem:a", 8.0, 200_000_000, 1, displayName: "The Book");
+            var chapterized = Cluster("stem:b", 8.0, 200_000_000, 24, displayName: "The Book");
 
             var p = Assert.Single(DuplicateCopyAnalyzer.Analyze([single, chapterized]).Proposals);
             Assert.Equal("stem:b", p.Keeper.Key);
@@ -160,6 +162,43 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             var result = DuplicateCopyAnalyzer.Analyze([a, b, c]);
             Assert.Empty(result.Proposals);
             Assert.False(result.SplitCandidate);
+        }
+
+        [Fact]
+        public void WholeBookRuntimeCoincidence_WithDifferentNames_IsSplitCandidate()
+        {
+            // Second live run: 15.3h "Dark Legacy" nearly deleted 15.0h
+            // "Dark Secret" — different books, agreeing runtimes. Names that
+            // don't contain each other must never duration-pair.
+            var a = Cluster("stem:a", 15.3, 440_000_000, 10,
+                displayName: "Christine Feehan - Dark Legacy");
+            var b = Cluster("stem:b", 15.0, 372_000_000, 10,
+                displayName: "Dark Series - Dark Secret");
+
+            var result = DuplicateCopyAnalyzer.Analyze([a, b]);
+            Assert.Empty(result.Proposals);
+            Assert.True(result.SplitCandidate);
+        }
+
+        [Fact]
+        public void ChapterSiblings_SharedBookToken_NeverPair()
+        {
+            // "1984 - Chapter 8" vs "1984 - Chapter 9": the shared "1984"
+            // token defeats the digit guard, the names defeat the pairing.
+            var a = Cluster("stem:a", 0.6, 47_000_000, 1, displayName: "1984 - Chapter 8");
+            var b = Cluster("stem:b", 0.6, 47_000_001, 1, displayName: "1984 - Chapter 9");
+
+            var result = DuplicateCopyAnalyzer.Analyze([a, b]);
+            Assert.Empty(result.Proposals);
+        }
+
+        [Fact]
+        public void RomanNumeralParts_NeverPair()
+        {
+            var a = Cluster("stem:a", 5.0, 184_000_000, 1, displayName: "Part IV - Dust");
+            var b = Cluster("stem:b", 5.0, 183_000_000, 1, displayName: "Part V - Dust");
+
+            Assert.Empty(DuplicateCopyAnalyzer.Analyze([a, b]).Proposals);
         }
 
         [Fact]

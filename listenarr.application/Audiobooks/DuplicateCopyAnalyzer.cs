@@ -153,14 +153,14 @@ namespace Listenarr.Application.Audiobooks
             {
                 var ratio = Math.Min(a.TotalDurationSeconds, b.TotalDurationSeconds)
                             / Math.Max(a.TotalDurationSeconds, b.TotalDurationSeconds);
-                if (ratio >= TightDurationRatio && !digitConflict)
+                if (ratio >= TightDurationRatio && !digitConflict && NamesCompatible(a, b))
                 {
                     return PairKind.Copies;
                 }
                 // Byte-identical files are the same audio no matter what the
                 // folder names claim — a mislabeled copy is still a copy.
                 if (exactSizes) return PairKind.Copies;
-                return ratio >= LooseDurationRatio || (ratio >= TightDurationRatio && digitConflict)
+                return ratio >= LooseDurationRatio
                     ? PairKind.SplitKin
                     : PairKind.Unrelated;
             }
@@ -168,6 +168,24 @@ namespace Listenarr.Application.Audiobooks
             // Without trustworthy durations only exact byte identity is
             // acceptable evidence: same file count, same sorted size multiset.
             return exactSizes ? PairKind.Copies : PairKind.Unrelated;
+        }
+
+        /// <summary>
+        /// Duration-based pairing also requires the cluster NAMES to agree —
+        /// one normalized name containing the other. Second live run: "1984 -
+        /// Chapter 8" paired with "Chapter 9" (shared "1984" token defeated the
+        /// digit guard), "Part IV" with "Part V" (roman numerals carry no
+        /// digits), and 15.3h "Dark Legacy" with 15.0h "Dark Secret" (a
+        /// whole-book runtime coincidence). Different names + merely-agreeing
+        /// runtimes is not identity; byte identity stays the override.
+        /// </summary>
+        private static bool NamesCompatible(ClusterEvidence a, ClusterEvidence b)
+        {
+            var na = TitleMatcher.Normalize(a.DisplayName);
+            var nb = TitleMatcher.Normalize(b.DisplayName);
+            if (na.Length == 0 || nb.Length == 0) return false;
+            return na.Contains(nb, StringComparison.Ordinal)
+                || nb.Contains(na, StringComparison.Ordinal);
         }
 
         private static CopyProposal BuildProposal(List<ClusterEvidence> group)
