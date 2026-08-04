@@ -51,6 +51,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryMoveSummaryWorkflow _moveSummaryWorkflow;
         private readonly LibraryDuplicatesWorkflow _duplicatesWorkflow;
         private readonly LibraryDuplicateCopyAnalysisWorkflow _duplicateCopyAnalysisWorkflow;
+        private readonly LibraryDuplicateCopyApplyWorkflow _duplicateCopyApplyWorkflow;
         private readonly LibraryFileStreamWorkflow _fileStreamWorkflow;
         private readonly LibrarySeriesHealthWorkflow _seriesHealthWorkflow;
         private readonly LibraryMaintenanceWorkflow _maintenanceWorkflow;
@@ -82,6 +83,7 @@ namespace Listenarr.Api.Features.Library
             LibraryMoveSummaryWorkflow moveSummaryWorkflow,
             LibraryDuplicatesWorkflow duplicatesWorkflow,
             LibraryDuplicateCopyAnalysisWorkflow duplicateCopyAnalysisWorkflow,
+            LibraryDuplicateCopyApplyWorkflow duplicateCopyApplyWorkflow,
             LibraryFileStreamWorkflow fileStreamWorkflow,
             LibraryNotAudiobookWorkflow notAudiobookWorkflow,
             LibraryEmbeddedMetadataWorkflow embeddedMetadataWorkflow,
@@ -116,6 +118,7 @@ namespace Listenarr.Api.Features.Library
             _moveSummaryWorkflow = moveSummaryWorkflow;
             _duplicatesWorkflow = duplicatesWorkflow;
             _duplicateCopyAnalysisWorkflow = duplicateCopyAnalysisWorkflow;
+            _duplicateCopyApplyWorkflow = duplicateCopyApplyWorkflow;
             _fileStreamWorkflow = fileStreamWorkflow;
             _seriesHealthWorkflow = seriesHealthWorkflow;
             _maintenanceWorkflow = maintenanceWorkflow;
@@ -169,18 +172,6 @@ namespace Listenarr.Api.Features.Library
             return await _duplicatesWorkflow.GetDuplicatesAsync(ct);
         }
 
-        /// <summary>
-        /// Read-only resolution pass over records holding duplicate copies of
-        /// their own audio: which cluster to keep, which are redundant, with
-        /// duration/size/hash evidence per proposal. Proposes only — nothing
-        /// is deleted or moved.
-        /// </summary>
-        /// <param name="ct">Cancellation token bound to the request.</param>
-        [HttpGet("duplicates/copies/analysis")]
-        public async Task<IActionResult> AnalyzeDuplicateCopies(CancellationToken ct)
-        {
-            return await _duplicateCopyAnalysisWorkflow.AnalyzeAsync(ct);
-        }
 
         /// <summary>
         /// Catalog-aware series health: tracked books grouped by series, joined

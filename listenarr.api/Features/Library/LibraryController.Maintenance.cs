@@ -137,6 +137,35 @@ namespace Listenarr.Api.Features.Library
         /// deleted from disk, downloads/history/move jobs reassigned, rows removed) or
         /// clear the ASIN on rows that share one but are actually different books.
         /// </summary>
+/// <summary>
+        /// Read-only resolution pass over records holding duplicate copies of
+        /// their own audio: which cluster to keep, which are redundant, with
+        /// duration/size/hash evidence per proposal. Proposes only — nothing
+        /// is deleted or moved.
+        /// </summary>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpGet("duplicates/copies/analysis")]
+        public async Task<IActionResult> AnalyzeDuplicateCopies(CancellationToken ct)
+        {
+            return await _duplicateCopyAnalysisWorkflow.AnalyzeAsync(ct);
+        }
+
+        /// <summary>
+        /// Apply duplicate-copy proposals: delete the named redundant files
+        /// from disk and tracking. Each application is re-verified against a
+        /// fresh analysis (exact file-set match at identical/high confidence)
+        /// before anything is deleted.
+        /// </summary>
+        /// <param name="request">Applications to perform.</param>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpPost("duplicates/copies/apply")]
+        public async Task<IActionResult> ApplyDuplicateCopies(
+            [FromBody] ApplyDuplicateCopiesRequest request,
+            CancellationToken ct)
+        {
+            return await _duplicateCopyApplyWorkflow.ApplyAsync(request, ct);
+        }
+
         [HttpPost("duplicates/merge")]
         public async Task<IActionResult> MergeDuplicates([FromBody] MergeDuplicatesRequest request, CancellationToken ct)
         {

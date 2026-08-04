@@ -49,38 +49,56 @@ namespace Listenarr.Application.Audiobooks
             bool SizesIdentical,
             long ReclaimableBytes);
 
+        /// <summary>Record-level outcome: keep/drop proposals plus a signal
+        /// that the clusters look like DIFFERENT books sharing one record
+        /// (loose runtime kinship or conflicting numbers in the names) — a
+        /// Split Collection candidate, never a dedupe target.</summary>
+        public sealed record AnalysisResult(
+            IReadOnlyList<CopyProposal> Proposals,
+            bool SplitCandidate);
+
         public const string ConfidenceHigh = "high";
         public const string ConfidenceReview = "review";
         public const string ConfidenceIdentical = "identical";
 
         // Two clusters whose total runtimes agree within 2% are the same audio
         // for practical purposes (different rips of one narration drift by
-        // encoder padding, not minutes). Down to 75% they are only POSSIBLY the
-        // same (the existing detector's threshold) — surfaced for review, never
-        // proposed as safe.
+        // encoder padding, not minutes). Down to 75% they are only POSSIBLY
+        // related — first live run showed that band is where different books
+        // of one series masquerade as copies (a 12.2h Foundation's Edge nearly
+        // paired a 16.1h Forward the Foundation), so loose kinship now signals
+        // "split this record", never a keep/drop proposal.
         private const double TightDurationRatio = 0.98;
         private const double LooseDurationRatio = 0.75;
 
-        // A cluster must carry at least this much audio to participate —
-        // matching two 3-minute stubs proves nothing about book identity.
-        private const double MinClusterDurationSeconds = 600;
+        // A cluster must carry at least this much audio to participate — the
+        // first live run united 189 six-MB "Part NNN of" stubs with agreeing
+        // 12-minute durations into one absurd keep-one-drop-188 proposal.
+        private const double MinClusterDurationSeconds = 1800;
 
-        public static List<CopyProposal> Analyze(IReadOnlyList<ClusterEvidence> clusters)
+        public static AnalysisResult Analyze(IReadOnlyList<ClusterEvidence> clusters)
         {
             var eligible = clusters
                 .Where(c => c.FileCount > 0
                     && (!c.DurationsComplete || c.TotalDurationSeconds >= MinClusterDurationSeconds))
                 .ToList();
-            if (eligible.Count < 2) return [];
+            if (eligible.Count < 2) return new AnalysisResult([], false);
 
             // Union clusters into copy-groups via pairwise duration agreement.
+            var splitCandidate = false;
             var groupOf = eligible.ToDictionary(c => c, _ => -1);
             var groups = new List<List<ClusterEvidence>>();
             for (var i = 0; i < eligible.Count; i++)
             {
                 for (var j = i + 1; j < eligible.Count; j++)
                 {
-                    if (!PairLooksLikeSameAudio(eligible[i], eligible[j])) continue;
+                    var pair = ClassifyPair(eligible[i], eligible[j]);
+                    if (pair == PairKind.SplitKin)
+                    {
+                        splitCandidate = true;
+                        continue;
+                    }
+                    if (pair == PairKind.Unrelated) continue;
 
                     var gi = groupOf[eligible[i]];
                     var gj = groupOf[eligible[j]];
@@ -108,26 +126,48 @@ namespace Listenarr.Application.Audiobooks
                 }
             }
 
-            return groups
+            var proposals = groups
                 .Where(g => g.Count >= 2)
                 .Select(BuildProposal)
                 .OrderByDescending(p => p.ReclaimableBytes)
                 .ToList();
+            return new AnalysisResult(proposals, splitCandidate);
         }
 
-        private static bool PairLooksLikeSameAudio(ClusterEvidence a, ClusterEvidence b)
+        private enum PairKind { Unrelated, Copies, SplitKin }
+
+        private static PairKind ClassifyPair(ClusterEvidence a, ClusterEvidence b)
         {
+            // Conflicting numbers in the cluster names ("Book 008" vs
+            // "Book 009") mean sibling volumes, never copies — no runtime
+            // agreement overrides that (Odd Apocalypse's two 5.4h halves
+            // taught that lesson from the other direction).
+            var digitConflict =
+                SplitDestinationSuggester.DigitsConflict(a.DisplayName, b.DisplayName);
+
+            var exactSizes = a.FileCount == b.FileCount
+                && a.SortedFileSizes.SequenceEqual(b.SortedFileSizes);
+
             if (a.DurationsComplete && b.DurationsComplete
                 && a.TotalDurationSeconds > 0 && b.TotalDurationSeconds > 0)
             {
                 var ratio = Math.Min(a.TotalDurationSeconds, b.TotalDurationSeconds)
                             / Math.Max(a.TotalDurationSeconds, b.TotalDurationSeconds);
-                return ratio >= LooseDurationRatio;
+                if (ratio >= TightDurationRatio && !digitConflict)
+                {
+                    return PairKind.Copies;
+                }
+                // Byte-identical files are the same audio no matter what the
+                // folder names claim — a mislabeled copy is still a copy.
+                if (exactSizes) return PairKind.Copies;
+                return ratio >= LooseDurationRatio || (ratio >= TightDurationRatio && digitConflict)
+                    ? PairKind.SplitKin
+                    : PairKind.Unrelated;
             }
 
             // Without trustworthy durations only exact byte identity is
             // acceptable evidence: same file count, same sorted size multiset.
-            return a.FileCount == b.FileCount && a.SortedFileSizes.SequenceEqual(b.SortedFileSizes);
+            return exactSizes ? PairKind.Copies : PairKind.Unrelated;
         }
 
         private static CopyProposal BuildProposal(List<ClusterEvidence> group)

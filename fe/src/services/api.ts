@@ -80,6 +80,8 @@ import type {
   SeriesEditionsResponse,
   LibraryDuplicatesResponse,
   DuplicateCopyAnalysisResponse,
+  DuplicateCopyApplication,
+  DuplicateCopyApplyResult,
   MusicCandidatesResponse,
   DuplicatesMergePair,
   MergeDuplicatesResult,
@@ -1769,6 +1771,15 @@ class ApiService {
 
   async getDuplicateCopyAnalysis(): Promise<DuplicateCopyAnalysisResponse> {
     return this.request<DuplicateCopyAnalysisResponse>(`/library/duplicates/copies/analysis`)
+  }
+
+  async applyDuplicateCopies(
+    applications: DuplicateCopyApplication[],
+  ): Promise<DuplicateCopyApplyResult> {
+    return this.request<DuplicateCopyApplyResult>(`/library/duplicates/copies/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ applications }),
+    })
   }
 
   async rejectNotAudiobook(id: number): Promise<{

@@ -107,6 +107,8 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryMoveSummaryWorkflow>();
         services.AddScoped<LibraryDuplicatesWorkflow>();
         services.AddScoped<LibraryDuplicateCopyAnalysisWorkflow>();
+        services.AddScoped<DuplicateCopyProposalBuilder>();
+        services.AddScoped<LibraryDuplicateCopyApplyWorkflow>();
         services.AddScoped<LibrarySeriesHealthWorkflow>();
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.IWrongContentAutoRejector, WrongContentAutoRejector>();
         services.AddScoped<LibraryNotAudiobookWorkflow>();

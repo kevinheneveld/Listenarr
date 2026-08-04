@@ -59,6 +59,22 @@ public partial class LibraryController
         public bool? DeleteEmptySource { get; set; }
     }
 
+    /// <summary>
+    /// Apply duplicate-copy proposals: each item names one record and the
+    /// exact redundant file ids from the analysis. The server re-verifies
+    /// against a fresh analysis before deleting anything.
+    /// </summary>
+    public class ApplyDuplicateCopiesRequest
+    {
+        public List<ApplyDuplicateCopyItem> Applications { get; set; } = [];
+    }
+
+    public class ApplyDuplicateCopyItem
+    {
+        public int AudiobookId { get; set; }
+        public List<int> RedundantFileIds { get; set; } = [];
+    }
+
     public class MergeDuplicatesRequest
     {
         public List<MergeDuplicatesPair> Merges { get; set; } = [];

@@ -1635,7 +1635,27 @@ export interface DuplicateCopyAnalysisRecord {
   title: string
   basePath: string | null
   fileCount: number
+  splitCandidate: boolean
   proposals: DuplicateCopyProposal[]
+}
+
+export interface DuplicateCopyApplication {
+  audiobookId: number
+  redundantFileIds: number[]
+}
+
+export interface DuplicateCopyApplyResult {
+  results: {
+    audiobookId: number
+    applied: boolean
+    reason?: string
+    confidence?: string
+    filesDeleted?: number
+    freedBytes?: number
+    warnings?: string[]
+  }[]
+  totalFilesDeleted: number
+  totalFreedBytes: number
 }
 
 export interface DuplicateCopyAnalysisResponse {
