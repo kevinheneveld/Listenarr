@@ -80,7 +80,7 @@ RUN apt-get update \
 		echo "NodeSource download failed (attempt $i)"; sleep 10; \
 	done \
 	&& bash /tmp/nodesource-setup.sh \
-	&& test -f /etc/apt/sources.list.d/nodesource.list \
+	&& ls /etc/apt/sources.list.d/nodesource* >/dev/null \
 	&& apt-get install -y --no-install-recommends nodejs \
 	&& node --version \
 	&& npm --version \
