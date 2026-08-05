@@ -209,6 +209,19 @@ namespace Listenarr.Application.Audiobooks
                     boundaries.TryAdd(i + 1, transcript);
                 }
             }
+
+            // A whole-book-length file IS a complete book no matter what its
+            // opening says — rips without retail announcements must not run
+            // together (live case: a 17-file collection of 4-7.6h m4bs merged
+            // into a handful of arbitrary groups because none of the openings
+            // announced anything).
+            for (var i = 0; i < orderedFiles.Count; i++)
+            {
+                if (orderedFiles[i].DurationSeconds is >= WholeBookMinSeconds)
+                {
+                    boundaries.TryAdd(i, transcriptById.GetValueOrDefault(orderedFiles[i].Id) ?? string.Empty);
+                }
+            }
             boundaries.TryAdd(0, transcriptById.GetValueOrDefault(orderedFiles.Count > 0 ? orderedFiles[0].Id : -1) ?? string.Empty);
 
             var starts = boundaries.Keys.OrderBy(i => i).ToList();
@@ -228,6 +241,10 @@ namespace Listenarr.Application.Audiobooks
                 // group can't name this one.
                 var openingTranscript = transcriptById.GetValueOrDefault(orderedFiles[start].Id);
                 var label = openingTranscript != null ? TryExtractTitle(openingTranscript) : null;
+                // No announced title: the opening file's own name is a far
+                // better label than "Part N" — it usually names the book, so
+                // the destination suggester can work with it.
+                label ??= FileNameStem(orderedFiles[start].Name);
                 var boundaryTranscript = openingTranscript ?? boundaries[start];
 
                 groups.Add(new ProbeGroup(
@@ -238,6 +255,13 @@ namespace Listenarr.Application.Audiobooks
             }
 
             return groups;
+        }
+
+        private static string? FileNameStem(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            var stem = Path.GetFileNameWithoutExtension(name.Trim());
+            return string.IsNullOrWhiteSpace(stem) ? null : stem;
         }
 
         /// <summary>

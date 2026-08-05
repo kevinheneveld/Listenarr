@@ -48,6 +48,10 @@ namespace Listenarr.Application.Audiobooks
             "Each group has a name (usually a folder or filename stem) and sample file names. " +
             "Pick the library record each group's audio belongs to, judging by book identity — " +
             "a group may use a series name, a subtitle, an abbreviation, or a partial title of its record. " +
+            "Series libraries contain many near-identical titles: when a candidate's full title appears " +
+            "verbatim inside the group name, prefer that candidate over any similar-sounding sibling. " +
+            "Never pick a candidate that merely belongs to the same series — if the group name does not " +
+            "identify one specific book among similar candidates, use null. " +
             "Only match when you are confident it is the same book; otherwise use null. " +
             "Respond with ONLY a JSON object of the form " +
             "{\"matches\":[{\"key\":\"<group key>\",\"targetId\":<record id or null>}]} — no prose, no markdown.";

@@ -442,4 +442,36 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
                 "20,000 Leagues Under the Sea"));
         }
     }
+    [Trait("Area", "Application")]
+    [Trait("Name", "SplitSuggestionGuardTests")]
+    public class SplitSuggestionGuardTests
+    {
+        [Theory]
+        [InlineData("Book 08 - Dark Legend", "Dark Legend", true)]
+        [InlineData("Dark - Book 010 - Dark Symphony - Part 1", "Dark Symphony", true)]
+        [InlineData("Book 08 - Dark Legend", "Dark Lycan", false)]
+        [InlineData("Book 10 - Dark Symphony", "Shadow Flight", false)]
+        public void TitleContainedInCluster_MatchesVerbatimTitlesOnly(
+            string cluster, string title, bool expected)
+        {
+            Assert.Equal(expected,
+                SplitDestinationSuggester.TitleContainedInCluster(cluster, title));
+        }
+
+        [Theory]
+        [InlineData("Rama", "Rendezvous with Rama", null, true)]     // cluster ⊆ candidate
+        [InlineData("Book 14 - Dark Hunger", "Dark Hunger", null, true)]
+        [InlineData("Book 08 - Dark Legend", "Dark Lycan", null, false)]
+        [InlineData("Book 10 - Dark Symphony", "Shadow Flight", null, false)]
+        [InlineData("Book 15 - Dark Secret", "Shadow Reaper", null, false)]
+        [InlineData("Dark Hunger", "Leopard's Scar", null, false)]
+        [InlineData("Dark Legacy", "Dark Memory", null, false)]
+        public void TokensCompatible_RejectsHallucinatedNeighbors(
+            string cluster, string title, string? subtitle, bool expected)
+        {
+            Assert.Equal(expected,
+                SplitDestinationSuggester.TokensCompatible(cluster, title, subtitle));
+        }
+    }
+
 }

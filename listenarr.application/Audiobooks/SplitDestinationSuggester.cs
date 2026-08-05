@@ -56,6 +56,63 @@ namespace Listenarr.Application.Audiobooks
         }
 
         /// <summary>
+        /// True when the candidate title appears verbatim (normalized, space-
+        /// tolerant) inside the cluster name — the strongest evidence the
+        /// deterministic matcher produces. An AI refinement must never
+        /// override a suggestion this strong (live case: "Book 08 - Dark
+        /// Legend" deterministically matched the "Dark Legend" record and the
+        /// AI pass overrode it with "Dark Lycan").
+        /// </summary>
+        public static bool TitleContainedInCluster(string clusterDisplayName, string? title)
+        {
+            if (string.IsNullOrWhiteSpace(clusterDisplayName) || string.IsNullOrWhiteSpace(title)) return false;
+            var name = TitleMatcher.Normalize(clusterDisplayName);
+            var normalized = TitleMatcher.Normalize(title);
+            if (normalized.Length < 4) return false;
+            return name.Contains(normalized, StringComparison.Ordinal)
+                || name.Replace(" ", "").Contains(normalized.Replace(" ", ""), StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// Sanity bar for AI-suggested destinations: the cluster name and the
+        /// candidate's title must be token-compatible — every meaningful token
+        /// of one side present in the other (subtitle counts toward the
+        /// candidate side). "Rama" vs "Rendezvous with Rama" passes; "Book 08
+        /// - Dark Legend" vs "Dark Lycan" does not (live case: an AI pass
+        /// scattered a Dark-series split across Dark Lycan, Shadow Flight,
+        /// Shadow Reaper and Leopard's Scar while the right records existed).
+        /// </summary>
+        public static bool TokensCompatible(string clusterDisplayName, string? candidateTitle, string? candidateSubtitle = null)
+        {
+            if (string.IsNullOrWhiteSpace(clusterDisplayName) || string.IsNullOrWhiteSpace(candidateTitle)) return false;
+            if (TitleContainedInCluster(clusterDisplayName, candidateTitle)) return true;
+
+            var cluster = Tokens(clusterDisplayName);
+            if (cluster.Count == 0) return false;
+
+            var titleOnly = Tokens(candidateTitle);
+            if (titleOnly.Count > 0 && (titleOnly.IsSubsetOf(cluster) || cluster.IsSubsetOf(titleOnly)))
+            {
+                return true;
+            }
+            var withSubtitle = Tokens(candidateTitle + " " + (candidateSubtitle ?? string.Empty));
+            return withSubtitle.Count > 0
+                && (withSubtitle.IsSubsetOf(cluster) || cluster.IsSubsetOf(withSubtitle));
+        }
+
+        private static HashSet<string> Tokens(string text)
+        {
+            var tokens = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var raw in TitleMatcher.Normalize(text).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var token = raw.TrimStart('0');
+                if (token.Length == 0) token = "0";
+                if (token.Length >= 2 || char.IsDigit(token[0])) tokens.Add(token);
+            }
+            return tokens;
+        }
+
+        /// <summary>
         /// True when the cluster name and a candidate's title/subtitle both
         /// carry numbers but share none. Numbers are the only discriminator
         /// among series siblings, so a suggestion that contradicts the

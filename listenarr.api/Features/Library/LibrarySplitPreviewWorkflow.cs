@@ -180,8 +180,31 @@ namespace Listenarr.Api.Features.Library
 
             var response = deterministic.Select(d =>
             {
-                var fromAi = aiSuggestions != null && aiSuggestions.TryGetValue(d.Key, out var aiTarget);
+                // A deterministic match whose full title appears inside the
+                // cluster name is the strongest evidence available — the AI
+                // pass must never override it (live case: "Book 08 - Dark
+                // Legend" matched the "Dark Legend" record deterministically
+                // and the AI replaced it with "Dark Lycan").
+                var deterministicStrong = d.Suggested.HasValue
+                    && SplitDestinationSuggester.TitleContainedInCluster(
+                        d.DisplayName, titleById.GetValueOrDefault(d.Suggested.Value));
+
+                var fromAi = !deterministicStrong
+                    && aiSuggestions != null && aiSuggestions.TryGetValue(d.Key, out var aiTarget);
                 var suggested = fromAi && aiSuggestions != null ? aiSuggestions[d.Key] : d.Suggested;
+
+                // AI picks must be token-compatible with the cluster name —
+                // an answer sharing no meaningful words with the group is a
+                // hallucinated neighbor, and no suggestion beats a wrong one.
+                if (fromAi && suggested.HasValue
+                    && !SplitDestinationSuggester.TokensCompatible(
+                        d.DisplayName,
+                        titleById.GetValueOrDefault(suggested.Value),
+                        subtitleById.GetValueOrDefault(suggested.Value)))
+                {
+                    suggested = d.Suggested;
+                    fromAi = false;
+                }
 
                 // Digit guard: a suggestion whose number contradicts the
                 // cluster's is always wrong (live case: the AI pass proposed

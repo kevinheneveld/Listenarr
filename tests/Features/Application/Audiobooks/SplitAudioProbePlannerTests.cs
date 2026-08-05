@@ -148,7 +148,9 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
 
             Assert.Equal("Escaping Home", groups[2].Label);
             Assert.Equal("Charlie's Requiem", groups[4].Label);
-            Assert.Null(groups[0].Label); // "This is Audible" names nothing
+            // "This is Audible" names nothing — the label falls back to the
+            // opening file's stem so the destination suggester has something.
+            Assert.Equal("Collection-001", groups[0].Label);
             Assert.All(groups, g => Assert.False(string.IsNullOrWhiteSpace(g.DisplayName)));
         }
 
@@ -176,8 +178,10 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Fact]
-        public void BuildGroups_NoBoundaryEvidence_SingleGroup()
+        public void BuildGroups_NoBoundaryEvidence_OnlyTheWholeBookFileSplitsOff()
         {
+            // Without spoken evidence nothing splits — except the 11h file 12,
+            // which is a complete book by its duration alone.
             var shapes = CollectionShapes();
             var probes = new List<SplitAudioProbePlanner.ProbeResult>
             {
@@ -188,8 +192,36 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
 
             var groups = SplitAudioProbePlanner.BuildGroups(shapes, probes);
 
-            var single = Assert.Single(groups);
-            Assert.Equal(shapes.Count, single.FileIds.Count);
+            Assert.Equal(2, groups.Count);
+            Assert.Equal(Enumerable.Range(1, 11).ToArray(), groups[0].FileIds);
+            Assert.Equal(new[] { 12, 13, 14, 15 }, groups[1].FileIds);
+        }
+
+        [Fact]
+        public void BuildGroups_WholeBookFilesWithoutAnnouncements_EachOpensItsOwnGroup()
+        {
+            // Live case (a Dark-series collection): 17 files of 4-7.6h each,
+            // none opening with a retail announcement — they must not run
+            // together, and the file names become the labels.
+            var shapes = new List<SplitAudioProbePlanner.FileShape>
+            {
+                File(1, 5 * 60, 91, "Dark Dream.m4b"),
+                File(2, 6 * 60, 147, "Dark Legend - Part 1.m4b"),
+                File(3, 5.9 * 60, 148, "Dark Legend - Part 2.m4b"),
+            };
+            var probes = new List<SplitAudioProbePlanner.ProbeResult>
+            {
+                new(1, "The jaguar moved through the dense foliage."),
+                new(2, "He woke buried beneath the earth."),
+                new(3, "The storm raged over the Carpathian mountains."),
+            };
+
+            var groups = SplitAudioProbePlanner.BuildGroups(shapes, probes);
+
+            Assert.Equal(3, groups.Count);
+            Assert.Equal("Dark Dream", groups[0].Label);
+            Assert.Equal("Dark Legend - Part 1", groups[1].Label);
+            Assert.Equal("Dark Legend - Part 2", groups[2].Label);
         }
 
         [Fact]
