@@ -110,6 +110,11 @@
                   </button>
                   <div v-if="candidatesFor(c).length === 0" class="split-empty">No matches.</div>
                 </div>
+                <CatalogTargetLookup
+                  :default-title="c.query || c.displayName"
+                  :default-author="(audiobook?.authors || [])[0] || ''"
+                  @added="(book) => onCatalogAdded(c, book)"
+                />
               </template>
               <template v-else>
                 <span v-if="c.targetId" class="split-dest-label">
@@ -162,6 +167,7 @@
 import { ref, computed, watch, reactive } from 'vue'
 import { Modal, ModalBody } from '@/components/feedback'
 import { apiService } from '@/services/api'
+import CatalogTargetLookup from './CatalogTargetLookup.vue'
 import { useToast } from '@/services/toastService'
 import { useLibraryStore } from '@/stores/library'
 import { showConfirm } from '@/composables/useConfirm'
@@ -334,6 +340,14 @@ function pickTarget(c: ClusterRow, cand: { id: number; title: string }) {
   c.targetTitle = cand.title
   c.action = 'move'
   c.editing = false
+}
+
+function onCatalogAdded(c: ClusterRow, book: Audiobook) {
+  // Make the fresh record visible to occupancy badges and pick it.
+  if (!libraryStore.audiobooks.some((b) => b.id === book.id)) {
+    libraryStore.audiobooks.push(book)
+  }
+  pickTarget(c, { id: book.id, title: book.title || 'New record' })
 }
 
 async function runAudioProbe() {

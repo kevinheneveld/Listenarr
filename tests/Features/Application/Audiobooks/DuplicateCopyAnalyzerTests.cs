@@ -202,17 +202,47 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Fact]
-        public void SingleEqualSizeFiles_NeverPairOnSizeAlone()
+        public void SubBookEqualSizeFiles_NeverPairOnSizeAlone()
         {
             // Third live run (Honor Bound): disc 5 and disc 16 of a 28-disc
             // CBR rip, both exactly 20.9MB / 43.6min — a coincidence, not a
-            // copy. One matching size is not a multiset.
+            // copy. Byte identity only convinces at whole-book scale.
             var a = Cluster("stem:a", 0.73, 20_900_000, 1, displayName: "HB_05-28 - Honor Bound");
             var b = Cluster("stem:b", 0.73, 20_900_000, 1, displayName: "HB_16-28 - Honor Bound");
 
             var result = DuplicateCopyAnalyzer.Analyze([a, b]);
             Assert.Empty(result.Proposals);
             Assert.False(result.SplitCandidate);
+        }
+
+        [Fact]
+        public void SubBookEqualSizeTrackSets_NeverPairEither()
+        {
+            // Follow-up live case (Secret Honor): disc 12's and disc 13's
+            // 25-track sets carried identical size multisets — still discs of
+            // one book, not copies.
+            var sizes = Enumerable.Repeat(1_200_000L, 25).ToArray();
+            var a = Cluster("stem:a", 1.2, sizes.Sum(), 25, sizes: sizes,
+                displayName: "Secret Honor.Disk 12.Track");
+            var b = Cluster("stem:b", 1.2, sizes.Sum(), 25, sizes: sizes,
+                displayName: "Secret Honor.Disk 13.Track");
+
+            Assert.Empty(DuplicateCopyAnalyzer.Analyze([a, b]).Proposals);
+        }
+
+        [Fact]
+        public void WholeBookSingleFiles_ByteIdentical_StillPair()
+        {
+            // The regression the disc fix must not cause: two 20.6h files
+            // with identical byte counts ARE the same audio (live: the
+            // 1.2GB Harry Potter m4bs) — hash confirmation seals it later.
+            var a = Cluster("stem:a", 20.6, 1_235_000_000, 1,
+                displayName: "Harry Potter and the Deathly Hallows (07)");
+            var b = Cluster("stem:b", 20.6, 1_235_000_000, 1,
+                displayName: "J.K. Rowling - Harry Potter and the Deathly Hallows");
+
+            var p = Assert.Single(DuplicateCopyAnalyzer.Analyze([a, b]).Proposals);
+            Assert.True(p.SizesIdentical);
         }
 
         [Fact]

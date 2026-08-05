@@ -77,7 +77,7 @@ namespace Listenarr.Api.Features.Library
             // non-thread-safe EF DbContext per call; probing those concurrently corrupted
             // results, so the same file read its tag on one run and blank on the next — making
             // the clusters (and therefore the moves) non-deterministic.
-            var embeddedTitles = new System.Collections.Concurrent.ConcurrentDictionary<int, string>();
+            var embeddedTags = new System.Collections.Concurrent.ConcurrentDictionary<int, (string Album, string Title)>();
             try
             {
                 // Resolve/install ffprobe once up front so the parallel probes don't race on it.
@@ -102,23 +102,24 @@ namespace Listenarr.Api.Features.Library
                             // case: a 131-file collection 504'd). Reopening the
                             // modal must not pay that again. Empty result is cached
                             // too — tagless files stay tagless.
-                            var cacheKey = $"split_tag_{target.path}_{_fileSystem.GetFileLength(target.path)}";
-                            if (!_cache.TryGetValue(cacheKey, out string? bookTitle))
+                            var cacheKey = $"split_tag2_{target.path}_{_fileSystem.GetFileLength(target.path)}";
+                            if (!_cache.TryGetValue(cacheKey, out (string Album, string Title)? tags))
                             {
                                 var meta = await _ffmpegService.RunFfprobeAsync(target.path);
-                                bookTitle = !string.IsNullOrWhiteSpace(meta?.Album) ? meta!.Album : meta?.Title;
                                 // Per-chapter Title tags ("Ch75 - The Hard Way")
                                 // must cluster as the BOOK, not as 77 one-file
                                 // "books" (live case: a chapterized rip offered 77
                                 // groups, one per chapter). Strip the chapter
                                 // marker; a tag that is ONLY a chapter marker
                                 // ("Chapter 12") carries no book identity at all.
-                                bookTitle = EmbeddedTitleNormalizer.StripChapterMarkers(bookTitle);
-                                _cache.Set(cacheKey, bookTitle ?? string.Empty, TimeSpan.FromHours(6));
+                                tags = (
+                                    EmbeddedTitleNormalizer.StripChapterMarkers(meta?.Album) ?? string.Empty,
+                                    EmbeddedTitleNormalizer.StripChapterMarkers(meta?.Title) ?? string.Empty);
+                                _cache.Set(cacheKey, tags, TimeSpan.FromHours(6));
                             }
-                            if (!string.IsNullOrWhiteSpace(bookTitle))
+                            if (tags is { } t && (t.Album.Length > 0 || t.Title.Length > 0))
                             {
-                                embeddedTitles[target.Id] = bookTitle!;
+                                embeddedTags[target.Id] = t;
                             }
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
@@ -132,6 +133,32 @@ namespace Listenarr.Api.Features.Library
                 // Tag reads are an enhancement to clustering, not a requirement —
                 // fall back to path/stem clustering when ffprobe is unavailable.
                 _logger.LogDebug(ex, "Embedded-tag read skipped for split preview of audiobook {AudiobookId}", id);
+            }
+
+            // Album is normally the book-level tag — but a collection ripped
+            // with a SERIES-level album ("Witch & Wizard" on every file) makes
+            // one useless cluster while the per-file Title tags name the actual
+            // books ("01 Witch & Wizard Part 1", "04 The Kiss Part 2"). When
+            // the album is uniform across files and the titles resolve to two
+            // or more distinct books, the titles are the better identity.
+            var embeddedTitles = new Dictionary<int, string>();
+            var distinctAlbums = embeddedTags.Values
+                .Select(t => t.Album)
+                .Where(a => a.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            var distinctTitles = embeddedTags.Values
+                .Select(t => t.Title)
+                .Where(t => t.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            var preferTitles = distinctAlbums <= 1 && distinctTitles >= 2;
+            foreach (var (fileId, t) in embeddedTags)
+            {
+                var chosen = preferTitles
+                    ? (t.Title.Length > 0 ? t.Title : t.Album)
+                    : (t.Album.Length > 0 ? t.Album : t.Title);
+                if (chosen.Length > 0) embeddedTitles[fileId] = chosen;
             }
 
             var clusters = FileClustering.Cluster(files, audiobook.BasePath, embeddedTitles);

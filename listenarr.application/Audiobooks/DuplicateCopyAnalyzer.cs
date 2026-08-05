@@ -166,13 +166,7 @@ namespace Listenarr.Application.Audiobooks
             var digitConflict =
                 SplitDestinationSuggester.DigitsConflict(a.DisplayName, b.DisplayName);
 
-            // Byte-identity needs a MULTISET to be convincing: several files
-            // with pairwise-equal sizes is real evidence; a single pair of
-            // equal-size files is a CBR coincidence (third live run: disc 5
-            // and disc 16 of a 28-disc rip, both exactly 20.9MB, proposed as
-            // copies of each other).
-            var exactSizes = a.FileCount >= 2 && b.FileCount >= 2
-                && a.FileCount == b.FileCount
+            var exactSizes = a.FileCount == b.FileCount
                 && a.SortedFileSizes.SequenceEqual(b.SortedFileSizes);
 
             if (a.DurationsComplete && b.DurationsComplete
@@ -185,8 +179,19 @@ namespace Listenarr.Application.Audiobooks
                     return PairKind.Copies;
                 }
                 // Byte-identical file sets are the same audio no matter what
-                // the folder names claim — a mislabeled copy is still a copy.
-                if (exactSizes) return PairKind.Copies;
+                // the folder names claim — a mislabeled copy is still a copy —
+                // but only at whole-book scale: sub-book CBR discs collide on
+                // size by coincidence (third live run: disc 5 and disc 16 of
+                // a 28-disc rip, both exactly 20.9MB; a follow-up run paired
+                // disc 12's and disc 13's track sets the same way). A 20h
+                // file matching another to the byte is the same audio; a 43
+                // minute one is a dice roll.
+                if (exactSizes
+                    && a.TotalDurationSeconds >= SplitKinMinClusterSeconds
+                    && b.TotalDurationSeconds >= SplitKinMinClusterSeconds)
+                {
+                    return PairKind.Copies;
+                }
                 return ratio >= LooseDurationRatio
                     && a.TotalDurationSeconds >= SplitKinMinClusterSeconds
                     && b.TotalDurationSeconds >= SplitKinMinClusterSeconds
@@ -194,9 +199,9 @@ namespace Listenarr.Application.Audiobooks
                     : PairKind.Unrelated;
             }
 
-            // Without trustworthy durations only exact byte identity is
-            // acceptable evidence: same file count, same sorted size multiset.
-            return exactSizes ? PairKind.Copies : PairKind.Unrelated;
+            // Without trustworthy durations only exact byte identity across a
+            // real multiset (2+ files per side) is acceptable evidence.
+            return exactSizes && a.FileCount >= 2 ? PairKind.Copies : PairKind.Unrelated;
         }
 
         /// <summary>

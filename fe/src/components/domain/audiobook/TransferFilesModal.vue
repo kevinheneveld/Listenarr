@@ -70,6 +70,11 @@
               </span>
             </label>
           </div>
+          <CatalogTargetLookup
+            :default-title="query"
+            :default-author="(audiobook.authors || [])[0] || ''"
+            @added="onCatalogAdded"
+          />
         </div>
 
         <div v-if="chosenTargetFileCount > 0" class="transfer-warning">
@@ -105,6 +110,7 @@ import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import { showConfirm } from '@/composables/useConfirm'
 import { useLibraryStore } from '@/stores/library'
+import CatalogTargetLookup from './CatalogTargetLookup.vue'
 import type { Audiobook } from '@/types'
 
 type SourceFile = { id: number; path?: string | null }
@@ -242,6 +248,15 @@ async function confirmTransfer() {
     toast.error('Could not move files', message)
     transferring.value = false
   }
+}
+
+function onCatalogAdded(book: Audiobook) {
+  // Make the fresh record selectable and select it.
+  if (!libraryStore.audiobooks.some((b) => b.id === book.id)) {
+    libraryStore.audiobooks.push(book)
+  }
+  query.value = book.title || query.value
+  chosenTargetId.value = book.id
 }
 
 function onClose() {
