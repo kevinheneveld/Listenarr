@@ -202,6 +202,62 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Fact]
+        public void SingleEqualSizeFiles_NeverPairOnSizeAlone()
+        {
+            // Third live run (Honor Bound): disc 5 and disc 16 of a 28-disc
+            // CBR rip, both exactly 20.9MB / 43.6min — a coincidence, not a
+            // copy. One matching size is not a multiset.
+            var a = Cluster("stem:a", 0.73, 20_900_000, 1, displayName: "HB_05-28 - Honor Bound");
+            var b = Cluster("stem:b", 0.73, 20_900_000, 1, displayName: "HB_16-28 - Honor Bound");
+
+            var result = DuplicateCopyAnalyzer.Analyze([a, b]);
+            Assert.Empty(result.Proposals);
+            Assert.False(result.SplitCandidate);
+        }
+
+        [Fact]
+        public void ChapterClusters_LooseKinship_DoesNotFlagMultipleBooks()
+        {
+            // Disc/chapter clusters run 20-90 minutes; two of those agreeing
+            // within 75% says nothing about the record holding multiple books
+            // (third live run: Wheel of Time chapter records flagged).
+            var a = Cluster("stem:a", 0.9, 30_000_000, 1, displayName: "Chapter 5 - A Time");
+            var b = Cluster("stem:b", 1.1, 36_000_000, 1, displayName: "Chapter 9 - The End");
+
+            var result = DuplicateCopyAnalyzer.Analyze([a, b]);
+            Assert.Empty(result.Proposals);
+            Assert.False(result.SplitCandidate);
+        }
+
+        [Fact]
+        public void CatalogRuntimeMatchesTotal_SuppressesSplitFlag()
+        {
+            // Third live run: "1984" — total audio equals its catalog runtime
+            // (ratio 1.00), so the loosely-paired clusters are chapters of the
+            // one book, not multiple works.
+            var a = Cluster("stem:a", 5.0, 200_000_000, 8, displayName: "Part One");
+            var b = Cluster("stem:b", 6.4, 250_000_000, 9, displayName: "Part Two");
+
+            var flagged = DuplicateCopyAnalyzer.Analyze([a, b]);
+            Assert.True(flagged.SplitCandidate);
+
+            var suppressed = DuplicateCopyAnalyzer.Analyze([a, b],
+                expectedRuntimeSeconds: 11.4 * 3600);
+            Assert.False(suppressed.SplitCandidate);
+        }
+
+        [Fact]
+        public void TotalFarExceedsCatalogRuntime_KeepsSplitFlag()
+        {
+            var a = Cluster("stem:a", 12.0, 400_000_000, 10, displayName: "Foundations Edge");
+            var b = Cluster("stem:b", 16.0, 500_000_000, 12, displayName: "Forward the Foundation");
+
+            var result = DuplicateCopyAnalyzer.Analyze([a, b],
+                expectedRuntimeSeconds: 12.0 * 3600);
+            Assert.True(result.SplitCandidate);
+        }
+
+        [Fact]
         public void ThreeCopies_CollapseIntoOneProposal()
         {
             // Live case (20,000 Leagues): three identical 989MB sets — one

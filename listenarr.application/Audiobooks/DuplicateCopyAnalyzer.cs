@@ -76,13 +76,34 @@ namespace Listenarr.Application.Audiobooks
         // 12-minute durations into one absurd keep-one-drop-188 proposal.
         private const double MinClusterDurationSeconds = 1800;
 
-        public static AnalysisResult Analyze(IReadOnlyList<ClusterEvidence> clusters)
+        // Loose kinship implies "multiple books" only between clusters that
+        // are each plausibly a whole book. Disc/chapter clusters run 20-90
+        // minutes, and two of those agreeing within 75% says nothing (third
+        // live run: Wheel of Time chapter records flagged as multi-book).
+        private const double SplitKinMinClusterSeconds = 2.5 * 3600;
+
+        // A record whose total audio is within this factor of its catalog
+        // runtime holds ONE book — its clusters are discs/chapters, not
+        // multiple works, no matter how they pair.
+        private const double MultiBookRuntimeFactor = 1.5;
+
+        public static AnalysisResult Analyze(
+            IReadOnlyList<ClusterEvidence> clusters,
+            double? expectedRuntimeSeconds = null)
         {
             var eligible = clusters
                 .Where(c => c.FileCount > 0
                     && (!c.DurationsComplete || c.TotalDurationSeconds >= MinClusterDurationSeconds))
                 .ToList();
             if (eligible.Count < 2) return new AnalysisResult([], false);
+
+            // Catalog-runtime sanity: when the record's total audio is about
+            // one book's worth, the clusters are discs/chapters of that book
+            // and loose kinship between them is meaningless (third live run:
+            // "1984" at ratio 1.00 flagged as looking like multiple books).
+            var totalDuration = clusters.Sum(c => c.TotalDurationSeconds);
+            var plausiblyOneBook = expectedRuntimeSeconds is > 0
+                && totalDuration <= expectedRuntimeSeconds * MultiBookRuntimeFactor;
 
             // Union clusters into copy-groups via pairwise duration agreement.
             var splitCandidate = false;
@@ -95,7 +116,7 @@ namespace Listenarr.Application.Audiobooks
                     var pair = ClassifyPair(eligible[i], eligible[j]);
                     if (pair == PairKind.SplitKin)
                     {
-                        splitCandidate = true;
+                        splitCandidate = splitCandidate || !plausiblyOneBook;
                         continue;
                     }
                     if (pair == PairKind.Unrelated) continue;
@@ -145,7 +166,13 @@ namespace Listenarr.Application.Audiobooks
             var digitConflict =
                 SplitDestinationSuggester.DigitsConflict(a.DisplayName, b.DisplayName);
 
-            var exactSizes = a.FileCount == b.FileCount
+            // Byte-identity needs a MULTISET to be convincing: several files
+            // with pairwise-equal sizes is real evidence; a single pair of
+            // equal-size files is a CBR coincidence (third live run: disc 5
+            // and disc 16 of a 28-disc rip, both exactly 20.9MB, proposed as
+            // copies of each other).
+            var exactSizes = a.FileCount >= 2 && b.FileCount >= 2
+                && a.FileCount == b.FileCount
                 && a.SortedFileSizes.SequenceEqual(b.SortedFileSizes);
 
             if (a.DurationsComplete && b.DurationsComplete
@@ -157,10 +184,12 @@ namespace Listenarr.Application.Audiobooks
                 {
                     return PairKind.Copies;
                 }
-                // Byte-identical files are the same audio no matter what the
-                // folder names claim — a mislabeled copy is still a copy.
+                // Byte-identical file sets are the same audio no matter what
+                // the folder names claim — a mislabeled copy is still a copy.
                 if (exactSizes) return PairKind.Copies;
                 return ratio >= LooseDurationRatio
+                    && a.TotalDurationSeconds >= SplitKinMinClusterSeconds
+                    && b.TotalDurationSeconds >= SplitKinMinClusterSeconds
                     ? PairKind.SplitKin
                     : PairKind.Unrelated;
             }

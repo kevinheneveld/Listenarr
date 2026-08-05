@@ -71,7 +71,9 @@ namespace Listenarr.Api.Features.Library
                     c.Files.Select(f => f.Size ?? 0).OrderBy(s => s).ToList()))
                 .ToList();
 
-            var analysis = DuplicateCopyAnalyzer.Analyze(evidence);
+            var analysis = DuplicateCopyAnalyzer.Analyze(
+                evidence,
+                book.Runtime is > 0 ? book.Runtime.Value * 60.0 : null);
             if (analysis.Proposals.Count == 0)
             {
                 return new ResolvedAnalysis([], analysis.SplitCandidate);
