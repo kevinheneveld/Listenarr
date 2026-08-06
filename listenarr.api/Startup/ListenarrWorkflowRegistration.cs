@@ -64,6 +64,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<ISearchResultFilter, ProductLikeTitleFilter>();
         services.AddScoped<ISearchResultFilter, MissingInformationFilter>();
         services.AddScoped<ISearchResultFilter, RelevanceFilter>();
+        services.AddScoped<ISearchResultFilter, NumberConflictFilter>();
         services.AddScoped<SearchResultFilterPipeline>();
         services.AddScoped<AsinCandidateCollector>();
         services.AddScoped<AsinEnricher>();

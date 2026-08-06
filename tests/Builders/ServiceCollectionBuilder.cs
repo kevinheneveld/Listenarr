@@ -188,6 +188,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<MetadataSourceCatalog>();
             services.AddSingleton<SearchResultFilterPipeline>();
             services.AddSingleton<Listenarr.Application.Search.Contracts.ISearchResultFilter, RelevanceFilter>();
+            services.AddSingleton<Listenarr.Application.Search.Contracts.ISearchResultFilter, NumberConflictFilter>();
             services.AddSingleton<MetadataStrategyCoordinator>();
             services.AddSingleton<AsinCandidateCollector>();
             services.AddSingleton<AsinEnricher>();
