@@ -32,6 +32,9 @@
           <PhSpinner class="ph-spin" />
           <span>Searching indexers... ({{ searchedIndexers }}/{{ totalIndexers }})</span>
         </div>
+        <div v-if="fallbackNote && !searching" class="fallback-note">
+          {{ fallbackNote }}
+        </div>
 
         <!-- Results Table -->
         <div v-if="displayResults.length > 0 || !searching" class="results-container">
@@ -312,6 +315,7 @@ const results = ref<SearchResult[]>([])
 const searching = ref(false)
 const downloading = ref<Record<string, boolean>>({})
 const searchedIndexers = ref(0)
+const fallbackNote = ref<string | null>(null)
 const totalIndexers = ref(0)
 const qualityScores = ref<Map<string, QualityScore>>(new Map())
 const qualityProfile = ref<QualityProfile | null>(null)
@@ -449,25 +453,12 @@ function sortFrontendResults() {
   })
 }
 
-async function search() {
-  if (!props.audiobook) return
-
-  searching.value = true
-  results.value = []
-  searchedIndexers.value = 0
-  totalIndexers.value = 0
-
-  try {
-    // Get count of enabled indexers first
-    const enabledIndexers = await apiService.getEnabledIndexers()
-    totalIndexers.value = enabledIndexers.length
-
-    // Build search query from title and author (fallback if no manual query)
-    const query = searchQuery.value.trim() || buildSearchQuery()
-
-    // Search each indexer individually to show progress
-    const allResults: SearchResult[] = []
-    const searchPromises = enabledIndexers.map(async (indexer) => {
+async function runIndexerFanout(
+  enabledIndexers: Awaited<ReturnType<typeof apiService.getEnabledIndexers>>,
+  query: string,
+): Promise<SearchResult[]> {
+  const allResults: SearchResult[] = []
+  const searchPromises = enabledIndexers.map(async (indexer) => {
       try {
         // Map MyAnonamouse indexer options (if present on the indexer) to searchByApi opts so backend can apply them
 
@@ -594,8 +585,43 @@ async function search() {
       }
     })
 
-    // Wait for all searches to complete
-    await Promise.all(searchPromises)
+  // Wait for all searches to complete
+  await Promise.all(searchPromises)
+  return allResults
+}
+
+async function search() {
+  if (!props.audiobook) return
+
+  searching.value = true
+  results.value = []
+  searchedIndexers.value = 0
+  totalIndexers.value = 0
+
+  try {
+    // Get count of enabled indexers first
+    const enabledIndexers = await apiService.getEnabledIndexers()
+    totalIndexers.value = enabledIndexers.length
+
+    // Build search query from title and author (fallback if no manual query)
+    const query = searchQuery.value.trim() || buildSearchQuery()
+
+    // Search each indexer individually to show progress
+    let allResults: SearchResult[] = await runIndexerFanout(enabledIndexers, query)
+
+    // Automatic search falls back to a title-only query when the full
+    // "title author" query returns nothing (indexer titles frequently omit
+    // the author, or name a different one) — without the same fallback,
+    // Manual Search shows an empty table for exactly the books automatic
+    // search still grabs, making its grabs impossible to inspect.
+    const titleOnly = (props.audiobook?.title || '').trim()
+    if (allResults.length === 0 && titleOnly && titleOnly.toLowerCase() !== query.toLowerCase()) {
+      fallbackNote.value = `No results for "${query}" — showing title-only matches for "${titleOnly}".`
+      searchedIndexers.value = 0
+      allResults = await runIndexerFanout(enabledIndexers, titleOnly)
+    } else {
+      fallbackNote.value = null
+    }
 
     // Apply backend sorting if needed (for non-Score columns)
     if (sortBy.value !== 'Score') {
@@ -931,6 +957,16 @@ function getScoreClass(score: number): string {
   padding: 1.5rem 2rem;
   overflow-y: auto;
   flex: 1;
+}
+
+.fallback-note {
+  margin-bottom: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: #f0c674;
+  background-color: rgba(224, 164, 88, 0.1);
+  border: 1px solid rgba(224, 164, 88, 0.3);
 }
 
 .search-status {

@@ -149,22 +149,54 @@ namespace Listenarr.Api.Features.Library
                         .Where(d => !string.IsNullOrWhiteSpace(d.Title))
                         .OrderByDescending(d => d.CompletedAt ?? d.StartedAt)
                         .Take(5)
+                        .Select(d => (Title: d.Title!, Hash: d.GetMetadataString("TorrentHash")))
                         .ToList();
+
+                    // The delivering Download row is often GONE by rejection
+                    // time — the deferred-removal cleanup deletes it once the
+                    // client item is removed — leaving nothing to blocklist,
+                    // and the re-search re-grabs the identical release (live
+                    // loop: 'The Lost Boys (2021) - Faye Kellerman' re-grabbed
+                    // after every one of six rejections, zero blocklist rows).
+                    // History outlives the row: fold in the recent
+                    // DownloadCompleted source titles too.
+                    var completedTitles = (await _historyRepository.GetByAudiobookIdAsync(id, ct))
+                        .Where(h => h.EventType == "DownloadCompleted" && !string.IsNullOrWhiteSpace(h.SourceTitle))
+                        .OrderByDescending(h => h.Timestamp)
+                        .Select(h => h.SourceTitle!)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(5);
+                    foreach (var historyTitle in completedTitles)
+                    {
+                        if (!deliveredReleases.Any(r => string.Equals(r.Title, historyTitle, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            deliveredReleases.Add((historyTitle, null));
+                        }
+                    }
+
+                    var alreadyBlocked = await _blockedReleaseRepository.GetByAudiobookIdAsync(id, ct);
+                    var added = 0;
                     foreach (var delivered in deliveredReleases)
                     {
+                        if (Listenarr.Application.Search.BlockedReleaseMatcher.IsBlocked(
+                                delivered.Title, delivered.Hash, alreadyBlocked))
+                        {
+                            continue;
+                        }
                         await _blockedReleaseRepository.AddAsync(new BlockedRelease
                         {
                             AudiobookId = id,
                             ReleaseTitle = delivered.Title,
-                            TorrentHash = delivered.GetMetadataString("TorrentHash"),
+                            TorrentHash = delivered.Hash,
                             Reason = "Rejected via 'Wrong content'"
                         }, ct);
+                        added++;
                     }
-                    if (deliveredReleases.Count > 0)
+                    if (added > 0)
                     {
                         _logger.LogInformation(
                             "Blocklisted {Count} release(s) for audiobook {AudiobookId} after wrong-content rejection",
-                            deliveredReleases.Count, id);
+                            added, id);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)

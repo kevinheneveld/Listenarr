@@ -95,5 +95,51 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             var history = await _historyRepository.GetByAudiobookIdAsync(ab.Id);
             Assert.Contains(history, h => h.EventType == "Rejected");
         }
+
+        [Fact]
+        public async Task RejectNotAudiobook_BlocklistsFromHistory_WhenDownloadRowAlreadyCleaned()
+        {
+            // Live loop: the deferred-removal cleanup deletes the delivering
+            // Download row after the client item is removed, so by rejection
+            // time there is nothing in Downloads to blocklist — and the
+            // re-search re-grabbed the identical release after every one of
+            // six rejections. History outlives the row.
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var folder = FileService.GetTempDirectory("not-audiobook-history");
+            var ab = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Lost Boys")
+                .WithBasePath(folder)
+                .Build());
+            var path = Path.Join(folder, "wrong.m4b");
+            await File.WriteAllTextAsync(path, "wrong book");
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(ab).WithPath(path).Build());
+
+            // NO Download row — only the completion event in history.
+            await _historyRepository.AddAsync(new History
+            {
+                AudiobookId = ab.Id,
+                AudiobookTitle = ab.Title ?? string.Empty,
+                EventType = "DownloadCompleted",
+                SourceTitle = "The Lost Boys (2021) - Faye Kellerman",
+                Message = "Download client reported completion",
+                Timestamp = DateTime.UtcNow.AddHours(-3)
+            });
+
+            var result = await controller.RejectNotAudiobook(ab.Id, CancellationToken.None);
+            Assert.IsType<OkObjectResult>(result);
+
+            var blockedRepo = _provider.GetRequiredService<IBlockedReleaseRepository>();
+            var blocked = await blockedRepo.GetByAudiobookIdAsync(ab.Id);
+            var entry = Assert.Single(blocked);
+            Assert.Equal("The Lost Boys (2021) - Faye Kellerman", entry.ReleaseTitle);
+
+            // A second rejection must not duplicate the row.
+            await File.WriteAllTextAsync(path, "wrong book again");
+            await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
+                .WithAudiobook(ab).WithPath(path).Build());
+            await controller.RejectNotAudiobook(ab.Id, CancellationToken.None);
+            Assert.Single(await blockedRepo.GetByAudiobookIdAsync(ab.Id));
+        }
     }
 }
