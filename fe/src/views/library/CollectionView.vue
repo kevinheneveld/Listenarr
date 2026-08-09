@@ -394,6 +394,17 @@
               <PhMagnifyingGlass v-else />
               Search now
             </button>
+            <button
+              v-if="audiobookshelfConfigured"
+              class="toolbar-btn"
+              :disabled="audiobookshelfScanning"
+              @click="updateAudiobookshelf"
+              title="Request an Audiobookshelf scan so new books in this series show up there"
+            >
+              <PhArrowClockwise v-if="audiobookshelfScanning" class="spin-icon" />
+              <PhBooks v-else />
+              {{ audiobookshelfScanning ? 'Updating Audiobookshelf...' : 'Update Audiobookshelf' }}
+            </button>
           </div>
         </div>
         <div class="toolbar-filters">
@@ -1040,6 +1051,8 @@ const seriesLookup = ref<SeriesLookupResponse | null>(null)
 const seriesLookupLoading = ref(false)
 const seriesLookupRequestId = ref(0)
 const seriesMetadataRefreshBusy = ref(false)
+const audiobookshelfScanning = ref(false)
+const audiobookshelfConfigured = ref(false)
 const seriesMonitoringBusy = ref(false)
 const seriesMonitoringStatus = ref<MonitoredSeries | null>(null)
 const showSeriesPicker = ref(false)
@@ -2323,6 +2336,28 @@ async function refreshSeriesMetadata() {
   }
 }
 
+async function updateAudiobookshelf() {
+  if (audiobookshelfScanning.value) return
+  audiobookshelfScanning.value = true
+  try {
+    const result = await apiService.triggerAudiobookshelfScan()
+    if (result.success) {
+      toast.success('Audiobookshelf', result.message)
+    } else {
+      toast.error('Audiobookshelf scan failed', result.message)
+    }
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'CollectionView',
+      operation: 'updateAudiobookshelf',
+      metadata: { series: name.value },
+    })
+    toast.error('Audiobookshelf scan failed', 'Could not reach the Listenarr API')
+  } finally {
+    audiobookshelfScanning.value = false
+  }
+}
+
 const goBack = () => {
   router.back()
 }
@@ -2674,6 +2709,18 @@ function handleCheckboxKeydown(audiobook: CollectionDisplayItem, event: Keyboard
 }
 
 onMounted(async () => {
+  // Show the Audiobookshelf action only when the integration is configured
+  // (typeof guard keeps partial apiService mocks in tests working)
+  if (typeof apiService.getAudiobookshelfSettings === 'function') {
+    void apiService
+      .getAudiobookshelfSettings()
+      .then((settings) => {
+        audiobookshelfConfigured.value = Boolean(settings.url && settings.hasSavedApiKey)
+      })
+      .catch(() => {
+        audiobookshelfConfigured.value = false
+      })
+  }
   await loadCollectionData(false)
 })
 
