@@ -77,6 +77,8 @@ namespace Listenarr.Application.Audiobooks.Contracts
 
         public int ExistingCount { get; set; }
 
+        public int ExcludedCount { get; set; }
+
         public int FailedCount { get; set; }
 
         public bool Succeeded { get; set; }

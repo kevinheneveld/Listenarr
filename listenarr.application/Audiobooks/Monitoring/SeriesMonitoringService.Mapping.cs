@@ -90,6 +90,28 @@ namespace Listenarr.Application.Audiobooks.Monitoring
                 BuildTitleAuthorKey(candidate.Title, candidate.Authors) == titleAuthorKey);
         }
 
+        private static bool IsExcludedFromMonitoring(
+            AudibleSearchResult book,
+            HashSet<string> excludedAsins,
+            HashSet<string> excludedTitleKeys)
+        {
+            var asin = NormalizeIdentifier(book.Asin);
+            if (!string.IsNullOrWhiteSpace(asin) && excludedAsins.Contains(asin))
+            {
+                return true;
+            }
+
+            var titleAuthorKey = BuildTitleAuthorKey(
+                book.Title,
+                (book.Authors ?? new List<AudibleAuthor>())
+                    .Select(author => author.Name)
+                    .Where(author => !string.IsNullOrWhiteSpace(author))
+                    .Cast<string>()
+                    .ToList());
+
+            return !string.IsNullOrWhiteSpace(titleAuthorKey) && excludedTitleKeys.Contains(titleAuthorKey);
+        }
+
         private static bool ShouldIncludeBookForLanguage(AudibleSearchResult book, string preferredLanguage)
         {
             if (string.Equals(preferredLanguage, "all", StringComparison.OrdinalIgnoreCase))

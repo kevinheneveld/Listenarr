@@ -83,6 +83,7 @@ namespace Listenarr.Application.Audiobooks.Monitoring
         private readonly IAudiobookRepository _audiobooks;
         private readonly ISeriesCatalogService _seriesCatalogService;
         private readonly ILibraryAddService _libraryAddService;
+        private readonly IAuthorMonitoringExclusionRepository _exclusions;
         private readonly ILogger<SeriesMonitoringService> _logger;
 
         public SeriesMonitoringService(
@@ -90,12 +91,14 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             IAudiobookRepository audiobooks,
             ISeriesCatalogService seriesCatalogService,
             ILibraryAddService libraryAddService,
+            IAuthorMonitoringExclusionRepository exclusions,
             ILogger<SeriesMonitoringService> logger)
         {
             _series = series;
             _audiobooks = audiobooks;
             _seriesCatalogService = seriesCatalogService;
             _libraryAddService = libraryAddService;
+            _exclusions = exclusions;
             _logger = logger;
         }
 
@@ -305,12 +308,32 @@ namespace Listenarr.Application.Audiobooks.Monitoring
 
                 var existingLibrary = await _audiobooks.GetAllAsync();
 
+                // Books the user explicitly excluded (deleted "and keep out of monitoring")
+                // must never be re-added by the sweep — the exclusion list is shared with
+                // author monitoring, so a book excluded there stays out of series syncs too.
+                var allExclusions = await _exclusions.GetAllAsync(cancellationToken);
+                var excludedAsins = allExclusions
+                    .Select(e => NormalizeIdentifier(e.Asin))
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .ToHashSet(StringComparer.Ordinal);
+                var excludedTitleKeys = allExclusions
+                    .Select(e => e.TitleAuthorKey)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Cast<string>()
+                    .ToHashSet(StringComparer.Ordinal);
+
                 foreach (var book in catalog.Books)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
                     if (!ShouldIncludeBookForLanguage(book, monitoredSeries.Language))
                     {
+                        continue;
+                    }
+
+                    if (IsExcludedFromMonitoring(book, excludedAsins, excludedTitleKeys))
+                    {
+                        result.ExcludedCount++;
                         continue;
                     }
 

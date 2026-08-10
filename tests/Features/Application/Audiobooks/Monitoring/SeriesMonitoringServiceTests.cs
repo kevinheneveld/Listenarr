@@ -128,6 +128,65 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
         }
 
         [Fact]
+        public async Task MonitorSeriesAsync_SkipsExcludedBooks_WithoutAddingThem()
+        {
+            // Given
+            Init(services => services
+                .WithSingleton(_seriesCatalogService.Object)
+                .WithSingleton(_libraryAddService.Object));
+
+            // The user deleted this book and kept it out of monitoring; the exclusion
+            // list is shared between author and series monitoring.
+            var exclusions = _provider.GetRequiredService<IAuthorMonitoringExclusionRepository>();
+            await exclusions.AddAsync(new AuthorMonitoringExclusion
+            {
+                Asin = "BOOK2",
+                Title = "The Well of Ascension",
+                AuthorName = "Brandon Sanderson"
+            });
+
+            _seriesCatalogService
+                .Setup(service => service.GetCatalogAsync(
+                    "Mistborn",
+                    "uk",
+                    500,
+                    null,
+                    true,
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SeriesCatalogFetchResultBuilder()
+                    .WithSeries("Mistborn", "SERIES123")
+                    .WithBook(new AudibleSearchResultBuilder()
+                        .WithAsin("BOOK2")
+                        .WithTitle("The Well of Ascension")
+                        .WithAuthor("Brandon Sanderson")
+                        .WithLanguage("english")
+                        .WithSeries("Mistborn", "2")
+                        .Build())
+                    .Build());
+
+            var service = _provider.GetRequiredService<ISeriesMonitoringService>();
+
+            // When
+            var result = await service.MonitorSeriesAsync(new MonitorSeriesRequest
+            {
+                Name = "Mistborn",
+                Region = "uk",
+                Language = "english"
+            });
+
+            // Then
+            Assert.True(result.SyncResult.Succeeded);
+            Assert.Equal(0, result.SyncResult.AddedCount);
+            Assert.Equal(1, result.SyncResult.ExcludedCount);
+
+            // The excluded book must never reach the library-add path.
+            _libraryAddService.Verify(service => service.AddToLibraryAsync(
+                    It.IsAny<LibraryAddOperationRequest>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Never);
+        }
+
+        [Fact]
         public async Task MonitorSeriesAsync_PersistsTitleFolderInBasePath()
         {
             // Given
