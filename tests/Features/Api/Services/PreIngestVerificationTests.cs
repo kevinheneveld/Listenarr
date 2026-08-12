@@ -35,6 +35,24 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
+        public void Inspect_KeepsChoppedTrackAudiobookRip_ByTotalDuration()
+        {
+            // Live regression: a 21-hour book ripped into 258 five-minute
+            // tracks has music-shaped medians but album-impossible runtime.
+            var result = PreIngestVerification.Inspect(Files(258, 291));
+            Assert.False(result.Rejected);
+        }
+
+        [Fact]
+        public void Inspect_StillRejectsLongBoxSetShapedAlbum_UnderTotalCutoff()
+        {
+            // 3.9 hours of ~3.3-minute tracks stays under the 4-hour total
+            // cutoff and keeps the music rejection.
+            var result = PreIngestVerification.Inspect(Files(70, 200));
+            Assert.True(result.Rejected);
+        }
+
+        [Fact]
         public void Inspect_KeepsShortBatchBelowFileCountThreshold()
         {
             // Only 5 short files — too few to call it a music album.

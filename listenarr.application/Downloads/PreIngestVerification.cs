@@ -34,6 +34,12 @@ namespace Listenarr.Application.Downloads
         public const int MusicMinFileCount = 10;
         public const double MusicMaxMedianSeconds = 300;
 
+        // ...unless the batch runs this long in total. No music album is 4+
+        // hours, but classic usenet audiobook rips chopped into ~5-minute
+        // tracks are (live case: a 21-hour book in 258 files, median 291s,
+        // rejected as "music").
+        public const double MusicMaxTotalSeconds = 4 * 3600;
+
         public sealed record Result(bool Rejected, string? Reason);
 
         public static readonly Result Accepted = new(false, null);
@@ -67,11 +73,13 @@ namespace Listenarr.Application.Downloads
                 return Accepted;
 
             var median = Median(durations);
-            if (median < MusicMaxMedianSeconds)
+            var totalSeconds = durations.Sum();
+            if (median < MusicMaxMedianSeconds && totalSeconds < MusicMaxTotalSeconds)
             {
                 return new Result(true,
                     $"looks like a music album, not an audiobook: {audioFiles.Count} audio files, " +
-                    $"median track length {median:F0}s (threshold: {MusicMinFileCount}+ files with median < {MusicMaxMedianSeconds:F0}s)");
+                    $"median track length {median:F0}s, total {totalSeconds / 3600:F1}h " +
+                    $"(threshold: {MusicMinFileCount}+ files with median < {MusicMaxMedianSeconds:F0}s and total < {MusicMaxTotalSeconds / 3600:F0}h)");
             }
 
             return Accepted;
