@@ -131,6 +131,29 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                 .Where(d => d.Status == DownloadStatus.Moved)
                 .ToList();
 
+            // Pre-load enabled clients once so torrent cross-client cleanup does not reload
+            // configuration for every moved download in a cleanup cycle.
+            List<DownloadClientConfiguration> allEnabledClients;
+            try
+            {
+                var allClients = await configurationService.GetDownloadClientConfigurationsAsync();
+                allEnabledClients = allClients.Where(c => c.IsEnabled).ToList();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                logger.LogDebug(ex, "Failed to load client configurations for deferred removal");
+                return;
+            }
+
+            // Independent of the Moved lane: dispose of errored client entries whose
+            // downloads are terminally blocked/failed and whose files are gone.
+            await CleanupBlockedClientEntriesAsync(
+                downloadRepository,
+                downloadClientGateway,
+                historyRepository,
+                allEnabledClients,
+                cancellationToken);
+
             if (movedDownloads.Count == 0) return;
 
             // Move-mode imports relocate the payload out of the client's save
@@ -147,20 +170,6 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
                 logger.LogDebug(ex, "Failed to load application settings for deferred removal");
-            }
-
-            // Pre-load enabled clients once so torrent cross-client cleanup does not reload
-            // configuration for every moved download in a cleanup cycle.
-            List<DownloadClientConfiguration> allEnabledClients;
-            try
-            {
-                var allClients = await configurationService.GetDownloadClientConfigurationsAsync();
-                allEnabledClients = allClients.Where(c => c.IsEnabled).ToList();
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
-                logger.LogDebug(ex, "Failed to load client configurations for deferred removal");
-                return;
             }
 
             foreach (var download in movedDownloads)

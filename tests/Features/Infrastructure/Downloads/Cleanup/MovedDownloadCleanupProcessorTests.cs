@@ -288,6 +288,107 @@ namespace Listenarr.Tests.Features.Infrastructure.Downloads.Cleanup
             Assert.DoesNotContain(history.Records, entry => entry.EventType == HistoryEvents.CleanupRequested);
         }
 
+        [Fact]
+        public async Task RunCycleAsync_RemovesMissingFilesClientEntryForBlockedDownload()
+        {
+            var client = await CreateRemovableClientAsync("remove");
+            _gateway.RemoveResult = true;
+
+            var download = new DownloadBuilder()
+                .WithDownloadClientConfiguration(client)
+                .WithTorrentHash("HASH-BLOCKED-1")
+                .Build();
+            download.Status = DownloadStatus.ImportBlocked;
+            download = await _downloadRepository.AddAsync(download);
+
+            _gateway.QueueResult =
+            [
+                new QueueItem
+                {
+                    Id = "hash-blocked-1",
+                    Title = download.Title,
+                    Status = "failed",
+                    ClientFailureReason = "missingFiles",
+                    DownloadClientId = client.Id
+                }
+            ];
+
+            await _provider.GetRequiredService<IMovedDownloadCleanupProcessor>()
+                .RunCycleAsync(CancellationToken.None);
+
+            // Client entry removed without deleting files; DB row kept as tombstone.
+            Assert.Equal(1, _gateway.GetCallCount(nameof(_gateway.RemoveAsync)));
+            Assert.False(_gateway.LastRemoveDeleteFiles);
+            var retained = await _downloadRepository.GetByIdAsync(download.Id);
+            Assert.NotNull(retained);
+            Assert.Equal(DownloadStatus.ImportBlocked, retained!.Status);
+            var history = await GetCleanupHistoryAsync(download.Id);
+            Assert.Contains(history.Records, entry => entry.EventType == HistoryEvents.CleanupSucceeded);
+        }
+
+        [Fact]
+        public async Task RunCycleAsync_KeepsBlockedClientEntryWhoseFilesStillExist()
+        {
+            var client = await CreateRemovableClientAsync("remove");
+            _gateway.RemoveResult = true;
+
+            var download = new DownloadBuilder()
+                .WithDownloadClientConfiguration(client)
+                .WithTorrentHash("HASH-BLOCKED-2")
+                .Build();
+            download.Status = DownloadStatus.ImportBlocked;
+            await _downloadRepository.AddAsync(download);
+
+            // Same torrent errored transiently — files still present, not missingFiles.
+            _gateway.QueueResult =
+            [
+                new QueueItem
+                {
+                    Id = "hash-blocked-2",
+                    Title = download.Title,
+                    Status = "failed",
+                    ClientFailureReason = "error",
+                    DownloadClientId = client.Id
+                }
+            ];
+
+            await _provider.GetRequiredService<IMovedDownloadCleanupProcessor>()
+                .RunCycleAsync(CancellationToken.None);
+
+            Assert.Equal(0, _gateway.GetCallCount(nameof(_gateway.RemoveAsync)));
+        }
+
+        [Fact]
+        public async Task RunCycleAsync_NeverTouchesActiveDownloadsInBlockedEntryCleanup()
+        {
+            var client = await CreateRemovableClientAsync("remove");
+            _gateway.RemoveResult = true;
+
+            var download = new DownloadBuilder()
+                .WithDownloadClientConfiguration(client)
+                .WithTorrentHash("HASH-ACTIVE-1")
+                .Build();
+            download.Status = DownloadStatus.Downloading;
+            await _downloadRepository.AddAsync(download);
+
+            _gateway.QueueResult =
+            [
+                new QueueItem
+                {
+                    Id = "hash-active-1",
+                    Title = download.Title,
+                    Status = "failed",
+                    ClientFailureReason = "missingFiles",
+                    DownloadClientId = client.Id
+                }
+            ];
+
+            await _provider.GetRequiredService<IMovedDownloadCleanupProcessor>()
+                .RunCycleAsync(CancellationToken.None);
+
+            Assert.Equal(0, _gateway.GetCallCount(nameof(_gateway.RemoveAsync)));
+        }
+
         private async Task<DownloadClientConfiguration> CreateRemovableClientAsync(string policy)
         {
             var client = await CreateDownloadClientConfiguration();

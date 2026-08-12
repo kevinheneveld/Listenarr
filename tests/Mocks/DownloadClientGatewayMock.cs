@@ -56,11 +56,13 @@ namespace Listenarr.Tests.Mocks
             return Task.FromResult(RemoveResult);
         }
 
+        public List<QueueItem> QueueResult { get; set; } = [];
+
         public async Task<List<QueueItem>> GetQueueAsync(DownloadClientConfiguration client, CancellationToken ct = default)
         {
             RegisterMethodCall(nameof(GetQueueAsync));
 
-            return [];
+            return QueueResult;
         }
 
         public async Task<List<(string Id, string Name)>> GetRecentHistoryAsync(DownloadClientConfiguration client, int limit = 100, CancellationToken ct = default)

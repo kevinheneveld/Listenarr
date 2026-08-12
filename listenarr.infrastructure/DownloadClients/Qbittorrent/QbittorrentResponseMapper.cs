@@ -48,6 +48,9 @@ namespace Listenarr.Infrastructure.DownloadClients.Qbittorrent
                 Title = name,
                 Quality = "Unknown",
                 Status = status,
+                // Preserve the raw client state for failed items — "missingFiles"
+                // vs a transient "error" is a meaningful difference to cleanup.
+                ClientFailureReason = status == "failed" ? state : null,
                 Progress = progress,
                 Size = size,
                 Downloaded = downloaded,
