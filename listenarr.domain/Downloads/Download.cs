@@ -432,6 +432,18 @@ namespace Listenarr.Domain.Downloads
                 return 3;
             }
 
+            // A download that already carries its own client item id is matched
+            // by id or not at all. Title similarity across DIFFERENT ids means a
+            // same-named sibling or a stale client history entry for a previous
+            // grab of the same release (live case: a fresh NZB re-grab was
+            // title-matched to a months-old completed history entry, had its
+            // client id overwritten, and imported the stale folder before the
+            // real download had finished).
+            if (!string.IsNullOrWhiteSpace(clientDownloadId) || !string.IsNullOrWhiteSpace(torrentHash))
+            {
+                return 0;
+            }
+
             if (TitleUtils.TitlesExactlyMatch(download.Title, Title))
             {
                 return 2;
