@@ -34,11 +34,14 @@ namespace Listenarr.Application.Downloads
         public const int MusicMinFileCount = 10;
         public const double MusicMaxMedianSeconds = 300;
 
-        // ...unless the batch runs this long in total. No music album is 4+
-        // hours, but classic usenet audiobook rips chopped into ~5-minute
-        // tracks are (live case: a 21-hour book in 258 files, median 291s,
-        // rejected as "music").
-        public const double MusicMaxTotalSeconds = 4 * 3600;
+        // ...unless the batch runs this long in total. Music albums rarely
+        // exceed ~2.5 hours even as doubles, but chopped-track audiobook rips
+        // routinely do (live cases: a 21-hour book in 258 files rejected as
+        // "music"; then a legitimate 3.2-hour Twain collection in 47 files
+        // rejected under a 4-hour cutoff). A rare long box set that slips
+        // through lands in the verification engine's lap, which is the right
+        // failure direction — a false reject here blocks a real book forever.
+        public const double MusicMaxTotalSeconds = 2.5 * 3600;
 
         public sealed record Result(bool Rejected, string? Reason);
 

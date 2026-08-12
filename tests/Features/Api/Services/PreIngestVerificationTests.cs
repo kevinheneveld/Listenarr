@@ -44,12 +44,21 @@ namespace Listenarr.Tests.Features.Api.Services
         }
 
         [Fact]
-        public void Inspect_StillRejectsLongBoxSetShapedAlbum_UnderTotalCutoff()
+        public void Inspect_StillRejectsAlbumShapedBatch_UnderTotalCutoff()
         {
-            // 3.9 hours of ~3.3-minute tracks stays under the 4-hour total
+            // 2.2 hours of ~3.3-minute tracks stays under the 2.5-hour total
             // cutoff and keeps the music rejection.
-            var result = PreIngestVerification.Inspect(Files(70, 200));
+            var result = PreIngestVerification.Inspect(Files(40, 200));
             Assert.True(result.Rejected);
+        }
+
+        [Fact]
+        public void Inspect_KeepsShortChoppedAudiobook_AboveTotalCutoff()
+        {
+            // Live regression: Twain's Letters from Hawaii — 3.2 hours in 47
+            // four-minute tracks — is a real book, not an album.
+            var result = PreIngestVerification.Inspect(Files(47, 254));
+            Assert.False(result.Rejected);
         }
 
         [Fact]
