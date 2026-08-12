@@ -480,4 +480,96 @@ describe('ActivityView', () => {
     expect(wrapper.text()).toContain('Some queue data is unavailable')
     expect(wrapper.text()).toContain('qBittorrent unavailable after a timeout')
   })
+
+  // Adapted from upstream #599's DDL activity tests: in the server-feed architecture,
+  // DDL downloads arrive as ordinary activity items (ActivitySummary classifies them
+  // like any client), so the assertions target the feed + live-overlay path instead
+  // of the removed client-side downloadsStore merging.
+  it('renders a DDL activity item once, with live queue progress overlaid', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse(
+          [
+            makeItem({
+              id: 'ddl-alice',
+              title: 'Alice in Wonderland',
+              category: 'InProgress',
+              status: 'Downloading',
+              progress: 10,
+              downloadClientId: 'DDL',
+              downloadClientName: 'Direct Download',
+            }),
+          ],
+          { inProgress: 1 },
+        ),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+
+    // The live queue snapshot carries fresher progress for the same tracked id.
+    queueUpdateHandler?.([
+      {
+        id: 'ddl-alice',
+        title: 'Alice in Wonderland',
+        status: 'downloading',
+        progress: 42,
+        downloadClientId: 'DDL',
+      },
+    ])
+    await flushPromises()
+
+    expect(vm.allActivityItems).toHaveLength(1)
+    expect(vm.allActivityItems[0]?.id).toBe('ddl-alice')
+    expect(vm.allActivityItems[0]?.progress).toBe(42)
+    expect(vm.allActivityItems[0]?.downloadClientType).toBe('DDL')
+    expect(vm.summaryChips.find((c) => c.key === 'inprogress')?.count).toBe(1)
+  })
+
+  it('overlays live queue progress on an in-progress external item', async () => {
+    mockSignalR()
+    mockApi({
+      getActivity: vi.fn(async () =>
+        makeResponse(
+          [
+            makeItem({
+              id: 'tracked-artemis',
+              title: 'Artemis',
+              category: 'InProgress',
+              status: 'Downloading',
+              progress: 10,
+              downloadClientId: 'qb-1',
+              downloadClientName: 'QBIT',
+              downloadClientType: 'qbittorrent',
+            }),
+          ],
+          { inProgress: 1 },
+        ),
+      ),
+    })
+    mockLibraryStore()
+
+    const wrapper = await mountActivityView()
+    const vm = wrapper.vm as unknown as ActivityViewVm
+
+    queueUpdateHandler?.([
+      {
+        id: 'tracked-artemis',
+        title: 'Artemis',
+        status: 'downloading',
+        progress: 100,
+        downloadSpeed: 77300,
+        downloadClientId: 'qb-1',
+      },
+    ])
+    await flushPromises()
+
+    expect(vm.allActivityItems).toHaveLength(1)
+    expect(vm.allActivityItems[0]?.id).toBe('tracked-artemis')
+    expect(vm.allActivityItems[0]?.progress).toBe(100)
+    expect(vm.allActivityItems[0]?.title).toBe('Artemis')
+  })
 })

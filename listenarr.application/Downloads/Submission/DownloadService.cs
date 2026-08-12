@@ -232,7 +232,9 @@ namespace Listenarr.Application.Downloads.Submission
             {
                 submissionResult = await clientGateway.AddAsync(downloadClient, prepared);
                 if (submissionResult == null || string.IsNullOrWhiteSpace(submissionResult.ExternalId))
+                {
                     throw new DownloadClientSubmissionException("The download client did not return a verified download identifier.");
+                }
             }
             catch (OperationCanceledException)
             {
