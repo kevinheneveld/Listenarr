@@ -47,7 +47,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             var ab = await _audiobookRepository.AddAsync(new AudiobookBuilder()
                 .WithTitle("Titans")
                 .WithBasePath(folder)
-                .WithMonitored(false)
+                .WithMonitored(true)
                 .Build());
 
             // Wrong content on disk + a flagged verdict describing it.
@@ -78,7 +78,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Empty(await _audiobookFileRepository.GetByAudiobookIdAsync(ab.Id));
             Assert.False(File.Exists(path));
 
-            // Verdict reset, book re-monitored.
+            // Verdict reset, monitored state preserved.
             var reloaded = await _audiobookRepository.GetByIdAsync(ab.Id);
             Assert.Equal(VerificationStatus.Unverified, reloaded!.VerificationStatus);
             Assert.Null(reloaded.VerificationConfidence);
@@ -141,5 +141,30 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             await controller.RejectNotAudiobook(ab.Id, CancellationToken.None);
             Assert.Single(await blockedRepo.GetByAudiobookIdAsync(ab.Id));
         }
+
+        [Fact]
+        [Trait("Scenario", "UnmonitoredBookStaysUnmonitored_NoSearchStarted")]
+        public async Task RejectNotAudiobook_UnmonitoredBookStaysUnmonitored_AndStartsNoSearch()
+        {
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var folder = FileService.GetTempDirectory("not-audiobook-parked");
+            // A book deliberately unmonitored (e.g. benched against title-fallback
+            // grab loops) must not be re-activated by wrong-content remediation.
+            var ab = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Parked")
+                .WithBasePath(folder)
+                .WithMonitored(false)
+                .Build());
+
+            var result = await controller.RejectNotAudiobook(ab.Id, CancellationToken.None);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            var payload = ToJson(ok.Value);
+            Assert.False(payload.GetProperty("searchStarted").GetBoolean());
+
+            var reloaded = await _audiobookRepository.GetByIdAsync(ab.Id);
+            Assert.False(reloaded!.Monitored);
+        }
+
     }
 }

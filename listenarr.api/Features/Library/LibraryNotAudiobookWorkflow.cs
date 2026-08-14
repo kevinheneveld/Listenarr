@@ -101,8 +101,12 @@ namespace Listenarr.Api.Features.Library
                     }
                 }
 
-                // Keep the book tracked so the re-search can fill it with the correct release.
-                audiobook.Monitored = true;
+                // A monitored book stays tracked so the re-search can fill it with
+                // the correct release — but a deliberately UNmonitored book must
+                // stay unmonitored. Forcing true here let the wrong-content
+                // auto-rejector silently re-activate books benched against
+                // title-fallback grab loops whenever a straggler import for them
+                // was rejected.
 
                 // Any verification verdict described the audio that was just deleted —
                 // without this reset the empty record keeps wearing a stale "Needs
@@ -211,7 +215,7 @@ namespace Listenarr.Api.Features.Library
                 // outlives this request; failures only mean the next automatic
                 // cycle picks the book up instead.
                 var searchStarted = false;
-                if (_searchInvoker != null)
+                if (_searchInvoker != null && audiobook.Monitored)
                 {
                     searchStarted = true;
                     var searchTask = _searchInvoker.SearchAudiobookNowAsync(id, CancellationToken.None);
