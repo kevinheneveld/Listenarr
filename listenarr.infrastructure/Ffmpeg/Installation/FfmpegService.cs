@@ -17,6 +17,7 @@
  */
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
+using Listenarr.Domain.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Infrastructure.Ffmpeg.Installation
@@ -327,7 +328,7 @@ namespace Listenarr.Infrastructure.Ffmpeg.Installation
                             chosen = chosenFull;
                             dest = destFull;
 
-                            if (string.Equals(chosenFull, destFull, StringComparison.OrdinalIgnoreCase))
+                            if (FileUtils.AreFilesystemPathsEquivalentForCurrentOs(chosenFull, destFull))
                             {
                                 _logger.LogInformation("ffprobe already extracted at destination {Dest}", destFull);
                             }

@@ -123,11 +123,16 @@ namespace Listenarr.Api.Features.Library
             CancellationToken ct = default)
         {
             var failed = (await moveJobRepository.GetAllAsync(ct))
-                .Where(j => string.Equals(j.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+                .Where(j => j.Status == MoveJobStatus.Failed)
                 .ToList();
             foreach (var job in failed)
             {
-                await moveQueue.UpdateJobStatusAsync(job.Id, "Dismissed", job.Error, ct);
+                // Post-#717 there is no Dismissed state and status writes go through
+                // lease-holding workers. Dismissal of a terminal job is a plain
+                // repository update to Superseded (acknowledged, out of the failed
+                // banner) with the original error preserved on the row.
+                job.Status = MoveJobStatus.Superseded;
+                await moveJobRepository.UpdateAsync(job, ct);
             }
             return Ok(new { dismissed = failed.Count });
         }

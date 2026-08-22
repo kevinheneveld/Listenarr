@@ -520,6 +520,33 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.ToTable("AuthorCacheEntries");
                 });
 
+            modelBuilder.Entity("Listenarr.Domain.Audiobooks.AuthorMonitoringExclusion", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Asin")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AuthorName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TitleAuthorKey")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AuthorMonitoringExclusions");
+                });
+
             modelBuilder.Entity("Listenarr.Domain.Audiobooks.MonitoredAuthor", b =>
                 {
                     b.Property<int>("Id")
@@ -652,6 +679,9 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Error")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReplaceStubTarget")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RequestedPath")
@@ -906,6 +936,15 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Listenarr.Domain.Configuration.ApplicationSettings", b =>
                 {
+                    b.Property<int>("AutomaticSearchBookDelaySeconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AutomaticSearchIntervalHours")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("AutomaticSearchTitleOnlyFallback")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
@@ -1043,6 +1082,10 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.Property<int>("UnmatchedScanConcurrency")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("WebhookUrl")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1059,6 +1102,9 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                 {
                     b.Property<string>("Id")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("ActiveAudiobookDeduplicationKey")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Album")
                         .IsRequired()
@@ -1158,6 +1204,10 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ActiveAudiobookDeduplicationKey")
+                        .IsUnique()
+                        .HasFilter("\"ActiveAudiobookDeduplicationKey\" IS NOT NULL");
+
                     b.HasIndex("CompletedAt");
 
                     b.HasIndex("DownloadClientId");
@@ -1227,6 +1277,10 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ActiveDeduplicationKey")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("TEXT");
 
@@ -1280,6 +1334,10 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ActiveDeduplicationKey")
+                        .IsUnique()
+                        .HasFilter("\"ActiveDeduplicationKey\" IS NOT NULL");
 
                     b.HasIndex("Status");
 

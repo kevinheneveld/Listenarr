@@ -96,10 +96,14 @@ namespace Listenarr.Tests.Features.Application.Configuration.Core
                 NotifyOnImport = true,
             });
 
-            // Simulate a settings save from a UI payload that omits the Audiobookshelf fields
+            // Simulate a settings save from a UI payload that omits the Audiobookshelf
+            // fields. The optimistic-concurrency contract requires carrying the current
+            // Version, exactly as the settings UI does after loading.
+            var current = await svc.GetApplicationSettingsAsync();
             await svc.SaveApplicationSettingsAsync(new ApplicationSettings
             {
                 Id = 1,
+                Version = current.Version,
                 OutputPath = FileUtils.GetAbsolutePath("partial-update"),
             });
 

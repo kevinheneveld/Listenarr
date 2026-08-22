@@ -29,6 +29,8 @@ namespace Listenarr.Tests.Features.Api.Features.Library
     {
         private async Task<(Audiobook source, AudiobookFile file)> CreateSourceWithFileAsync(string folder = "extract-src", string fileName = "wrong-book.m4b")
         {
+            // #717: destination mutations require the path inside an authorized root.
+            await AddAuthorizedRootAsync(FileService.GetTempPath());
             var sourceFolder = FileService.GetTempDirectory(folder);
             var source = await _audiobookRepository.AddAsync(new AudiobookBuilder()
                 .WithTitle("Anthology Record")

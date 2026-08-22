@@ -17,6 +17,7 @@
  */
 
 using Listenarr.Api.Attributes;
+using Listenarr.Application.Common.Exceptions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
@@ -109,7 +110,7 @@ namespace Listenarr.Api.Features.Configuration
                 await _configurationService.SaveApplicationSettingsAsync(settings);
                 _cache?.Remove("default-search-region");
 
-                var savedSettings = PrepareApplicationSettingsResponse(await _configurationService.GetApplicationSettingsAsync());
+                var savedSettings = PrepareApplicationSettingsResponse(settings);
                 savedSettings.AdminUsername = null;
                 savedSettings.AdminPassword = null;
 
@@ -126,18 +127,17 @@ namespace Listenarr.Api.Features.Configuration
 
                 return Ok(savedSettings);
             }
-            catch (Listenarr.Application.Common.Exceptions.ApplicationConflictException ex)
+            catch (ApplicationConflictException ex)
             {
-                // Optimistic-concurrency loss (another request bumped the
-                // settings row) is the caller's to resolve by reloading —
-                // don't bury it in the generic 500.
-                _logger.LogWarning("Application settings save rejected: {Message}", ex.Message);
-                return Conflict(new { error = "settings_concurrency_conflict", message = ex.Message });
+                _logger.LogInformation(
+                    ex,
+                    "Application settings save rejected because the client version is stale or missing");
+                return Conflict(new { code = ex.Code, message = ex.SafeDetail });
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
                 _logger.LogError(ex, "Error saving application settings");
-                return StatusCode(500, new { error = "Failed to save application settings", message = ex.Message });
+                return StatusCode(500, new { error = "Failed to save application settings" });
             }
         }
 

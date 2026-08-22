@@ -37,6 +37,8 @@ namespace Listenarr.Tests.Features.Api.Features.Library
 
         private async Task<Audiobook> CreateAudiobookWithFolderAsync(string folderName)
         {
+            // #717: destination mutations require the path inside an authorized root.
+            await AddAuthorizedRootAsync(FileService.GetTempPath());
             var folder = FileService.GetTempDirectory(folderName);
             return await _audiobookRepository.AddAsync(new AudiobookBuilder()
                 .WithTitle("The Tainted Cup")

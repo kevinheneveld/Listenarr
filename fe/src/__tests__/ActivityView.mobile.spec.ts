@@ -92,6 +92,22 @@ describe('ActivityView mobile virtualization', () => {
       }),
     }))
 
+    vi.doMock('@/stores/downloads', () => ({
+      useDownloadsStore: () => ({
+        activeDownloads: [],
+        completedDownloads: [],
+        failedDownloads: [],
+        loadDownloads: vi.fn(async () => undefined),
+      }),
+    }))
+
+    vi.doMock('@/stores/moveJobs', () => ({
+      useMoveJobsStore: () => ({
+        trackedJobs: [],
+        start: vi.fn(),
+      }),
+    }))
+
     vi.doMock('@/services/errorTracking', () => ({
       errorTracking: {
         captureException: vi.fn(),

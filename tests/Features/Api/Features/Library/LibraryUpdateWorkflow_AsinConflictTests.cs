@@ -17,6 +17,8 @@
  */
 using System.Text.Json;
 using Listenarr.Api.Features.Library;
+using Listenarr.Application.Audiobooks.Jobs;
+using Listenarr.Infrastructure.FileSystem;
 using Listenarr.Infrastructure.Persistence.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
@@ -53,8 +55,16 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             context.Database.Migrate();
 
             var repo = new AudiobookRepository(context);
-            var scopeFactory = new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
-            var workflow = new LibraryUpdateWorkflow(repo, scopeFactory, NullLogger<LibraryUpdateWorkflow>.Instance);
+            var services = new ServiceCollection();
+            services.AddSingleton<IAudiobookRepository>(repo);
+            var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+            var rewriteService = new Mock<IAudiobookDestinationRewriteService>(MockBehavior.Loose);
+            var workflow = new LibraryUpdateWorkflow(
+                scopeFactory,
+                rewriteService.Object,
+                new AudiobookOperationCoordinator(),
+                new FileSystemSemanticsResolver(),
+                NullLogger<LibraryUpdateWorkflow>.Instance);
             return (connection, context, workflow);
         }
 
@@ -78,7 +88,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             });
             var mislabeled = await repo.AddAsync(new Audiobook { Title = "The Ring", Authors = new List<string> { "Piers Anthony" } });
 
-            var result = await workflow.UpdateAsync(mislabeled.Id, new Audiobook { Asin = "B0DZTMXQZ7" });
+            var result = await workflow.UpdateAsync(mislabeled.Id, new AudiobookUpdateRequest { Asin = "B0DZTMXQZ7" });
 
             var conflictResult = Assert.IsType<ConflictObjectResult>(result);
             var payload = ToJson(conflictResult.Value);

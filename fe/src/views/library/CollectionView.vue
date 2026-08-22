@@ -856,6 +856,7 @@
                 type="checkbox"
                 class="checkbox-input"
                 aria-label="Remove all files in the audiobook folder from disk"
+                :disabled="!filesystemReadinessStore.filesystemReady"
               />
               <div class="checkbox-content">
                 <span class="checkbox-title"
@@ -876,6 +877,7 @@
                 type="checkbox"
                 class="checkbox-input"
                 aria-label="Remove audiobook folder from disk"
+                :disabled="!filesystemReadinessStore.filesystemReady"
               />
               <div class="checkbox-content">
                 <span class="checkbox-title">Also remove the audiobook folder</span>
@@ -952,6 +954,7 @@ import { apiService } from '@/services/api'
 import { useLibraryStore } from '@/stores/library'
 import { useConfigurationStore } from '@/stores/configuration'
 import { useDownloadsStore } from '@/stores/downloads'
+import { useFilesystemReadinessStore } from '@/stores/filesystemReadiness'
 import { errorTracking } from '@/services/errorTracking'
 import { useToast } from '@/services/toastService'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
@@ -1016,6 +1019,7 @@ const router = useRouter()
 const libraryStore = useLibraryStore()
 const configStore = useConfigurationStore()
 const downloadsStore = useDownloadsStore()
+const filesystemReadinessStore = useFilesystemReadinessStore()
 const toast = useToast()
 const { getProtectedImageSrc } = useProtectedImages()
 

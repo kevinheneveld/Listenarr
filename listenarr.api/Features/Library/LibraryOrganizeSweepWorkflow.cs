@@ -37,6 +37,7 @@ namespace Listenarr.Api.Features.Library
         private readonly IConfigurationService _configurationService;
         private readonly IFileNamingService _fileNamingService;
         private readonly IMoveQueueService? _moveQueueService;
+        private readonly LibraryMoveWorkflow? _moveWorkflow;
         private readonly IOrganizeFilesystem _organizeFilesystem;
         private readonly ILogger<LibraryOrganizeSweepWorkflow> _logger;
 
@@ -49,7 +50,8 @@ namespace Listenarr.Api.Features.Library
             IFileNamingService fileNamingService,
             IOrganizeFilesystem organizeFilesystem,
             ILogger<LibraryOrganizeSweepWorkflow> logger,
-            IMoveQueueService? moveQueueService = null)
+            IMoveQueueService? moveQueueService = null,
+            LibraryMoveWorkflow? moveWorkflow = null)
         {
             _repo = repo;
             _audioFileRepository = audioFileRepository;
@@ -58,6 +60,7 @@ namespace Listenarr.Api.Features.Library
             _configurationService = configurationService;
             _fileNamingService = fileNamingService;
             _moveQueueService = moveQueueService;
+            _moveWorkflow = moveWorkflow;
             _organizeFilesystem = organizeFilesystem;
             _logger = logger;
         }
@@ -383,18 +386,51 @@ namespace Listenarr.Api.Features.Library
                 if (!targets.TryGetValue(audiobook.Id, out var target)) continue;
                 try
                 {
-                    var sourcePath = NormalizeOrganizePath(audiobook.BasePath);
-                    var jobId = await _moveQueueService.EnqueueMoveAsync(
-                        audiobook.Id, target, sourcePath,
-                        replaceStubTarget: replaceStubIds.Contains(audiobook.Id));
-                    result.Queued++;
-                    result.QueuedJobs.Add(new OrganizeQueuedJobDto
+                    // Physical moves must go through the durable move workflow so the
+                    // target-boundary generation authorization and source manifest are
+                    // resolved; enqueuing by bare path is no longer possible.
+                    if (_moveWorkflow == null)
                     {
-                        JobId = jobId.ToString(),
-                        AudiobookId = audiobook.Id,
-                        AudiobookTitle = audiobook.Title,
-                        TargetPath = target,
-                    });
+                        throw new InvalidOperationException("Move workflow not available");
+                    }
+
+                    var sourcePath = NormalizeOrganizePath(audiobook.BasePath);
+                    var enqueueResult = await _moveWorkflow.EnqueueAsync(
+                        audiobook.Id,
+                        new LibraryController.MoveRequest
+                        {
+                            DestinationPath = target,
+                            SourcePath = sourcePath,
+                            MoveFiles = true,
+                            ReplaceStubTarget = replaceStubIds.Contains(audiobook.Id),
+                        },
+                        ct);
+                    if (enqueueResult is AcceptedResult { Value: MoveEnqueuedResponse enqueued })
+                    {
+                        result.Queued++;
+                        result.QueuedJobs.Add(new OrganizeQueuedJobDto
+                        {
+                            JobId = enqueued.JobId.ToString(),
+                            AudiobookId = audiobook.Id,
+                            AudiobookTitle = audiobook.Title,
+                            TargetPath = target,
+                        });
+                    }
+                    else
+                    {
+                        var reason = enqueueResult is ObjectResult { Value: not null } obj
+                            ? obj.Value!.ToString()
+                            : enqueueResult.GetType().Name;
+                        _logger.LogWarning(
+                            "Organize move for audiobook {AudiobookId} was not accepted: {Reason}",
+                            audiobook.Id, reason);
+                        result.FailedToQueue++;
+                        result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                        {
+                            AudiobookId = audiobook.Id,
+                            Reason = $"Move not accepted: {reason}",
+                        });
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                 {

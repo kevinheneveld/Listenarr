@@ -51,27 +51,29 @@ namespace Listenarr.Api.Features.Library
             var all = await _moveJobRepository.GetAllAsync(ct);
 
             var byStatus = all
-                .GroupBy(j => j.Status ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+                .GroupBy(j => j.Status)
+                .ToDictionary(g => g.Key, g => g.Count());
 
-            int CountOf(string s) => byStatus.TryGetValue(s, out var n) ? n : 0;
+            int CountOf(MoveJobStatus s) => byStatus.TryGetValue(s, out var n) ? n : 0;
 
             var recentCompleted = all
-                .Where(j => string.Equals(j.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                .Where(j => j.Status == MoveJobStatus.Completed)
                 .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
                 .Take(recentLimit)
                 .ToList();
             var recentFailed = all
-                .Where(j => string.Equals(j.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+                .Where(j => j.Status == MoveJobStatus.Failed)
                 .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
                 .Take(recentLimit)
                 .ToList();
+            // Post-#717 "Processing" is MoveJobStatus.Running (RetryScheduled counts
+            // as in-flight for the banner, same as the old retry-pending semantics).
             var processingNow = all
-                .Where(j => string.Equals(j.Status, "Processing", StringComparison.OrdinalIgnoreCase))
+                .Where(j => j.Status is MoveJobStatus.Running or MoveJobStatus.RetryScheduled)
                 .OrderByDescending(j => j.UpdatedAt ?? j.EnqueuedAt)
                 .ToList();
             var queuedNow = all
-                .Where(j => string.Equals(j.Status, "Queued", StringComparison.OrdinalIgnoreCase))
+                .Where(j => j.Status == MoveJobStatus.Queued)
                 .ToList();
 
             // File counts + byte totals + titles for the in-scope audiobooks so
@@ -134,13 +136,13 @@ namespace Listenarr.Api.Features.Library
             return new OkObjectResult(new
             {
                 total = all.Count,
-                queued = CountOf("Queued"),
-                processing = CountOf("Processing"),
-                completed = CountOf("Completed"),
-                failed = CountOf("Failed"),
+                queued = CountOf(MoveJobStatus.Queued),
+                processing = CountOf(MoveJobStatus.Running) + CountOf(MoveJobStatus.RetryScheduled),
+                completed = CountOf(MoveJobStatus.Completed),
+                failed = CountOf(MoveJobStatus.Failed),
                 // Any status the server hasn't seen the producer use yet falls
                 // into a residual bucket so the FE never silently drops a count.
-                other = all.Count - CountOf("Queued") - CountOf("Processing") - CountOf("Completed") - CountOf("Failed"),
+                other = all.Count - CountOf(MoveJobStatus.Queued) - CountOf(MoveJobStatus.Running) - CountOf(MoveJobStatus.RetryScheduled) - CountOf(MoveJobStatus.Completed) - CountOf(MoveJobStatus.Failed),
                 queuedFiles,
                 queuedBytes,
                 currentlyProcessing = processingNow.Select(Project).ToList(),

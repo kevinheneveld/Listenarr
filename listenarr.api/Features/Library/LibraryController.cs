@@ -245,11 +245,14 @@ namespace Listenarr.Api.Features.Library
         /// Add a new audiobook to the library from search metadata.
         /// </summary>
         /// <param name="request">Audiobook metadata, monitoring preference, quality profile, and optional auto-search flag.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
         /// <returns>The newly created audiobook record.</returns>
         [HttpPost("add")]
-        public async Task<IActionResult> AddToLibrary([FromBody] AddToLibraryRequest request)
+        public async Task<IActionResult> AddToLibrary(
+            [FromBody] AddToLibraryRequest request,
+            CancellationToken cancellationToken = default)
         {
-            return await _addWorkflow.AddAsync(request);
+            return await _addWorkflow.AddAsync(request, cancellationToken);
         }
 
         /// <summary>
@@ -347,14 +350,21 @@ namespace Listenarr.Api.Features.Library
         }
 
         /// <summary>
-        /// Update an existing audiobook's metadata and settings. Supports partial updates — only non-null fields are applied.
+        /// Update an existing audiobook's metadata and settings. Supports partial updates; omitted fields are left unchanged.
         /// </summary>
         /// <param name="id">Audiobook ID.</param>
-        /// <param name="updatedAudiobook">Fields to update (null fields are left unchanged).</param>
+        /// <param name="request">Fields to update.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateAudiobook(int id, [FromBody] Audiobook updatedAudiobook)
+        public async Task<IActionResult> UpdateAudiobook(
+            int id,
+            [FromBody] AudiobookUpdateRequest request,
+            CancellationToken cancellationToken = default)
         {
-            return await _updateWorkflow.UpdateAsync(id, updatedAudiobook);
+            return await _updateWorkflow.UpdateAsync(
+                id,
+                request,
+                cancellationToken);
         }
 
         /// <summary>
@@ -363,31 +373,52 @@ namespace Listenarr.Api.Features.Library
         /// <param name="id">Audiobook ID.</param>
         /// <param name="deleteFiles">When true, delete all files within the audiobook folder when it can be done safely; otherwise fall back to tracked audiobook files before removing the library record.</param>
         /// <param name="deleteFolder">When true, also delete the audiobook folder when it can be done safely.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
         [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteAudiobook(int id, [FromQuery] bool deleteFiles = false, [FromQuery] bool deleteFolder = false, [FromQuery] bool excludeFromAuthorMonitoring = false)
+        public async Task<IActionResult> DeleteAudiobook(
+            int id,
+            [FromQuery] bool deleteFiles = false,
+            [FromQuery] bool deleteFolder = false,
+            [FromQuery] bool excludeFromAuthorMonitoring = false,
+            CancellationToken cancellationToken = default)
         {
-            return await _deleteWorkflow.DeleteAsync(id, deleteFiles, deleteFolder, excludeFromAuthorMonitoring);
+            return await _deleteWorkflow.DeleteAsync(
+                id,
+                deleteFiles,
+                deleteFolder,
+                excludeFromAuthorMonitoring,
+                cancellationToken);
         }
 
         /// <summary>
         /// Delete multiple audiobooks in a single transaction.
         /// </summary>
         /// <param name="request">List of audiobook IDs to delete.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
         /// <returns>Summary with deleted count, image cleanup count, and any per-item errors.</returns>
         [HttpPost("delete-bulk")]
-        public async Task<IActionResult> BulkDeleteAudiobooks([FromBody] BulkDeleteRequest request)
+        public async Task<IActionResult> BulkDeleteAudiobooks(
+            [FromBody] BulkDeleteRequest request,
+            CancellationToken cancellationToken = default)
         {
-            return await _bulkEditWorkflow.BulkDeleteAsync(request);
+            return await _bulkEditWorkflow.BulkDeleteAsync(
+                request,
+                cancellationToken);
         }
 
         /// <summary>
         /// Bulk-update fields (monitored status, quality profile, root folder) for multiple audiobooks at once.
         /// </summary>
         /// <param name="request">Audiobook IDs and the fields to update.</param>
+        /// <param name="cancellationToken">Request cancellation token.</param>
         [HttpPost("bulk-update")]
-        public async Task<IActionResult> BulkUpdateAudiobooks([FromBody] BulkUpdateRequest request)
+        public async Task<IActionResult> BulkUpdateAudiobooks(
+            [FromBody] BulkUpdateRequest request,
+            CancellationToken cancellationToken = default)
         {
-            return await _bulkEditWorkflow.BulkUpdateAsync(request);
+            return await _bulkEditWorkflow.BulkUpdateAsync(
+                request,
+                cancellationToken);
         }
 
         /// <summary>
@@ -395,88 +426,15 @@ namespace Listenarr.Api.Features.Library
         /// Optional body: { path: "C:\\some\\folder" } to scan a specific folder instead of the configured output path.
         /// </summary>
         [HttpPost("{id}/scan")]
-        public async Task<IActionResult> ScanAudiobookFiles(int id, [FromBody] ScanRequest? request)
+        public async Task<IActionResult> ScanAudiobookFiles(
+            int id,
+            [FromBody] ScanRequest? request,
+            CancellationToken cancellationToken = default)
         {
-            return await _manualScanWorkflow.ScanAsync(id, request);
+            return await _manualScanWorkflow.ScanAsync(
+                id,
+                request,
+                cancellationToken);
         }
-
-        /// <summary>
-        /// Get in-memory scan job status by jobId (debugging/admin helper).
-        /// </summary>
-        [HttpGet("scan/{jobId}")]
-        public IActionResult GetScanJobStatus(string jobId)
-        {
-            return _scanQueueWorkflow.GetStatus(jobId);
-        }
-
-        /// <summary>
-        /// Enqueue a background job to move an audiobook's files to a new destination path.
-        /// </summary>
-        /// <param name="id">Audiobook ID.</param>
-        /// <param name="request">Move request with destination path and optional source override.</param>
-        /// <returns>Accepted with a job ID that can be polled for progress.</returns>
-        [HttpPost("{id}/move")]
-        public async Task<IActionResult> EnqueueMove(int id, [FromBody] MoveRequest request)
-        {
-            return await _moveWorkflow.EnqueueAsync(id, request);
-        }
-
-        /// <summary>
-        /// Get the current status of a file-move background job.
-        /// </summary>
-        /// <param name="jobId">The GUID returned when the move was enqueued.</param>
-        /// <param name="cancellationToken">Request cancellation token.</param>
-        [HttpGet("move/{jobId}")]
-        public async Task<IActionResult> GetMoveJobStatus(string jobId, CancellationToken cancellationToken)
-        {
-            return await _moveWorkflow.GetStatusAsync(jobId, cancellationToken);
-        }
-
-        /// <summary>
-        /// Re-enqueue a previously failed or completed move job for retry.
-        /// </summary>
-        /// <param name="jobId">Original move job GUID.</param>
-        /// <returns>Accepted with the new job ID.</returns>
-        [HttpPost("move/requeue/{jobId}")]
-        public async Task<IActionResult> RequeueMoveJob(string jobId)
-        {
-            return await _moveWorkflow.RequeueAsync(jobId);
-        }
-
-        /// <summary>
-        /// Re-enqueue a previously failed or completed scan job for retry.
-        /// </summary>
-        /// <param name="jobId">Original scan job GUID.</param>
-        /// <returns>Accepted with the new job ID.</returns>
-        [HttpPost("scan/requeue/{jobId}")]
-        public async Task<IActionResult> RequeueScanJob(string jobId)
-        {
-            return await _scanQueueWorkflow.RequeueAsync(jobId);
-        }
-
-        [HttpPost("rename/preview")]
-        public async Task<IActionResult> PreviewRename([FromBody] BulkRenameRequest request, CancellationToken ct)
-        {
-            return await _renameWorkflow.PreviewAsync(request, ct);
-        }
-
-        [HttpPost("rename")]
-        public async Task<IActionResult> ExecuteRename([FromBody] ExecuteRenameRequest request, CancellationToken ct)
-        {
-            return await _renameWorkflow.ExecuteAsync(request, ct);
-        }
-
-        [HttpPost("{id}/rename/preview")]
-        public async Task<IActionResult> PreviewRenameSingle(int id, CancellationToken ct)
-        {
-            return await _renameWorkflow.PreviewSingleAsync(id, ct);
-        }
-
-        [HttpPost("{id}/rename")]
-        public async Task<IActionResult> ExecuteRenameSingle(int id, [FromBody] RenameOperation operation, CancellationToken ct)
-        {
-            return await _renameWorkflow.ExecuteSingleAsync(id, operation, ct);
-        }
-
     }
 }

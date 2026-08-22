@@ -31,6 +31,8 @@ namespace Listenarr.Tests.Features.Api.Features.Library
 
         private async Task<Audiobook> AddBookAsync(string title, string? asin, string? folder = null, int files = 0)
         {
+            // #717: destination mutations require the path inside an authorized root.
+            await AddAuthorizedRootAsync(FileService.GetTempPath());
             var basePath = folder != null ? FileService.GetTempDirectory(folder) : FileService.GetTempPath();
             var builder = new AudiobookBuilder().WithTitle(title).WithAuthor("Test Author").WithBasePath(basePath);
             var book = builder.Build();
@@ -41,7 +43,17 @@ namespace Listenarr.Tests.Features.Api.Features.Library
                 var path = Path.Join(basePath, $"part{i + 1}.m4b");
                 Directory.CreateDirectory(basePath);
                 await File.WriteAllTextAsync(path, "audio");
-                await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder().WithAudiobook(added).WithPath(path).Build());
+                // #717: destructive filesystem cleanup requires rows carrying both a
+                // resolved path identity and a proven physical generation.
+                var identityResolver = _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>();
+                var fileRow = new AudiobookFileBuilder().WithAudiobook(added).WithPath(path).Build();
+                fileRow.ApplyPathIdentity(path, await identityResolver.ResolveAsync(added, path));
+                using (var parent = Listenarr.Infrastructure.FileSystem.PinnedDirectoryCreation.OpenPinnedHierarchyNoFollow(basePath, createMissing: false))
+                using (var pinned = parent.OpenExistingFileForStableRead(Path.GetFileName(path)))
+                {
+                    fileRow.ApplyPhysicalObjectIdentity(pinned.GetObjectIdentity(), DateTime.UtcNow);
+                }
+                await _audiobookFileRepository.AddAsync(fileRow);
             }
             return added;
         }

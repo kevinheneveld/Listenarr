@@ -26,60 +26,54 @@ namespace Listenarr.Infrastructure.Persistence
     /// so that collection properties are stored as JSON arrays (not primitive roots).
     /// This is safe to run repeatedly and will not modify already-correct rows.
     /// </summary>
-    public class StartupDbNormalizer : IHostedService
+    internal sealed class StartupDbNormalizer(
+        IServiceProvider provider,
+        LibraryFilesystemReadiness filesystemReadiness,
+        ILogger<StartupDbNormalizer> logger) : BackgroundService
     {
-        private readonly IServiceProvider _provider;
-        private readonly ILogger<StartupDbNormalizer> _logger;
-
-        public StartupDbNormalizer(IServiceProvider provider, ILogger<StartupDbNormalizer> logger)
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _provider = provider ?? throw new ArgumentNullException(nameof(provider));
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        }
-
-        public async Task StartAsync(CancellationToken cancellationToken)
-        {
+            await Task.Yield();
             try
             {
-                using var scope = _provider.CreateScope();
+                await filesystemReadiness.WaitUntilSettledAsync(stoppingToken);
+                using var scope = provider.CreateScope();
                 var audiobookRepository = scope.ServiceProvider.GetRequiredService<IAudiobookRepository>();
-                await audiobookRepository.NormalizeJsonColumnsAsync(cancellationToken);
+                await audiobookRepository.NormalizeJsonColumnsAsync(stoppingToken);
 
                 // Cross-process duplicate backstop (upstream issue #6). Not an EF
                 // migration: CREATE UNIQUE INDEX hard-fails on databases that
                 // already hold duplicate ASINs, and a failed migration blocks all
                 // later migrations. This step is idempotent and self-heals on the
                 // boot after the user merges duplicates.
-                var indexResult = await audiobookRepository.EnsureAsinUniqueIndexAsync(cancellationToken);
+                var indexResult = await audiobookRepository.EnsureAsinUniqueIndexAsync(stoppingToken);
                 switch (indexResult.Outcome)
                 {
                     case AsinIndexOutcome.Ensured:
-                        _logger.LogInformation("StartupDbNormalizer: unique-ASIN index ensured.");
+                        logger.LogInformation("StartupDbNormalizer: unique-ASIN index ensured.");
                         break;
                     case AsinIndexOutcome.SkippedDuplicatesExist:
-                        _logger.LogWarning(
+                        logger.LogWarning(
                             "StartupDbNormalizer: unique-ASIN index NOT created — {Groups} duplicate ASIN group(s) exist. "
                             + "Merge them (Settings → General → Duplicates) and the index will be created on the next start.",
                             indexResult.DuplicateAsinGroups);
                         break;
                 }
 
-                _logger.LogInformation("StartupDbNormalizer: normalization pass complete.");
+                logger.LogInformation("StartupDbNormalizer: normalization pass complete.");
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
-                Debug.WriteLine("Suppressed non-fatal exception in catch block.");
+                Debug.WriteLine("StartupDbNormalizer canceled during host shutdown.");
             }
             catch (OperationCanceledException ex)
             {
-                _logger.LogWarning(ex, "StartupDbNormalizer: operation canceled/timed out; skipping normalization pass");
+                logger.LogWarning(ex, "StartupDbNormalizer: operation canceled/timed out; skipping normalization pass");
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
-                _logger.LogError(ex, "StartupDbNormalizer: unexpected error while running normalization");
+                logger.LogError(ex, "StartupDbNormalizer: unexpected error while running normalization");
             }
         }
-
-        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

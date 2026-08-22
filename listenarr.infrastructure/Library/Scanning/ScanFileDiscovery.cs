@@ -12,136 +12,266 @@ using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Infrastructure.Library.Scanning;
 
-internal static class ScanFileDiscovery
+internal static partial class ScanFileDiscovery
 {
-    public static List<string> FindMatchingAudioFiles(
+    public static ScanDiscoveryResult Discover(
+        IFileSystem fileSystem,
         string scanRoot,
         Audiobook audiobook,
         Guid jobId,
         ILogger logger,
-        bool acceptAllFiles = false)
+        FileSystemPathSemantics semantics,
+        IReadOnlyCollection<string>? ownedPaths = null,
+        IReadOnlyDictionary<string, int>? ownershipByCanonicalPath = null,
+        PinnedDirectoryCreation.PinnedDirectoryAnchor? pinnedScanRoot = null)
     {
-        var candidates = CollectCandidates(scanRoot, jobId, logger);
-        // acceptAllFiles: the caller established the scan root is this book's
-        // private folder (see ScanRootBelongsExclusivelyToAsync) — every audio
-        // file in it belongs to the book no matter what a renamer called it.
-        // The name filter below is the shelf-hijack guard for SHARED folders.
-        if (acceptAllFiles)
-        {
-            return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        }
+        ArgumentNullException.ThrowIfNull(fileSystem);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scanRoot);
+        ArgumentNullException.ThrowIfNull(audiobook);
+        ArgumentNullException.ThrowIfNull(logger);
 
-        var titleToken = (audiobook.Title ?? string.Empty).Replace("\"", string.Empty).Trim();
-        var authorToken = audiobook.Authors?.FirstOrDefault() ?? string.Empty;
-        if (string.IsNullOrEmpty(titleToken) && string.IsNullOrEmpty(authorToken))
-        {
-            return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        }
+        var enumeration = CollectCandidates(
+            fileSystem,
+            scanRoot,
+            jobId,
+            logger,
+            semantics,
+            pinnedScanRoot);
+        var issues = enumeration.Issues.ToList();
+        var canonicalRoot = FileSystemPathIdentity.Canonicalize(
+            scanRoot,
+            semantics.Syntax);
+        var owned = new HashSet<string>(
+            (ownedPaths ?? [])
+            .Select(path => FileSystemPathIdentity.Canonicalize(path, semantics.Syntax)),
+            semantics.Comparer);
+        var titleTokens = BuildExpectedTitleTokens(audiobook);
+        var authorTokens = BuildExpectedAuthorTokens(audiobook);
+        var identifierTokens = BuildExpectedIdentifierTokens(audiobook);
+        var preliminary = new List<AttributionEvidence>();
 
-        var foundFiles = new List<string>();
-        var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in candidates.GroupBy(file => Path.GetDirectoryName(file) ?? string.Empty))
+        foreach (var candidate in enumeration.Candidates)
         {
-            var directoryName = Path.GetFileName(group.Key) ?? string.Empty;
-            var groupHasMatch = group.Any(file => Matches(file, directoryName, titleToken));
-            if (groupHasMatch)
+            var canonicalCandidate = FileSystemPathIdentity.Canonicalize(
+                candidate,
+                semantics.Syntax);
+            if (ownershipByCanonicalPath != null
+                && ownershipByCanonicalPath.TryGetValue(canonicalCandidate, out var ownerId)
+                && ownerId != audiobook.Id)
             {
-                foundFiles.AddRange(group.Where(unique.Add));
+                issues.Add(new ScanDiscoveryIssue(
+                    ScanDiscoveryIssueKind.AttributionConflict,
+                    candidate,
+                    $"The file is already owned by audiobook {ownerId}."));
                 continue;
             }
 
-            foreach (var file in group.Where(file =>
-                         Matches(file, directoryName: string.Empty, titleToken)))
+            if (owned.Contains(canonicalCandidate))
             {
-                if (unique.Add(file))
+                preliminary.Add(new AttributionEvidence(
+                    candidate,
+                    TryFindTitleBoundary(
+                        candidate,
+                        canonicalRoot,
+                        titleTokens,
+                        authorTokens,
+                        semantics,
+                        requireAuthorContext: false),
+                    AttributionEvidenceKind.ExistingOwnership));
+                continue;
+            }
+
+            var identifierBoundary = TryFindIdentifierBoundary(
+                candidate,
+                canonicalRoot,
+                identifierTokens,
+                semantics);
+            if (identifierBoundary != null)
+            {
+                preliminary.Add(new AttributionEvidence(
+                    candidate,
+                    identifierBoundary,
+                    AttributionEvidenceKind.StableIdentifier));
+                continue;
+            }
+
+            var titleBoundary = TryFindTitleBoundary(
+                candidate,
+                canonicalRoot,
+                titleTokens,
+                authorTokens,
+                semantics,
+                requireAuthorContext: true);
+            if (titleBoundary != null)
+            {
+                preliminary.Add(new AttributionEvidence(
+                    candidate,
+                    titleBoundary,
+                    AttributionEvidenceKind.BookBoundary));
+                continue;
+            }
+
+            if (FileNameMatchesExpectedTitle(candidate, titleTokens)
+                && HasAuthorContext(
+                    Path.GetDirectoryName(candidate),
+                    canonicalRoot,
+                    authorTokens,
+                    semantics))
+            {
+                preliminary.Add(new AttributionEvidence(
+                    candidate,
+                    Boundary: null,
+                    AttributionEvidenceKind.ExactFileName));
+            }
+        }
+
+        var strongBoundaries = preliminary
+            .Where(evidence => evidence.Kind is
+                AttributionEvidenceKind.StableIdentifier
+                or AttributionEvidenceKind.BookBoundary)
+            .Where(evidence => !string.IsNullOrWhiteSpace(evidence.Boundary))
+            .Select(evidence => evidence.Boundary!)
+            .Distinct(semantics.Comparer)
+            .ToList();
+        var identifierBoundaries = preliminary
+            .Where(evidence => evidence.Kind == AttributionEvidenceKind.StableIdentifier)
+            .Where(evidence => !string.IsNullOrWhiteSpace(evidence.Boundary))
+            .Select(evidence => evidence.Boundary!)
+            .Distinct(semantics.Comparer)
+            .ToList();
+
+        if (strongBoundaries.Count > 1 && identifierBoundaries.Count != 1)
+        {
+            issues.Add(new ScanDiscoveryIssue(
+                ScanDiscoveryIssueKind.AttributionConflict,
+                scanRoot,
+                "Multiple book boundaries matched the same audiobook metadata."));
+            preliminary.RemoveAll(evidence =>
+                evidence.Kind != AttributionEvidenceKind.ExistingOwnership);
+            strongBoundaries.Clear();
+        }
+        else if (identifierBoundaries.Count == 1)
+        {
+            var selectedBoundary = identifierBoundaries[0];
+            strongBoundaries = [selectedBoundary];
+        }
+
+        var selectedStableIdentifierBoundary = identifierBoundaries.Count == 1
+            ? identifierBoundaries[0]
+            : null;
+        if (selectedStableIdentifierBoundary != null)
+        {
+            var rejectedEvidence = preliminary
+                .Where(evidence => evidence.Kind != AttributionEvidenceKind.ExistingOwnership)
+                .Where(evidence => !CanClaimNewPath(
+                    evidence.Path,
+                    selectedStableIdentifierBoundary,
+                    owned,
+                    semantics))
+                .ToList();
+            foreach (var rejected in rejectedEvidence)
+            {
+                issues.Add(new ScanDiscoveryIssue(
+                    ScanDiscoveryIssueKind.OutsideStableIdentifierBoundary,
+                    rejected.Path,
+                    "The candidate was outside the selected stable-identifier directory and was not attributed."));
+            }
+
+            preliminary.RemoveAll(evidence =>
+                !CanClaimNewPath(
+                    evidence.Path,
+                    selectedStableIdentifierBoundary,
+                    owned,
+                    semantics));
+        }
+
+        var attributed = new HashSet<string>(semantics.Comparer);
+        var boundaries = new Dictionary<string, string>(semantics.Comparer);
+        foreach (var evidence in preliminary)
+        {
+            attributed.Add(evidence.Path);
+            if (!string.IsNullOrWhiteSpace(evidence.Boundary))
+            {
+                if (selectedStableIdentifierBoundary == null
+                    || FileSystemPathIdentity.IsSameOrInside(
+                        evidence.Path,
+                        selectedStableIdentifierBoundary,
+                        semantics))
                 {
-                    foundFiles.Add(file);
+                    boundaries[evidence.Path] = evidence.Boundary;
                 }
             }
         }
 
-        return foundFiles;
+        foreach (var boundary in strongBoundaries)
+        {
+            foreach (var candidate in enumeration.Candidates)
+            {
+                var canonicalCandidate = FileSystemPathIdentity.Canonicalize(
+                    candidate,
+                    semantics.Syntax);
+                if (ownershipByCanonicalPath != null
+                    && ownershipByCanonicalPath.TryGetValue(canonicalCandidate, out var ownerId)
+                    && ownerId != audiobook.Id)
+                {
+                    continue;
+                }
+
+                if (CanClaimNewPath(
+                        candidate,
+                        selectedStableIdentifierBoundary,
+                        owned,
+                        semantics)
+                    && FileSystemPathIdentity.IsSameOrInside(
+                        candidate,
+                        boundary,
+                        semantics))
+                {
+                    attributed.Add(candidate);
+                    boundaries[candidate] = boundary;
+                }
+            }
+        }
+
+        return new ScanDiscoveryResult(
+            enumeration.Candidates,
+            attributed.OrderBy(path => path, semantics.Comparer).ToList(),
+            boundaries,
+            enumeration.EnumeratedDirectories,
+            enumeration.DirectoryObjectIdentities,
+            enumeration.FileObjectIdentities,
+            selectedStableIdentifierBoundary,
+            identifierBoundaries.Count > 1,
+            issues);
     }
 
-    private static List<string> CollectCandidates(string scanRoot, Guid jobId, ILogger logger)
+    internal static bool CanClaimNewPath(
+        string path,
+        string? selectedStableIdentifierBoundary,
+        IReadOnlySet<string> ownedCanonicalPaths,
+        FileSystemPathSemantics semantics)
     {
-        var candidates = new List<string>();
-        var directories = new Stack<string>();
-        directories.Push(scanRoot);
-
-        while (directories.Count > 0)
-        {
-            var directory = directories.Pop();
-            try
-            {
-                var normalizedDirectory = Path.GetFullPath(directory);
-                foreach (var file in Directory.EnumerateFiles(normalizedDirectory))
-                {
-                    try
-                    {
-                        if (FileUtils.IsAudioFile(file))
-                        {
-                            candidates.Add(file);
-                        }
-                    }
-                    catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException or StackOverflowException))
-                    {
-                        logger.LogDebug(exception, "Skipped file while scanning {Dir}", normalizedDirectory);
-                    }
-                }
-
-                foreach (var child in Directory.EnumerateDirectories(normalizedDirectory))
-                {
-                    directories.Push(child);
-                }
-            }
-            catch (IOException exception)
-            {
-                logger.LogWarning(exception, "IO error while enumerating directory for scan job {JobId}: {Dir}", jobId, directory);
-            }
-            catch (UnauthorizedAccessException exception)
-            {
-                logger.LogWarning(exception, "Access denied while enumerating directory for scan job {JobId}: {Dir}", jobId, directory);
-            }
-            catch (Exception exception) when (exception is not (OperationCanceledException or OutOfMemoryException or StackOverflowException))
-            {
-                logger.LogWarning(exception, "Unexpected error while enumerating directory for scan job {JobId}: {Dir}", jobId, directory);
-            }
-        }
-
-        return candidates;
+        var canonicalPath = FileSystemPathIdentity.Canonicalize(
+            path,
+            semantics.Syntax);
+        return ownedCanonicalPaths.Contains(canonicalPath)
+            || string.IsNullOrWhiteSpace(selectedStableIdentifierBoundary)
+            || FileSystemPathIdentity.IsSameOrInside(
+                canonicalPath,
+                selectedStableIdentifierBoundary,
+                semantics);
     }
 
-    /// <summary>
-    /// Decides whether a file can be attributed to a specific audiobook from its path alone.
-    /// <para>
-    /// Only the TITLE can do this. The author names a shelf, not a book: in the usual
-    /// <c>{Author}/...</c> layout every file beneath an author's folder contains that author's
-    /// name, so accepting "the path contains the author" as a match attributes every book by
-    /// that author to whichever one is being scanned -- and the resulting common parent is the
-    /// author folder, which then becomes the audiobook's BasePath.
-    /// </para>
-    /// <para>
-    /// A path that carries neither the title nor anything else identifying is simply not
-    /// attributable by path, and is left for the embedded-tag pass to claim. Leaving a file
-    /// unmatched is recoverable; attaching it to the wrong book is not.
-    /// </para>
-    /// </summary>
-    private static bool Matches(
-        string file,
-        string directoryName,
-        string titleToken)
+    private sealed record AttributionEvidence(
+        string Path,
+        string? Boundary,
+        AttributionEvidenceKind Kind);
+
+    private enum AttributionEvidenceKind
     {
-        if (string.IsNullOrEmpty(titleToken))
-        {
-            return false;
-        }
-
-        var fileNameMatchesTitle = Path.GetFileNameWithoutExtension(file)
-            .Contains(titleToken, StringComparison.OrdinalIgnoreCase);
-        var directoryMatchesTitle = !string.IsNullOrEmpty(directoryName)
-            && directoryName.Contains(titleToken, StringComparison.OrdinalIgnoreCase);
-
-        return fileNameMatchesTitle || directoryMatchesTitle;
+        ExistingOwnership,
+        StableIdentifier,
+        BookBoundary,
+        ExactFileName
     }
 }

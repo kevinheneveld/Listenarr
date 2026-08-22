@@ -96,7 +96,13 @@ namespace Listenarr.Api.Features.Library
                     if (string.Equals(fp, currentPath, StringComparison.OrdinalIgnoreCase) || FileUtils.IsPathInsideOf(fp, currentPath))
                     {
                         var rel = Path.GetRelativePath(currentPath, fp);
-                        file.Path = NormalizeOrganizePath(Path.Combine(newBase, rel));
+                        // Path is ownership-controlled post-#717; rebase via the
+                        // targeted reassign (same owner, new path).
+                        await _audioFileRepository.ReassignAsync(
+                            file.Id,
+                            audiobook.Id,
+                            NormalizeOrganizePath(Path.Combine(newBase, rel)),
+                            ct);
                     }
                 }
             }

@@ -124,11 +124,13 @@ export const useConfigurationStore = defineStore('configuration', () => {
     try {
       const settings = await apiService.getApplicationSettings()
       applicationSettings.value = settings
+      return settings
     } catch (error) {
       errorTracking.captureException(error as Error, {
         component: 'ConfigurationStore',
         operation: 'loadApplicationSettings',
       })
+      return null
     } finally {
       isLoading.value = false
     }

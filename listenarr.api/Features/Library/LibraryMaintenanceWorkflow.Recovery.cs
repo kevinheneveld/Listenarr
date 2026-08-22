@@ -140,10 +140,11 @@ namespace Listenarr.Api.Features.Library
                     if (_scanQueueService != null)
                     {
                         var scanJobId = await _scanQueueService.EnqueueScanAsync(
-                            audiobook,
-                            path: target,
-                            forceMetadataRefresh: false,
-                            skipMissingBasePathCleanup: true);
+                            new ScanEnqueueCommand(
+                                audiobook,
+                                Path: target,
+                                AuthorizationMode: ScanAuthorizationMode.PreauthorizedPath,
+                                SkipMissingBasePathCleanup: true));
                         _logger.LogInformation("Recovery: enqueued scan {ScanJobId} for audiobook {AudiobookId} at recovered BasePath {Target}", scanJobId, audiobookId, LogRedaction.SanitizeFilePath(target));
                     }
 
@@ -258,10 +259,11 @@ namespace Listenarr.Api.Features.Library
                     if (_scanQueueService != null)
                     {
                         var scanJobId = await _scanQueueService.EnqueueScanAsync(
-                            audiobook,
-                            path: target,
-                            forceMetadataRefresh: false,
-                            skipMissingBasePathCleanup: true);
+                            new ScanEnqueueCommand(
+                                audiobook,
+                                Path: target,
+                                AuthorizationMode: ScanAuthorizationMode.PreauthorizedPath,
+                                SkipMissingBasePathCleanup: true));
                         _logger.LogInformation(
                             "Root-base recovery: enqueued scan {ScanJobId} for audiobook {AudiobookId} at recovered BasePath {Target}",
                             scanJobId, audiobook.Id, LogRedaction.SanitizeFilePath(target));
@@ -338,10 +340,11 @@ namespace Listenarr.Api.Features.Library
                     if (_scanQueueService != null)
                     {
                         var scanJobId = await _scanQueueService.EnqueueScanAsync(
-                            audiobook,
-                            path: basePath,
-                            forceMetadataRefresh: false,
-                            skipMissingBasePathCleanup: true);
+                            new ScanEnqueueCommand(
+                                audiobook,
+                                Path: basePath,
+                                AuthorizationMode: ScanAuthorizationMode.PreauthorizedPath,
+                                SkipMissingBasePathCleanup: true));
                         _logger.LogInformation(
                             "Orphaned-tracking recovery: enqueued scan {ScanJobId} for audiobook {AudiobookId} at BasePath {BasePath}",
                             scanJobId, audiobook.Id, LogRedaction.SanitizeFilePath(basePath));

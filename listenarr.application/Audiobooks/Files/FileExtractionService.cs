@@ -239,7 +239,11 @@ namespace Listenarr.Application.Audiobooks.Files
 
                 if (!PathsEqual(sourceAbsolutePath, destinationAbsolutePath))
                 {
-                    var moved = await _fileMover.PerformActionOn(FileAction.Move, sourceAbsolutePath, destinationAbsolutePath);
+                    var moved = await _fileMover.PerformActionOn(
+                        FileAction.Move,
+                        sourceAbsolutePath,
+                        destinationAbsolutePath,
+                        Guid.NewGuid());
                     if (!moved)
                     {
                         if (createdNewAudiobook) await TryRemoveAudiobookAsync(destinationAudiobook);
@@ -280,7 +284,11 @@ namespace Listenarr.Application.Audiobooks.Files
                 {
                     if (!PathsEqual(sourceAbsolutePath, destinationAbsolutePath))
                     {
-                        await _fileMover.PerformActionOn(FileAction.Move, destinationAbsolutePath, sourceAbsolutePath);
+                        await _fileMover.PerformActionOn(
+                            FileAction.Move,
+                            destinationAbsolutePath,
+                            sourceAbsolutePath,
+                            Guid.NewGuid());
                     }
                 }
                 catch (Exception revertEx) when (revertEx is not OperationCanceledException && revertEx is not OutOfMemoryException && revertEx is not StackOverflowException)

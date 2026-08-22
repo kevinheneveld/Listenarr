@@ -50,7 +50,7 @@ import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue
 import { useToast } from '@/services/toastService'
 import { logger } from '@/utils/logger'
 import { parseVerificationDetail } from '@/utils/verificationStatus'
-import type { Audiobook, AudibleSearchResult, EmbeddedFileMetadata, AsinConflictSide } from '@/types'
+import type { Audiobook, AudibleSearchResult, AudiobookUpdateRequest, EmbeddedFileMetadata, AsinConflictSide } from '@/types'
 
 interface Props {
   visible: boolean
@@ -879,7 +879,7 @@ async function applyChanges(includeAsin = true) {
   // Build a sparse Audiobook payload — only the selected fields' fresh values.
   // PUT /library/{id} treats non-null fields as "set this", null/missing as
   // "leave alone" (so we don't accidentally clear anything else).
-  const payload: Partial<Audiobook> = {}
+  const payload: AudiobookUpdateRequest = {}
   for (const key of selected.value) {
     const v = getFresh(metadata, key)
     if (isEmpty(v)) continue
@@ -888,7 +888,7 @@ async function applyChanges(includeAsin = true) {
         // Backend expects List<string> even though Audible returns a single
         // string. Wrap it so the JSON deserialiser doesn't 400 the whole PUT.
         const isbnStr = String(v as string).trim()
-        payload.isbn = (isbnStr ? [isbnStr] : []) as unknown as Audiobook['isbn']
+        payload.isbn = isbnStr ? [isbnStr] : []
         break
       }
       case 'runtime':

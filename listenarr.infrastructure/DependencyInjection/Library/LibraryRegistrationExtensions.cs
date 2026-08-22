@@ -7,9 +7,15 @@
  * by the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  */
+using Listenarr.Application.Audiobooks.Deletion;
+using Listenarr.Application.Audiobooks.RootFolders;
+using Listenarr.Infrastructure.Library.Realtime;
+using Listenarr.Infrastructure.Persistence;
 using Listenarr.Infrastructure.Persistence.Repositories;
 using Microsoft.Extensions.DependencyInjection;
 using Listenarr.Application.Audiobooks.Organizing;
+
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Listenarr.Infrastructure.DependencyInjection.Library;
 
@@ -17,6 +23,29 @@ internal static class LibraryRegistrationExtensions
 {
     public static IServiceCollection AddLibraryServices(this IServiceCollection services)
     {
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IFilesystemMutationCoordinator, FilesystemMutationCoordinator>();
+        services.AddSingleton<IDirectoryObjectIdentityResolver, DirectoryObjectIdentityResolver>();
+        services.AddSingleton<IRootFolderStorageHealthResolver, RootFolderStorageHealthResolver>();
+        services.AddSingleton<LibraryDirectoryOwnershipBoundaryAuthorizer>();
+        services.AddSingleton<IAudiobookOperationCoordinator, AudiobookOperationCoordinator>();
+        services.AddSingleton<IAudiobookUpdatePublisher, AudiobookUpdatePublisher>();
+        services.AddSingleton<IRootFolderRelocationService, RootFolderRelocationService>();
+        services.AddSingleton<IMoveCleanupBoundaryResolver, MoveCleanupBoundaryResolver>();
+        services.AddSingleton<ILibraryDirectoryOwnershipStore, EfLibraryDirectoryOwnershipStore>();
+        services.AddSingleton<IAudiobookDeletionIntentProbe, AudiobookDeletionIntentProbe>();
+        services.AddSingleton<IFileRenameRecoveryProbe, FileRenameRecoveryProbe>();
+        services.AddSingleton<IMoveQueueService, MoveQueueService>();
+        services.AddScoped<IAudiobookDeletionCommitService, AudiobookDeletionCommitService>();
+        services.AddScoped<IAudiobookDeletionIntentStore, AudiobookDeletionIntentStore>();
+        services.AddScoped<IAudiobookDeletionIntentReconciler, AudiobookDeletionIntentReconciler>();
+        services.AddScoped<IRootFolderStorageConfirmationService, RootFolderStorageConfirmationService>();
+        services.AddScoped<IAudiobookFilePathIdentityResolver, AudiobookFilePathIdentityResolver>();
+        services.AddScoped<IFileRenameCommitStore, FileRenameCommitStore>();
+        services.AddScoped<IFileRenameRecoveryReconciler, FileRenameRecoveryReconciler>();
+        services.AddScoped<IAudiobookFileIdentityReconciler, AudiobookFileIdentityReconciler>();
+        services.AddScoped<IRootFolderObjectIdentityReconciler, RootFolderObjectIdentityReconciler>();
+        services.AddScoped<ILibraryDirectoryOwnershipReconciler, LibraryDirectoryOwnershipReconciler>();
         services.AddScoped<IAudiobookFileService, AudiobookFileService>();
         // Singleton: stateless filesystem primitives, consumed by the singleton MoveJobProcessor.
         services.AddSingleton<IOrganizeFilesystem, Listenarr.Infrastructure.Library.Organizing.OrganizeFilesystem>();
@@ -32,8 +61,17 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IIdentityVerifier, Listenarr.Application.Audiobooks.Verification.DeterministicIdentityVerifier>();
         // The queue is a singleton: it owns the in-memory job map + channel.
         services.AddSingleton<Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService, Listenarr.Application.Audiobooks.Verification.LibraryVerificationQueueService>();
+
+        services.AddScoped<IScanPathAuthorizationService, ScanPathAuthorizationService>();
+        services.AddScoped<IAudiobookScanService, AudiobookScanService>();
+        services.AddScoped<MoveSourceManifestService>();
+        services.AddScoped<IMoveSourceManifestService>(serviceProvider =>
+            serviceProvider.GetRequiredService<MoveSourceManifestService>());
+        services.AddScoped<IMoveSourcePlanService>(serviceProvider =>
+            serviceProvider.GetRequiredService<MoveSourceManifestService>());
         services.AddScoped<IAuthorCatalogService, AuthorCatalogService>();
         services.AddScoped<ISeriesCatalogService, SeriesCatalogService>();
+        services.AddScoped<ILibraryDestinationMutationGuard, LibraryDestinationMutationGuard>();
         services.AddScoped<ILibraryAddService, LibraryAddService>();
         services.AddScoped<Listenarr.Application.Audiobooks.Contracts.IFileExtractionService, Listenarr.Application.Audiobooks.Files.FileExtractionService>();
         services.AddScoped<IAudiobookFilesystemDeleteService, AudiobookFilesystemDeleteService>();
@@ -51,6 +89,7 @@ internal static class LibraryRegistrationExtensions
     public static IServiceCollection AddLibraryInfrastructure(this IServiceCollection services)
     {
         services.AddScoped<IAudiobookRepository, AudiobookRepository>();
+        services.AddScoped<ILibraryAddCommitStore, EfLibraryAddCommitStore>();
         services.AddScoped<IQualityProfileRepository, QualityProfileRepository>();
         services.AddScoped<IAudiobookFileRepository, EfAudiobookFileRepository>();
         services.AddScoped<IBlockedReleaseRepository, EfBlockedReleaseRepository>();

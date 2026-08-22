@@ -42,9 +42,22 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             await SeedSettingsAndRootAsync();
         }
 
+        private async Task SaveSettingsWithVersionAsync(ApplicationSettings settings)
+        {
+            // The settings row carries an optimistic-concurrency Version; a save
+            // over an existing row must present it.
+            var existing = await _applicationSettingsRepository.GetAsync();
+            if (existing != null)
+            {
+                settings.Version = existing.Version;
+            }
+
+            await _applicationSettingsRepository.SaveAsync(settings);
+        }
+
         private async Task SeedSettingsAndRootAsync()
         {
-            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+            await SaveSettingsWithVersionAsync(new ApplicationSettingsBuilder()
                 .WithFolderNamingPattern("{Author}/{Title}")
                 .WithOutputPath(Root)
                 .Build());
@@ -259,25 +272,36 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             }, CancellationToken.None);
 
             Assert.IsType<BadRequestObjectResult>(result);
-            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             Assert.Empty(jobs);
         }
 
         [Fact]
         public async Task Apply_QueuesMovesForWillMoveRows()
         {
+            // Real temp tree: the durable move workflow builds a source manifest
+            // from disk and authorizes the target boundary, so fake paths can't
+            // reach the enqueue any more.
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var src1 = Path.Combine(root, "Misplaced");
+            var src2 = Path.Combine(root, "Other");
             var ab1 = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Move Me",
                 Authors = new List<string> { "Author X" },
-                BasePath = $"{Root}/Misplaced",
+                BasePath = src1,
             });
+            await AttachRealFileAsync(ab1, src1);
             var ab2 = await _audiobookRepository.AddAsync(new Audiobook
             {
                 Title = "Move Me Too",
                 Authors = new List<string> { "Author Y" },
-                BasePath = $"{Root}/Other",
+                BasePath = src2,
             });
+            await AttachRealFileAsync(ab2, src2);
 
             var controller = _provider.GetRequiredService<LibraryController>();
             var actionResult = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
@@ -291,13 +315,15 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal(0, result.Skipped);
             Assert.Equal(0, result.FailedToQueue);
             Assert.Equal(2, result.QueuedJobs.Count);
-            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab1.Id && j.TargetPath == $"{Root}/Author X/Move Me");
-            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab2.Id && j.TargetPath == $"{Root}/Author Y/Move Me Too");
+            var target1 = Path.Combine(root, "Author X", "Move Me");
+            var target2 = Path.Combine(root, "Author Y", "Move Me Too");
+            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab1.Id && j.TargetPath == target1);
+            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab2.Id && j.TargetPath == target2);
 
-            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             Assert.Equal(2, jobs.Count);
-            Assert.Contains(jobs, j => j.AudiobookId == ab1.Id && j.RequestedPath == $"{Root}/Author X/Move Me");
-            Assert.Contains(jobs, j => j.AudiobookId == ab2.Id && j.RequestedPath == $"{Root}/Author Y/Move Me Too");
+            Assert.Contains(jobs, j => j.AudiobookId == ab1.Id && j.RequestedPath == target1);
+            Assert.Contains(jobs, j => j.AudiobookId == ab2.Id && j.RequestedPath == target2);
         }
 
         [Fact]
@@ -325,7 +351,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal(1, result.Skipped);
             Assert.Single(result.SkippedDetails, s => s.AudiobookId == ab.Id);
 
-            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             Assert.Empty(jobs);
         }
 
@@ -357,7 +383,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal(2, result.Skipped);
             Assert.NotEmpty(result.Warnings);
 
-            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             Assert.Empty(jobs);
         }
 
@@ -367,7 +393,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             // Real temp directory tree so the preview can actually stat the target.
             using var tmp = new TempDirectory();
             var root = tmp.Path;
-            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+            await SaveSettingsWithVersionAsync(new ApplicationSettingsBuilder()
                 .WithFolderNamingPattern("{Author}/{Title}")
                 .WithOutputPath(root)
                 .Build());
@@ -506,13 +532,13 @@ namespace Listenarr.Tests.Features.Api.Features.Library
                 Authors = new List<string> { "Author X" },
                 BasePath = currentPath,
             });
-            await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
+            await AttachRealFileAsync(ab, currentPath, "dummy.m4b");
 
             var result = await ApplyAsync(new[] { ab.Id });
             Assert.Equal(1, result.Queued);
             Assert.Equal(0, result.Skipped);
 
-            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { "Queued", "Processing" });
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             var job = Assert.Single(jobs, j => j.AudiobookId == ab.Id);
             Assert.True(job.ReplaceStubTarget);
         }
@@ -552,7 +578,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
         /// </summary>
         private async Task UseTempRootAsync(string root)
         {
-            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+            await SaveSettingsWithVersionAsync(new ApplicationSettingsBuilder()
                 .WithFolderNamingPattern("{Author}/{Title}")
                 .WithOutputPath(root)
                 .Build());
@@ -560,11 +586,48 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             {
                 await _rootFolderRepository.RemoveAsync(existing.Id);
             }
-            await _rootFolderRepository.AddAsync(new RootFolderBuilder()
-                .WithName("Library")
-                .WithPath(root)
-                .WithIsDefault()
-                .Build());
+            // The durable move workflow only authorizes targets under a root
+            // folder with persisted semantics + physical directory identity.
+            var rootFolder = await AddAuthorizedRootAsync(root, name: "Library");
+            rootFolder.IsDefault = true;
+            await _rootFolderRepository.UpdateAsync(rootFolder);
+        }
+
+        /// <summary>
+        /// Attach a tracked file that really exists on disk, with persisted path
+        /// and physical identity — required for the durable move pipeline's
+        /// source manifest, unlike the DB-only rows preview tests use.
+        /// </summary>
+        private async Task<string> AttachRealFileAsync(
+            Audiobook audiobook,
+            string directory,
+            string fileName = "book.m4b")
+        {
+            Directory.CreateDirectory(directory);
+            var filePath = Path.Combine(directory, fileName);
+            await File.WriteAllTextAsync(filePath, "audio");
+            var resolution = await _provider
+                .GetRequiredService<IFileSystemSemanticsResolver>()
+                .ResolveAsync(filePath);
+            Assert.Equal(PathIdentityState.Valid, resolution.State);
+            var identity = AudiobookFilePathIdentity.CreateValid(
+                filePath,
+                resolution.Semantics,
+                FileSystemCaseSensitivityMode.Auto,
+                resolution.BoundaryPath);
+            var tracked = new AudiobookFileBuilder()
+                .WithAudiobook(audiobook)
+                .WithPath(filePath)
+                .Build();
+            tracked.ApplyPathIdentity(filePath, identity);
+            using (var parent = Listenarr.Infrastructure.FileSystem.PinnedDirectoryCreation
+                .OpenPinnedHierarchyNoFollow(directory, createMissing: false))
+            using (var pinned = parent.OpenExistingFileForStableRead(fileName))
+            {
+                tracked.ApplyPhysicalObjectIdentity(pinned.GetObjectIdentity(), DateTime.UtcNow);
+            }
+            await _audiobookFileRepository.AddAsync(tracked);
+            return filePath;
         }
 
         [Fact]
@@ -668,7 +731,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             // populated with the audiobook's OWN files.
             using var tmp = new TempDirectory();
             var root = tmp.Path;
-            await _applicationSettingsRepository.SaveAsync(new ApplicationSettingsBuilder()
+            await SaveSettingsWithVersionAsync(new ApplicationSettingsBuilder()
                 .WithFolderNamingPattern("{Author}/{Title}")
                 .WithOutputPath(root)
                 .Build());

@@ -269,6 +269,7 @@ namespace Listenarr.Api.Features.Library
             var metadataService = scope.ServiceProvider.GetRequiredService<IMetadataService>();
             var audioFileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
             var historyRepository = scope.ServiceProvider.GetRequiredService<IHistoryRepository>();
+            var pathIdentityResolver = scope.ServiceProvider.GetRequiredService<IAudiobookFilePathIdentityResolver>();
 
             var basePath = audiobook.BasePath!;
             var existingFiles = await audioFileRepository.GetByAudiobookIdAsync(audiobook.Id);
@@ -295,22 +296,36 @@ namespace Listenarr.Api.Features.Library
                         _logger.LogWarning(mex, "Failed to extract metadata for uploaded file {File}", LogRedaction.SanitizeFilePath(filePath));
                     }
 
-                    var fileRecord = new AudiobookFile
-                    {
-                        AudiobookId = audiobook.Id,
-                        Path = relativePath,
-                        Size = _fileSystem.GetFileLength(filePath),
-                        Source = "upload",
-                        CreatedAt = DateTime.UtcNow,
-                        DurationSeconds = meta?.Duration.TotalSeconds,
-                        Format = meta?.Format,
-                        Bitrate = meta?.BitRate,
-                        SampleRate = meta?.SampleRate,
-                        Channels = meta?.Channels
-                    };
+                    var fileRecord = AudiobookFile.CreateUnresolved(relativePath);
+                    fileRecord.AudiobookId = audiobook.Id;
 
-                    await audioFileRepository.AddAsync(fileRecord);
-                    created.Add(fileRecord);
+                    // #717: a claim needs a resolved filesystem identity; an
+                    // unresolved row is refused as IdentityUnavailable.
+                    var pathIdentity = await pathIdentityResolver.ResolveAsync(audiobook, relativePath, ct);
+                    fileRecord.ApplyPathIdentity(relativePath, pathIdentity);
+                    fileRecord.Size = _fileSystem.GetFileLength(filePath);
+                    fileRecord.Source = "upload";
+                    fileRecord.CreatedAt = DateTime.UtcNow;
+                    fileRecord.DurationSeconds = meta?.Duration.TotalSeconds;
+                    fileRecord.Format = meta?.Format;
+                    fileRecord.Bitrate = meta?.BitRate;
+                    fileRecord.SampleRate = meta?.SampleRate;
+                    fileRecord.Channels = meta?.Channels;
+
+                    // Post-#717 rows are registered through the ownership claim; a refusal
+                    // means another record owns this path — surface it instead of failing
+                    // the whole upload.
+                    var claim = await audioFileRepository.ClaimAsync(fileRecord, ct);
+                    if (claim.Outcome is AudiobookFileClaimOutcome.OwnedByOtherAudiobook
+                        or AudiobookFileClaimOutcome.IdentityConflict)
+                    {
+                        _logger.LogWarning(
+                            "Upload claim refused for {Path}: {Outcome} {Reason} — file saved on disk but not registered",
+                            LogRedaction.SanitizeFilePath(relativePath), claim.Outcome, claim.Reason);
+                        continue;
+                    }
+
+                    created.Add(claim.File ?? fileRecord);
 
                     await historyRepository.AddAsync(new History
                     {

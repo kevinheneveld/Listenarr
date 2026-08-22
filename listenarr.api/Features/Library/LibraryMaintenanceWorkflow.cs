@@ -100,10 +100,10 @@ namespace Listenarr.Api.Features.Library
                     // skipMissingBasePathCleanup=true keeps a single stale path from cascading
                     // into AudiobookFile deletions during a library-wide sweep.
                     var jobId = await _scanQueueService.EnqueueScanAsync(
-                        ab,
-                        path: null,
-                        forceMetadataRefresh: true,
-                        skipMissingBasePathCleanup: true);
+                        new ScanEnqueueCommand(
+                            ab,
+                            ForceMetadataRefresh: true,
+                            SkipMissingBasePathCleanup: true));
                     enqueued.Add(new { audiobookId = ab.Id, jobId });
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)

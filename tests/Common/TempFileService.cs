@@ -3,10 +3,35 @@ namespace Listenarr.Tests.Common
     public class TempFileService : IAsyncLifetime
     {
         private string? _tempFolder = null;
+        private readonly List<string> _additionalTempFolders = [];
+
+        /// <summary>
+        /// macOS aliases /tmp and /var as symlinks into /private. The pinned-
+        /// directory hierarchy walk opens every ancestor with O_NOFOLLOW and
+        /// correctly refuses symlinked components, so test temp paths must be
+        /// pre-resolved to their real /private/... locations.
+        /// </summary>
+        private static string RealTempRoot()
+        {
+            var root = Path.GetTempPath();
+            if (OperatingSystem.IsMacOS())
+            {
+                if (root.StartsWith("/var/", StringComparison.Ordinal))
+                {
+                    root = "/private" + root;
+                }
+                else if (root.StartsWith("/tmp/", StringComparison.Ordinal) || root == "/tmp")
+                {
+                    root = "/private" + root;
+                }
+            }
+
+            return root;
+        }
 
         public TempFileService()
         {
-            _tempFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+            _tempFolder = Path.Combine(RealTempRoot(), Guid.NewGuid().ToString());
             Directory.CreateDirectory(_tempFolder);
         }
 
@@ -16,16 +41,14 @@ namespace Listenarr.Tests.Common
 
         public async Task DisposeAsync()
         {
-            if (_tempFolder != null && Directory.Exists(_tempFolder))
+            if (_tempFolder != null)
             {
-                try
-                {
-                    Directory.Delete(_tempFolder, true);
-                }
-                catch (IOException)
-                {
-                    // FIXME: Folder is probably not deleted
-                }
+                TryDeleteTempFolder(_tempFolder);
+            }
+
+            foreach (var additionalTempFolder in _additionalTempFolders)
+            {
+                TryDeleteTempFolder(additionalTempFolder);
             }
         }
 
@@ -33,7 +56,7 @@ namespace Listenarr.Tests.Common
         {
             if (_tempFolder == null)
             {
-                _tempFolder = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+                _tempFolder = Path.Combine(RealTempRoot(), Guid.NewGuid().ToString());
                 Directory.CreateDirectory(_tempFolder);
             }
 
@@ -53,7 +76,8 @@ namespace Listenarr.Tests.Common
 
         public async Task<string> GetFileAsync(string directory, string filename, string content = "test")
         {
-            if (!directory.StartsWith(GetTempPath()))
+            if (!Path.IsPathFullyQualified(directory)
+                && !directory.StartsWith(GetTempPath(), StringComparison.Ordinal))
             {
                 directory = Path.Join(GetTempPath(), directory);
             }
@@ -67,6 +91,41 @@ namespace Listenarr.Tests.Common
         public async Task<string> GetTempFileAsync(string filename)
         {
             return await GetFileAsync(GetTempPath(), filename);
+        }
+
+        public string GetWindowsRootRelativeTempPath(string name)
+        {
+            var target = WindowsPathTestFixture
+                .GetRootRelativeAliasCompatiblePath(name);
+            _additionalTempFolders.Add(target);
+            return target;
+        }
+
+        public string GetWindowsRootRelativeTempDirectory(string directory)
+        {
+            var target = GetWindowsRootRelativeTempPath(directory);
+            Directory.CreateDirectory(target);
+            return target;
+        }
+
+        public static string GetWindowsRootRelativeForeignAlias(string nativePath) =>
+            WindowsPathTestFixture.GetRootRelativeForeignAlias(nativePath);
+
+        private static void TryDeleteTempFolder(string directory)
+        {
+            if (!Directory.Exists(directory))
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(directory, true);
+            }
+            catch (IOException)
+            {
+                // FIXME: Folder is probably not deleted
+            }
         }
     }
 }

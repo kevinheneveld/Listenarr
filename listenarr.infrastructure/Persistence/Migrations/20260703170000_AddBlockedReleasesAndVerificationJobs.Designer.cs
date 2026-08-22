@@ -674,6 +674,9 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.Property<string>("Error")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ReplaceStubTarget")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("RequestedPath")
                         .HasColumnType("TEXT");
 

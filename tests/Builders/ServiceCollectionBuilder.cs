@@ -5,6 +5,7 @@ using Listenarr.Infrastructure.DependencyInjection;
 using Listenarr.Infrastructure.DependencyInjection.Downloads;
 using Listenarr.Infrastructure.Downloads.DirectDownload;
 using Listenarr.Infrastructure.HostedServices;
+using Listenarr.Tests.Common;
 using Listenarr.Tests.Mocks;
 using Listenarr.Tests.Mocks.Api;
 using Microsoft.AspNetCore.DataProtection;
@@ -148,6 +149,11 @@ namespace Listenarr.Tests.Builders
             services.AddListenarrInfrastructure(
                 options => options.UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString()),
                 contentRootPath: _contentRootPath);
+            var filesystemReadiness = new LibraryFilesystemReadiness();
+            filesystemReadiness.MarkReady();
+            services.Replace(ServiceDescriptor.Singleton(filesystemReadiness));
+            services.Replace(
+                ServiceDescriptor.Scoped<ILibraryAddCommitStore, InMemoryLibraryAddCommitStore>());
 
             var appMetricsServiceMock = new Mock<IAppMetricsService>();
             services.AddSingleton(appMetricsServiceMock);
@@ -177,9 +183,12 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService, Listenarr.Application.Audiobooks.Verification.LibraryVerificationQueueService>();
             services.AddSingleton<IConfigurationService, ConfigurationService>();
             services.AddSingleton<IAudiobookFilesystemDeleteService, AudiobookFilesystemDeleteService>();
+            services.AddSingleton<IFileSystemSemanticsResolver, FileSystemSemanticsResolver>();
+            services.AddSingleton(new Mock<IRootFolderRelocationService>().Object);
             services.AddSingleton<IMoveQueueService, MoveQueueService>();
             services.AddSingleton<IScanQueueService, ScanQueueService>();
             services.AddSingleton<IRootFolderService, RootFolderService>();
+            services.AddSingleton<IAudiobookDestinationRewriteService, AudiobookDestinationRewriteService>();
             services.AddSingleton<MetadataConverters>();
             services.AddSingleton<MetadataMerger>();
             services.AddSingleton<ISearchActivityTracker, SearchActivityTracker>();
@@ -252,6 +261,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<DownloadService>();
             services.AddSingleton<ScanJobProcessor>();
             services.AddSingleton<IScanJobProcessor>(sp => sp.GetRequiredService<ScanJobProcessor>());
+            services.AddSingleton<AudiobookContentMoveService>();
             services.AddSingleton<MoveJobProcessor>();
             services.AddSingleton<IMoveJobProcessor>(sp => sp.GetRequiredService<MoveJobProcessor>());
             services.AddSingleton<MoveBackgroundService>();

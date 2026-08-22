@@ -27,5 +27,9 @@ namespace Listenarr.Application.Audiobooks.Contracts
         /// Returns (null, null) when the file has no usable picture.
         /// </summary>
         Task<(byte[]? Bytes, string? Extension)> ExtractEmbeddedCoverAsync(string filePath);
+
+        Task WriteAsinTagAsync(
+            IAudiobookFileRegistrationLease registrationLease,
+            string asin);
     }
 }

@@ -148,6 +148,10 @@ namespace Listenarr.Api.Features.Library
             var warnings = new List<string>();
             var physicallyMoved = 0;
             var reassigned = 0;
+            // Post-#717 AudiobookFile.Path is ownership-controlled (no api-side
+            // setter); track paths claimed by this batch locally so later
+            // iterations' collision checks stay accurate.
+            var transferredPaths = new List<string>();
 
             foreach (var file in toMove)
             {
@@ -163,7 +167,8 @@ namespace Listenarr.Api.Features.Library
                     ? Path.Join(target.BasePath, Path.GetFileName(file.Path))
                     : file.Path;
                 if (!string.IsNullOrWhiteSpace(candidatePath)
-                    && targetFiles.Any(tf => tf.Id != file.Id && string.Equals(tf.Path, candidatePath, StringComparison.OrdinalIgnoreCase)))
+                    && (targetFiles.Any(tf => tf.Id != file.Id && string.Equals(tf.Path, candidatePath, StringComparison.OrdinalIgnoreCase))
+                        || transferredPaths.Any(p => string.Equals(p, candidatePath, StringComparison.OrdinalIgnoreCase))))
                 {
                     warnings.Add($"{Path.GetFileName(candidatePath)} already exists under the target — left in place (delete the redundant copy if it's a duplicate)");
                     continue;
@@ -197,7 +202,7 @@ namespace Listenarr.Api.Features.Library
                                 _fileSystem.CreateDirectory(target.BasePath);
                             }
 
-                            if (await _fileMover.PerformActionOn(FileAction.Move, file.Path, destination))
+                            if (await _fileMover.PerformActionOn(FileAction.Move, file.Path, destination, Guid.NewGuid(), file.AudiobookId, file.Id))
                             {
                                 newPath = destination;
                                 physicallyMoved++;
@@ -218,10 +223,13 @@ namespace Listenarr.Api.Features.Library
                 try
                 {
                     await _audioFileRepository.ReassignAsync(file.Id, target.Id, newPath, ct);
-                    // Mutate the in-memory row only after the DB update succeeds, so a caught
-                    // failure can't leave a stale path in the collision checks below.
+                    // Record the claimed path only after the DB update succeeds, so a caught
+                    // failure can't leave a stale path in the collision checks above.
                     file.AudiobookId = target.Id;
-                    file.Path = newPath;
+                    if (!string.IsNullOrWhiteSpace(newPath))
+                    {
+                        transferredPaths.Add(newPath);
+                    }
                     reassigned++;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
