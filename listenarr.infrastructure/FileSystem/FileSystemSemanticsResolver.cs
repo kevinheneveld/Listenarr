@@ -7,6 +7,10 @@ namespace Listenarr.Infrastructure.FileSystem;
 
 public sealed class FileSystemSemanticsResolver : IFileSystemSemanticsResolver
 {
+    private const int Enotty = 25;
+    private const int Einval = 22;
+    private const int Eopnotsupp = 95;
+
     private const uint FileReadAttributes = 0x0080;
     private const uint FileShareRead = 0x00000001;
     private const uint FileShareWrite = 0x00000002;
@@ -167,6 +171,16 @@ public sealed class FileSystemSemanticsResolver : IFileSystemSemanticsResolver
                     (flags & FsCasefoldFlag) != 0
                         ? FileSystemCaseSensitivity.Insensitive
                         : FileSystemCaseSensitivity.Sensitive);
+            }
+
+            var ioctlErrno = Marshal.GetLastWin32Error();
+            if (ioctlErrno is Enotty or Eopnotsupp or Einval)
+            {
+                // Filesystems without the flags ioctl (NFS, CIFS, tmpfs, …)
+                // cannot opt into casefold at all — on Linux they carry the
+                // kernel's case-sensitive default. Failing closed here bricked
+                // every import on an NFS-mounted library.
+                return Valid(syntax, boundary, FileSystemCaseSensitivity.Sensitive);
             }
 
             return Unavailable(
