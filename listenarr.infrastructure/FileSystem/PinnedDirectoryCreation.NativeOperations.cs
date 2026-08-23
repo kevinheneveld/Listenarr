@@ -231,24 +231,33 @@ internal sealed partial class PinnedDirectoryCreation
 
         if (OperatingSystem.IsLinux())
         {
-            const uint requiredMask = 0x00000100 | 0x00000800;
+            const uint inodeMask = 0x00000100;
+            const uint birthTimeMask = 0x00000800;
             if (Statx(
                     handle.DangerousGetHandle().ToInt32(),
                     string.Empty,
                     0x1000,
-                    requiredMask,
+                    inodeMask | birthTimeMask,
                     out var information) != 0)
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
-            if ((information.Mask & requiredMask) != requiredMask)
+            if ((information.Mask & inodeMask) != inodeMask)
             {
                 throw new PlatformNotSupportedException(
                     "The filesystem does not expose complete directory generation identity.");
             }
 
+            // Birth time hardens the identity against inode reuse, but network
+            // filesystems (NFS, CIFS) never report STATX_BTIME. Device+inode is
+            // the core identity; degrade explicitly rather than failing every
+            // filesystem mutation on a network-mounted library.
+            var birthSegment = (information.Mask & birthTimeMask) == birthTimeMask
+                ? FormattableString.Invariant(
+                    $"{information.BirthTime.Seconds:x16}:{information.BirthTime.Nanoseconds:x8}")
+                : "nobtime";
             var baseIdentity = FormattableString.Invariant(
-                $"linux:{information.DeviceMajor:x8}:{information.DeviceMinor:x8}:{information.Inode:x16}:{information.BirthTime.Seconds:x16}:{information.BirthTime.Nanoseconds:x8}");
+                $"linux:{information.DeviceMajor:x8}:{information.DeviceMinor:x8}:{information.Inode:x16}:{birthSegment}");
             var generationIdentity = TryGetLinuxGenerationIdentity(handle);
             return string.IsNullOrWhiteSpace(generationIdentity)
                 ? baseIdentity
