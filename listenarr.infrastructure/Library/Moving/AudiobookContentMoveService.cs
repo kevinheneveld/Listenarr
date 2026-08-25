@@ -28,6 +28,7 @@ internal sealed record AudiobookContentMoveRequest(
     LibraryDirectoryOwnership? TargetDirectoryOwnership = null,
     IReadOnlyDictionary<string, string>? SourcePhysicalObjectIdentities = null,
     Func<double, string, CancellationToken, Task>? ProgressReporter = null,
+    MarkerlessMoveBoundaryAuthorizationState? BoundaryAuthorization = null,
     bool ReplaceStubTarget = false)
 {
     public string LeaseOwner => LeaseToken.Owner;
@@ -105,6 +106,9 @@ internal sealed partial class AudiobookContentMoveService(
             sourceSemantics,
             targetSemantics,
             request.LeaseToken,
+            cancellationToken);
+        request = await WithBoundaryAuthorizationAsync(
+            request,
             cancellationToken);
 
         var targetInsideSource = IsSameOrInside(target, source, sourceSemantics);

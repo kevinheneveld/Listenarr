@@ -373,6 +373,7 @@ export interface RootFolder {
   pathIdentityState?: 'Valid' | 'Conflict' | 'Unavailable'
   storageState?:
     | 'Healthy'
+    | 'Limited'
     | 'Missing'
     | 'Changed'
     | 'Unavailable'
@@ -389,14 +390,21 @@ export interface RootFolder {
     | 'IdentityUnstable'
     | 'FilesystemSemanticsUnavailable'
     | 'FilesystemSemanticsChanged'
+    | 'MutationSemanticsUnproven'
+    | 'ReadOnlyFilesystem'
+    | 'MutationCapabilityUnavailable'
     | 'NoAuthorizedIdentity'
     | 'InvalidPath'
     | 'Initializing'
     | 'InitializationFailed'
     | 'Unknown'
   storageMessage?: string | null
+  storageDetail?: string | null
   canConfirmCurrentFolder?: boolean
   canChangePath?: boolean
+  canReadFilesystem?: boolean
+  canScanFilesystem?: boolean
+  canPublishNewFiles?: boolean
   canMutateFilesystem?: boolean
   confirmationToken?: string | null
   activeRelocation?: RootFolderPathChangeResult | null
@@ -1266,6 +1274,11 @@ export interface ManualImportResult {
   error?: string
   skipped?: boolean
   skipReason?: string
+  requestedAction?: string
+  effectiveAction?: string
+  sourceDisposition?: string
+  warningCode?: string
+  warning?: string
 }
 
 // Audible API Types

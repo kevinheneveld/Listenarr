@@ -965,6 +965,7 @@ import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { showConfirm } from '@/composables/useConfirm'
+import { preparePhysicalDeleteRetry } from '@/composables/useMutationSemanticsConfirmation'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import { buildWorkKey } from '@/utils/seriesDisplay'
 import CustomSelect from '@/components/form/CustomSelect.vue'
@@ -2621,6 +2622,10 @@ async function executeDelete() {
     await libraryStore.removeFromLibrary(deleteTarget.value.id, {
       deleteFiles: shouldDeleteFiles,
       deleteFolder: shouldDeleteFolder,
+      retryAfterBlockedMutation: shouldDeleteFiles
+        ? (error) =>
+            preparePhysicalDeleteRetry(error, deleteTarget.value!.id, deleteTarget.value?.basePath)
+        : undefined,
     })
   } catch (err) {
     errorTracking.captureException(err as Error, {

@@ -39,7 +39,14 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                     ImportProofKind.CompletedProcessingJob,
                     completedJob.GetOrCreateCorrelationId(),
                     completedJob.Id,
-                    completedJob.CompletedAt);
+                    completedJob.CompletedAt,
+                    completedJob.JobData.TryGetValue(
+                        "SourceRetained",
+                        out var retainedValue)
+                    && bool.TryParse(
+                        retainedValue?.ToString(),
+                        out var sourceRetained)
+                    && sourceRetained);
             }
 
             if (download.LastImportedAt.HasValue)
@@ -105,7 +112,8 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
             {
                 ["ImportProof"] = proof.Kind.ToString(),
                 ["RemovalPolicy"] = removalPolicy,
-                ["DeleteFiles"] = deleteFiles
+                ["DeleteFiles"] = deleteFiles,
+                ["SourceRetained"] = proof.SourceRetained
             };
 
             if (!string.IsNullOrWhiteSpace(proof.ProcessingJobId))

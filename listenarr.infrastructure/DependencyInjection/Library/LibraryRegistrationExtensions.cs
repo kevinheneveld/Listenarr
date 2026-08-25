@@ -34,6 +34,7 @@ internal static class LibraryRegistrationExtensions
         services.AddSingleton<IMoveCleanupBoundaryResolver, MoveCleanupBoundaryResolver>();
         services.AddSingleton<ILibraryDirectoryOwnershipStore, EfLibraryDirectoryOwnershipStore>();
         services.AddSingleton<IAudiobookDeletionIntentProbe, AudiobookDeletionIntentProbe>();
+        services.AddSingleton<IFileRegistrationRecoveryProbe, FileRegistrationRecoveryProbe>();
         services.AddSingleton<IFileRenameRecoveryProbe, FileRenameRecoveryProbe>();
         services.AddSingleton<IMoveQueueService, MoveQueueService>();
         services.AddScoped<IAudiobookDeletionCommitService, AudiobookDeletionCommitService>();
@@ -42,6 +43,10 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<IRootFolderStorageConfirmationService, RootFolderStorageConfirmationService>();
         services.AddScoped<IAudiobookFilePathIdentityResolver, AudiobookFilePathIdentityResolver>();
         services.AddScoped<IFileRenameCommitStore, FileRenameCommitStore>();
+        services.AddScoped<IFileRegistrationRecoveryService, FileRegistrationRecoveryService>();
+        services.AddScoped<CompatibilityFilePublicationRecoveryService>();
+        services.AddScoped<ICompatibilityFilePublicationRecoveryService>(provider =>
+            provider.GetRequiredService<CompatibilityFilePublicationRecoveryService>());
         services.AddScoped<IFileRenameRecoveryReconciler, FileRenameRecoveryReconciler>();
         services.AddScoped<IAudiobookFileIdentityReconciler, AudiobookFileIdentityReconciler>();
         services.AddScoped<IRootFolderObjectIdentityReconciler, RootFolderObjectIdentityReconciler>();

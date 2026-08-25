@@ -38,4 +38,11 @@ public interface IAudiobookScanService
     Task<AudiobookScanResult> ScanAsync(
         AudiobookScanCommand command,
         CancellationToken cancellationToken = default);
+
+    Task<bool> RegisterExistingFileAsync(
+        int audiobookId,
+        string audiobookBasePath,
+        string filePath,
+        string source = "manual-import",
+        CancellationToken cancellationToken = default);
 }

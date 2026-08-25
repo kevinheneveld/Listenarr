@@ -8,6 +8,22 @@ namespace Listenarr.Tests.Features.Api.Features.Downloads;
 [Trait("Category", "Unit")]
 public sealed class ManualImportCompanionImporterTests : BaseTests
 {
+    private static IFilePublicationSourceCapability SupportedSourceCapability()
+    {
+        var capability = new Mock<IFilePublicationSourceCapability>(MockBehavior.Strict);
+        capability
+            .Setup(service => service.CheckAsync(
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+                FilePublicationSourceCapabilityResult.SupportedForProof(
+                    new FilePublicationSourceProof(
+                        "test-source-generation",
+                        1,
+                        new string('A', 64))));
+        return capability.Object;
+    }
+
     [Fact]
     public async Task ImportAsync_CanceledAfterOwnershipPreparation_DoesNotMutateCompanionFile()
     {
@@ -59,15 +75,16 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
             var importer = new ManualImportCompanionImporter(
                 Mock.Of<IMetadataService>(),
                 mover.Object,
+                SupportedSourceCapability(),
                 new LocalFileSystem(),
-                semanticsResolver,
                 ownershipStore.Object,
                 NullLogger<ManualImportCompanionImporter>.Instance,
                 fileService.Object);
             var tracker = new ManualImportDestinationTracker(
                 new LocalFileSystem(),
-                semanticsResolver);
+                Mock.Of<IFilePublicationSourceCapability>());
             var sourceResolution = await semanticsResolver.ResolveAsync(sourceDirectory);
+            var destinationResolution = await semanticsResolver.ResolveAsync(destinationDirectory);
             var items = new[]
             {
                 new ManualImportItemDto
@@ -95,17 +112,25 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
                 selectedAudioProfiles: [],
                 tracker,
                 sourceResolution.Semantics,
+                new Dictionary<int, FileSystemSemanticsResolution>
+                {
+                    [audiobook.Id] = destinationResolution
+                },
                 importBlacklist: [],
                 cancellationToken: cancellation.Token));
 
             Assert.True(File.Exists(companionSource));
             Assert.False(File.Exists(Path.Join(destinationDirectory, "cover.jpg")));
             mover.Verify(
-                service => service.PerformActionOn(
-                    It.IsAny<FileAction>(),
+                service => service.PrepareActionForRegistrationDetailedAsync(
+                    It.IsAny<FilePublicationPlan>(),
                     It.IsAny<string>(),
                     It.IsAny<string>(),
-                    It.IsAny<Guid>()),
+                    It.IsAny<Guid>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<FilePublicationSourceProof>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<int?>()),
                 Times.Never);
             fileService.VerifyAll();
             ownershipStore.VerifyAll();
@@ -153,12 +178,22 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
             var lease = new Mock<IAudiobookFileRegistrationLease>(MockBehavior.Strict);
             lease.Setup(service => service.Dispose());
             var mover = new Mock<IFileMover>(MockBehavior.Strict);
-            mover.Setup(service => service.PrepareActionForRegistrationAsync(
-                    FileAction.Move,
+            mover.Setup(service => service.PrepareActionForRegistrationDetailedAsync(
+                    It.Is<FilePublicationPlan>(plan =>
+                        plan.EffectiveAction == FileAction.Move),
                     companionSource,
                     It.IsAny<string>(),
-                    It.IsAny<Guid>()))
-                .ReturnsAsync(lease.Object);
+                    It.IsAny<Guid>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<FilePublicationSourceProof>(),
+                    false,
+                    null))
+                .ReturnsAsync(new FilePublicationPreparationResult(
+                    FilePublicationOutcome.Success,
+                    FileAction.Move,
+                    FileAction.Move,
+                    FilePublicationSourceDisposition.Retired,
+                    lease.Object));
             var audiobook = new Audiobook
             {
                 Id = 43,
@@ -198,15 +233,17 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
             var importer = new ManualImportCompanionImporter(
                 metadataService.Object,
                 mover.Object,
+                SupportedSourceCapability(),
                 new LocalFileSystem(),
-                semanticsResolver,
                 ownershipStore.Object,
                 NullLogger<ManualImportCompanionImporter>.Instance,
                 fileService.Object);
             var tracker = new ManualImportDestinationTracker(
                 new LocalFileSystem(),
-                semanticsResolver);
+                Mock.Of<IFilePublicationSourceCapability>());
             var sourceResolution = await semanticsResolver.ResolveAsync(sourceDirectory);
+            var destinationResolution = await semanticsResolver.ResolveAsync(
+                Path.GetDirectoryName(selectedDestination)!);
             var selectedProfiles = new[]
             {
                 FileUtils.CreateAudioMatchProfile(selectedSource, metadata)
@@ -238,6 +275,10 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
                 selectedProfiles,
                 tracker,
                 sourceResolution.Semantics,
+                new Dictionary<int, FileSystemSemanticsResolution>
+                {
+                    [audiobook.Id] = destinationResolution
+                },
                 importBlacklist: []);
 
             Assert.Equal(0, imported);
@@ -282,14 +323,39 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
         try
         {
             string? capturedDestination = null;
-            var mover = new Mock<IFileMover>();
-            mover.Setup(service => service.PerformActionOn(
-                    FileAction.Copy,
+            var publicationCommitted = false;
+            var lease = new Mock<IAudiobookFileRegistrationLease>(MockBehavior.Strict);
+            lease.Setup(service => service.PrepareCleanupRecovery(42))
+                .Returns(true);
+            lease.Setup(service => service.CompletePublication())
+                .Callback(() => publicationCommitted = true)
+                .Returns(RegistrationPublicationCompletion.Completed);
+            lease.Setup(service => service.Dispose());
+            var mover = new Mock<IFileMover>(MockBehavior.Strict);
+            mover.Setup(service => service.PrepareActionForRegistrationDetailedAsync(
+                    It.Is<FilePublicationPlan>(plan =>
+                        plan.EffectiveAction == FileAction.Move),
                     companionSource,
                     It.IsAny<string>(),
-                    It.IsAny<Guid>()))
-                .Callback<FileAction, string, string?, Guid>((_, _, destination, _) =>
+                    It.IsAny<Guid>(),
+                    null,
+                    It.IsAny<FilePublicationSourceProof>(),
+                    true,
+                    42))
+                .Callback<FilePublicationPlan, string, string, Guid, string?, FilePublicationSourceProof, bool, int?>((_, _, destination, _, _, _, _, _) =>
                     capturedDestination = destination)
+                .ReturnsAsync(new FilePublicationPreparationResult(
+                    FilePublicationOutcome.Success,
+                    FileAction.Move,
+                    FileAction.Move,
+                    FilePublicationSourceDisposition.Retired,
+                    lease.Object));
+            mover.Setup(service => service.CompletePreparedMoveAsync(
+                    companionSource,
+                    It.IsAny<string>(),
+                    lease.Object,
+                    It.IsAny<Guid>()))
+                .Callback(() => Assert.True(publicationCommitted))
                 .ReturnsAsync(true);
             var audiobook = new Audiobook
             {
@@ -320,15 +386,16 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
             var importer = new ManualImportCompanionImporter(
                 Mock.Of<IMetadataService>(),
                 mover.Object,
+                SupportedSourceCapability(),
                 new LocalFileSystem(),
-                semanticsResolver,
                 directoryOwnershipStore.Object,
                 NullLogger<ManualImportCompanionImporter>.Instance,
                 fileService.Object);
             var tracker = new ManualImportDestinationTracker(
                 new LocalFileSystem(),
-                semanticsResolver);
+                Mock.Of<IFilePublicationSourceCapability>());
             var sourceResolution = await semanticsResolver.ResolveAsync(requestedRoot);
+            var destinationResolution = await semanticsResolver.ResolveAsync(destinationDirectory);
             Assert.Equal(PathIdentityState.Valid, sourceResolution.State);
             var items = new[]
             {
@@ -350,15 +417,21 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
             };
 
             var imported = await importer.ImportAsync(
-                FileAction.Copy,
+                FileAction.Move,
                 items,
                 results,
                 requestedRoot,
                 selectedAudioProfiles: [],
                 tracker,
                 sourceResolution.Semantics,
+                new Dictionary<int, FileSystemSemanticsResolution>
+                {
+                    [audiobook.Id] = destinationResolution
+                },
                 importBlacklist: []);
 
+            mover.VerifyAll();
+            lease.VerifyAll();
             Assert.Equal(1, imported);
             Assert.Equal(
                 Path.Join(destinationDirectory, "cover.jpg"),
@@ -367,6 +440,13 @@ public sealed class ManualImportCompanionImporterTests : BaseTests
                 capturedDestination!,
                 destinationDirectory,
                 FileSystemPathSemantics.CurrentHostDefault));
+            mover.Verify(service => service.PerformActionOn(
+                    It.IsAny<FileAction>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<Guid>(),
+                    It.IsAny<FilePublicationSourceProof>()),
+                Times.Never);
             fileService.VerifyAll();
         }
         finally
