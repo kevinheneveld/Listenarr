@@ -119,7 +119,12 @@ internal static class UnixOpenFlags
 
     internal static void EnsureMacOSArchitectureSupported(Architecture architecture)
     {
-        if (architecture != Architecture.X64)
+        // [personal] Upstream fences macOS to x64 because Apple arm64's varargs
+        // ABI makes variadic P/Invokes (fcntl, openat mode) hazardous. This fork
+        // carries arm64-safe replacements for those call sites (fchmod-based
+        // mode repair, fstat-based directory identity), and arm64 macOS is the
+        // local development platform — allow it.
+        if (architecture is not Architecture.X64 and not Architecture.Arm64)
         {
             throw new PlatformNotSupportedException(
                 $"Listenarr does not support macOS filesystem operations on process architecture '{architecture}'.");

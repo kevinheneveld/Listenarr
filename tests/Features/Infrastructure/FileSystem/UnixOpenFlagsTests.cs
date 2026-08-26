@@ -55,10 +55,16 @@ public sealed class UnixOpenFlagsTests : BaseTests
         UnixOpenFlags.EnsureMacOSArchitectureSupported(RuntimeArchitecture.X64);
     }
 
+    [Fact]
+    public void EnsureMacOSArchitectureSupported_AcceptsArm64DevelopmentTarget()
+    {
+        // [personal] This fork allows arm64 macOS (local dev platform).
+        UnixOpenFlags.EnsureMacOSArchitectureSupported(RuntimeArchitecture.Arm64);
+    }
+
     [Theory]
     [InlineData(RuntimeArchitecture.X86)]
     [InlineData(RuntimeArchitecture.Arm)]
-    [InlineData(RuntimeArchitecture.Arm64)]
     [InlineData(RuntimeArchitecture.Armv6)]
     [InlineData(RuntimeArchitecture.Ppc64le)]
     [InlineData(RuntimeArchitecture.S390x)]
