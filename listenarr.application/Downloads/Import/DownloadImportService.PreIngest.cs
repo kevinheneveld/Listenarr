@@ -59,5 +59,51 @@ namespace Listenarr.Application.Downloads.Import
             var verification = PreIngestVerification.Inspect(preIngestMetadata);
             return (metadataByPath, verification.Rejected ? verification.Reason : null);
         }
+
+        /// <summary>
+        /// Run pre-ingest verification over the ordered files. On rejection,
+        /// records one Skipped result per file and returns null so the caller
+        /// can return early; otherwise returns the extracted metadata cache.
+        /// </summary>
+        private async Task<Dictionary<string, AudioMetadata?>?> InspectPreIngestOrSkipAllAsync(
+            Audiobook audiobook,
+            List<string> orderedFiles,
+            ApplicationSettings settings,
+            List<ImportResult> results)
+        {
+            var (metadataByPath, preIngestRejection) = await InspectPreIngestAsync(orderedFiles, settings);
+            if (preIngestRejection == null)
+            {
+                return metadataByPath;
+            }
+
+            logger.LogWarning(
+                "ImportFilesFromDirectory: rejecting completed download for audiobook {AudiobookId} at pre-ingest verification — {Reason}",
+                audiobook.Id, preIngestRejection);
+            foreach (var _ in orderedFiles)
+            {
+                results.Add(ImportResult.Skipped($"Pre-ingest verification rejected this download: {preIngestRejection}"));
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Reuse the pre-ingest extraction; fall back to a direct probe only
+        /// when the cache has no entry for this file.
+        /// </summary>
+        private async Task<AudioMetadata?> ResolveCandidateMetadataAsync(
+            string file,
+            ApplicationSettings settings,
+            Dictionary<string, AudioMetadata?> metadataByPath)
+        {
+            if (!settings.EnableMetadataProcessing)
+            {
+                return null;
+            }
+
+            return metadataByPath.TryGetValue(file, out var cached)
+                ? cached
+                : await metadataService.ExtractFileMetadataAsync(file);
+        }
     }
 }

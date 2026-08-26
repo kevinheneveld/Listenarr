@@ -384,8 +384,7 @@ internal partial class MoveJobProcessor
                         job.Id,
                         progress,
                         phase,
-                        token),
-                ReplaceStubTarget: job.ReplaceStubTarget);
+                        token), ReplaceStubTarget: job.ReplaceStubTarget);
             moveResult ??= await contentMoveService.MoveContentsAsync(moveRequest, stoppingToken);
             moveResult = await contentMoveService.ResumeSourceCleanupAsync(moveRequest, moveResult, stoppingToken);
             source = moveResult.Source;

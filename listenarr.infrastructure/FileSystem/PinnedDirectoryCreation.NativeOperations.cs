@@ -106,18 +106,7 @@ internal sealed partial class PinnedDirectoryCreation
         }
         if (OperatingSystem.IsMacOS())
         {
-            // fcntl(F_GETPATH) is variadic; variadic P/Invokes mis-pass their
-            // trailing argument on Apple arm64 (varargs go on the stack while a
-            // fixed-signature DllImport uses a register) and fatally corrupt the
-            // process. Device+inode equality via the non-variadic fstat answers
-            // the same "same directory object" question without the hazard.
-            if (FStatMac(expected.DangerousGetHandle().ToInt32(), out var expectedInfo) != 0
-                || FStatMac(candidate.DangerousGetHandle().ToInt32(), out var candidateInfo) != 0)
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error());
-            }
-            return expectedInfo.Device == candidateInfo.Device
-                && expectedInfo.Inode == candidateInfo.Inode;
+            return MacHandlesIdentifySameDirectory(expected, candidate);
         }
 
         throw new PlatformNotSupportedException(

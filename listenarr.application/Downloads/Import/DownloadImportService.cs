@@ -142,20 +142,8 @@ namespace Listenarr.Application.Downloads.Import
 
                 try
                 {
-                    var (metadataByPath, preIngestRejection) = await InspectPreIngestAsync(orderedFiles, settings);
-                    if (preIngestRejection != null)
-                    {
-                        logger.LogWarning(
-                            "ImportFilesFromDirectory: rejecting completed download for audiobook {AudiobookId} at pre-ingest verification — {Reason}",
-                            audiobook.Id, preIngestRejection);
-                        foreach (var _ in orderedFiles)
-                        {
-                            results.Add(ImportResult.Skipped($"Pre-ingest verification rejected this download: {preIngestRejection}"));
-                        }
-                        return results;
-                    }
-
-                    // Precompute audiobook and best existing quality to avoid import-order races
+                    var metadataByPath = await InspectPreIngestOrSkipAllAsync(audiobook, orderedFiles, settings, results);
+                    if (metadataByPath == null) return results;
                     string? bestExisting = null;
                     QualityProfile? abProfile = audiobook.QualityProfile;
                     if (audiobook.Files != null && audiobook.Files.Count != 0)
@@ -288,16 +276,7 @@ namespace Listenarr.Application.Downloads.Import
                             planByPath.TryGetValue(file, out var plan);
                             diskNumbersForNaming.TryGetValue(file, out var namingDiskNumber);
                             chapterNumbersForNaming.TryGetValue(file, out var namingChapterNumber);
-
-                            // Reuse the pre-ingest extraction; fall back to a direct
-                            // probe only when the cache has no entry for this file.
-                            AudioMetadata? candidateMetadata = null;
-                            if (settings.EnableMetadataProcessing
-                                && !metadataByPath.TryGetValue(file, out candidateMetadata))
-                            {
-                                candidateMetadata = await metadataService.ExtractFileMetadataAsync(file);
-                            }
-
+                            var candidateMetadata = await ResolveCandidateMetadataAsync(file, settings, metadataByPath);
                             var candidateQuality = ImportQualityEvaluator.Determine(candidateMetadata, file);
                             try
                             {
