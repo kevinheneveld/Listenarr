@@ -248,6 +248,10 @@ vi.mock('@/services/api', () => {
           typeof sourcePath === 'string' ? sourcePath.split(/[\\/]/)[1] || '' : undefined,
         destVolume: typeof destPath === 'string' ? destPath.split(/[\\/]/)[1] || '' : undefined,
         message: same ? 'Same volume' : 'Different volumes',
+        verifiedSourceDeletionEnabled: false,
+        sourceIsManagedRoot: false,
+        sourceCleanupMessage:
+          'Source files will be retained because verified source deletion is not enabled.',
       }
     }),
   }

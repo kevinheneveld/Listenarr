@@ -786,6 +786,7 @@
   <MoveAudiobookModal
     :visible="showMoveConfirm"
     :pendingMove="pendingMove"
+    :allowDeleteEmpty="!sourceIsManagedRoot"
     v-model:moveFiles="modalMoveFiles"
     v-model:deleteEmpty="modalDeleteEmpty"
     @cancel="cancelMoveConfirm"
@@ -1301,7 +1302,7 @@ let moveConfirmResolver:
 
 function askMoveConfirmation(original: string, combined: string) {
   modalMoveFiles.value = true
-  modalDeleteEmpty.value = true
+  modalDeleteEmpty.value = !sourceIsManagedRoot.value
   pendingMove.value = { original, combined }
   showMoveConfirm.value = true
   return new Promise<{ proceed: boolean; moveFiles: boolean; deleteEmptySource: boolean }>(
@@ -1332,7 +1333,7 @@ function confirmMove() {
     moveConfirmResolver({
       proceed: true,
       moveFiles: Boolean(modalMoveFiles.value),
-      deleteEmptySource: Boolean(modalDeleteEmpty.value),
+      deleteEmptySource: Boolean(modalDeleteEmpty.value && !sourceIsManagedRoot.value),
     })
 
   moveConfirmResolver = null
@@ -1595,6 +1596,20 @@ function destinationBasePathChanged(): boolean {
     selectedDestinationCaseSensitivity(),
   )
 }
+
+const sourceIsManagedRoot = computed(() => {
+  const source = baselineAudiobook.value?.basePath
+  if (!source) return false
+
+  return rootStore.folders.some((folder) =>
+    pathsEqual(
+      source,
+      folder.path,
+      rootFolderPathKind(folder),
+      folder.resolvedCaseSensitivity ?? 'Unknown',
+    ),
+  )
+})
 
 function combinedBasePath(): string | null {
   const r = resolveSelectedRootPath() || ''

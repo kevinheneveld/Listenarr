@@ -1140,7 +1140,7 @@ public sealed class BackendArchitectureTests : BaseTests
     }
 
     [Fact]
-    public void LibraryFilesystem_HasNoListenarrScratchNamespaceProtocol()
+    public void LibraryFilesystem_OnlyUsesAuditedCompatibilityQuarantineNamespace()
     {
         var productionRoots = new[]
         {
@@ -1155,6 +1155,11 @@ public sealed class BackendArchitectureTests : BaseTests
             "entry.claim"
         };
 
+        var allowedQuarantineFiles = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "listenarr.infrastructure/FileSystem/CompatibilitySourceCleanupCoordinator.cs",
+            "listenarr.infrastructure/Library/Scanning/ScanFileDiscovery.Enumeration.cs"
+        };
         var violations = productionRoots
             .SelectMany(root => Directory.EnumerateFiles(
                 root,
@@ -1167,7 +1172,12 @@ public sealed class BackendArchitectureTests : BaseTests
                 Source = File.ReadAllText(file)
             })
             .SelectMany(candidate => forbidden
-                .Where(token => candidate.Source.Contains(token, StringComparison.Ordinal))
+                .Where(token => candidate.Source.Contains(token, StringComparison.Ordinal)
+                    && !(token == ".listenarr-"
+                        && allowedQuarantineFiles.Contains(candidate.File)
+                        && candidate.Source.Contains(
+                            ".listenarr-quarantine-",
+                            StringComparison.Ordinal)))
                 .Select(token => $"{candidate.File}: {token}"))
             .ToList();
 

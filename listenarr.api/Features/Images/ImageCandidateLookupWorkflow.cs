@@ -328,71 +328,24 @@ namespace Listenarr.Api.Features.Images
                             var metadataEnvelope = await _audiobookMetadataService.GetMetadataAsync(identifier, region, cache: true);
                             if (metadataEnvelope != null)
                             {
-                                try
+                                AddCandidateUrl(
+                                    metadataEnvelope.Metadata.ImageUrl,
+                                    "MetadataEnvelopeAudible");
+                                if (string.IsNullOrWhiteSpace(candidateIsbn)
+                                    && !string.IsNullOrWhiteSpace(
+                                        metadataEnvelope.Metadata.Isbn))
                                 {
-                                    // If the service returned an AudibleBookResponse directly
-                                    if (metadataEnvelope is AudibleBookResponse directMeta)
-                                    {
-                                        AddCandidateUrl(directMeta.ImageUrl, "MetadataEnvelopeDirect");
-                                    }
-                                    else
-                                    {
-                                        // Reflection, NOT dynamic: the envelope is an anonymous
-                                        // type declared in listenarr.application — anonymous types
-                                        // are internal to their assembly, and the dynamic binder
-                                        // enforces accessibility across assemblies, so `env.metadata`
-                                        // threw RuntimeBinderException (surfacing as a 500) for
-                                        // every uncached cover that reached this fallback.
-                                        // Reflection reads public properties of internal types
-                                        // without that accessibility check.
-                                        object? mdObj = metadataEnvelope.GetType()
-                                            .GetProperty("metadata")
-                                            ?.GetValue(metadataEnvelope);
-
-                                        // If it's already the Audible type, use it
-                                        if (mdObj is AudibleBookResponse mdMeta)
-                                        {
-                                            AddCandidateUrl(mdMeta.ImageUrl, "MetadataEnvelopeAudible");
-                                        }
-                                        else if (mdObj != null)
-                                        {
-                                            // Try reflection for common property names
-                                            var t = mdObj.GetType();
-                                            var prop = t.GetProperty("ImageUrl") ?? t.GetProperty("Image") ?? t.GetProperty("image") ?? t.GetProperty("imageUrl");
-                                            if (prop != null)
-                                            {
-                                                var v = prop.GetValue(mdObj)?.ToString();
-                                                AddCandidateUrl(v, "MetadataEnvelopeReflection");
-                                            }
-
-                                            if (string.IsNullOrWhiteSpace(candidateIsbn))
-                                            {
-                                                var isbnProp = t.GetProperty("Isbn") ?? t.GetProperty("ISBN") ?? t.GetProperty("isbn");
-                                                var isbnVal = isbnProp?.GetValue(mdObj)?.ToString();
-                                                if (!string.IsNullOrWhiteSpace(isbnVal))
-                                                {
-                                                    candidateIsbn = ImageIdentifierHelper.NormalizeIsbn(isbnVal);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if (!string.IsNullOrWhiteSpace(candidateUrl))
-                                    {
-                                        _logger.LogInformation("Found image URL in fallback metadata source for identifier {Identifier}: {Url}", LogRedaction.SanitizeText(identifier), LogRedaction.SanitizeText(candidateUrl));
-                                    }
-                                    else
-                                    {
-                                        _logger.LogDebug("Fallback metadata returned no image URL for {Identifier}", LogRedaction.SanitizeText(identifier));
-                                    }
+                                    candidateIsbn = ImageIdentifierHelper.NormalizeIsbn(
+                                        metadataEnvelope.Metadata.Isbn);
                                 }
-                                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+
+                                if (!string.IsNullOrWhiteSpace(candidateUrl))
                                 {
-                                    // Best-effort parse of an optional fallback source — no
-                                    // failure here may take down the whole image request (the
-                                    // RuntimeBinderException above escaped the narrower filter
-                                    // and 500'd every uncached cover).
-                                    _logger.LogDebug(ex, "Failed to parse fallback metadata envelope for {Identifier}", LogRedaction.SanitizeText(identifier));
+                                    _logger.LogInformation("Found image URL in fallback metadata source for identifier {Identifier}: {Url}", LogRedaction.SanitizeText(identifier), LogRedaction.SanitizeText(candidateUrl));
+                                }
+                                else
+                                {
+                                    _logger.LogDebug("Fallback metadata returned no image URL for {Identifier}", LogRedaction.SanitizeText(identifier));
                                 }
                             }
                             else

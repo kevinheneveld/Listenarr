@@ -235,6 +235,7 @@ class SignalRService {
       status: string
       target?: string
       error?: string
+      sourceRetained?: boolean
     }) => void
   > = new Set()
   private rootFolderRelocationCallbacks: Set<(update: RootFolderPathChangeResult) => void> =
@@ -490,6 +491,7 @@ class SignalRService {
             phase?: string
             target?: string
             error?: string
+            sourceRetained?: boolean
           }
           this.moveJobCallbacks.forEach((cb) => cb(job))
         }
@@ -803,6 +805,7 @@ class SignalRService {
       phase?: string
       target?: string
       error?: string
+      sourceRetained?: boolean
     }) => void,
   ): () => void {
     this.moveJobCallbacks.add(callback)

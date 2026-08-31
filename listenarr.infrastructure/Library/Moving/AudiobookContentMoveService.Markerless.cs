@@ -25,6 +25,10 @@ internal sealed partial class AudiobookContentMoveService
             request,
             cancellationToken);
         var targetOwnership = request.TargetDirectoryOwnership;
+        var physicalFiles = manifest
+            .Where(candidate => candidate.EntryType == MoveJobEntryType.File)
+            .Where(IsPhysicalManifestEntry)
+            .ToList();
         var resumedCleanup = await TryResumeMarkerlessSourceCleanupAsync(
             request,
             source,
@@ -37,6 +41,12 @@ internal sealed partial class AudiobookContentMoveService
         {
             return resumedCleanup;
         }
+
+        var crossVolumeMove = IsUnixCrossVolumeMove(
+            request,
+            source,
+            target,
+            physicalFiles);
 
         EnsureTargetCanReceiveContents(
             request,
@@ -81,15 +91,6 @@ internal sealed partial class AudiobookContentMoveService
             request.SourceSemantics,
             cancellationToken,
             structuralSpinePaths: targetStructuralSpine);
-        ValidateUnixMarkerlessMoveVolumes(
-            request,
-            source,
-            target,
-            manifest
-                .Where(candidate => candidate.EntryType == MoveJobEntryType.File)
-                .Where(IsPhysicalManifestEntry)
-                .ToList());
-
         await ReportProgressAsync(request, 3, "Capturing source", cancellationToken);
         await CaptureMarkerlessSourceIdentitiesAsync(
             request,
@@ -138,6 +139,7 @@ internal sealed partial class AudiobookContentMoveService
                 source,
                 target,
                 manifest,
+                crossVolumeMove || request.ForceCopyAndRetainSource,
                 targetVerificationLease,
                 cancellationToken);
             await UpdateJobPhaseAsync(
@@ -152,19 +154,43 @@ internal sealed partial class AudiobookContentMoveService
                 await faultInjector.AfterPublishedAsync(request.JobId, cancellationToken);
             }
 
+            // Cross-volume moves always copy the complete manifest first. Only after every
+            // target is durably verified do we revalidate the persisted root-folder policy
+            // snapshot and decide whether source deletion may begin.
+            var retainSource = request.ForceCopyAndRetainSource
+                || crossVolumeMove
+                    && !await CanDeleteVerifiedCrossVolumeSourceAsync(
+                        request,
+                        cancellationToken);
+
             await UpdateJobPhaseAsync(
                 request.JobId,
                 request.LeaseToken,
                 MoveJobPhase.CleaningSource,
                 cancellationToken);
-            await ReportProgressAsync(request, 75, "Cleaning source", cancellationToken);
-            await DeleteMarkerlessSourceAsync(
+            await ReportProgressAsync(
                 request,
-                source,
-                target,
-                targetInsideSource,
-                manifest,
+                75,
+                retainSource ? "Retaining source" : "Cleaning source",
                 cancellationToken);
+            if (retainSource)
+            {
+                await RetainMarkerlessSourceAsync(
+                    request,
+                    target,
+                    manifest,
+                    cancellationToken);
+            }
+            else
+            {
+                await DeleteMarkerlessSourceAsync(
+                    request,
+                    source,
+                    target,
+                    targetInsideSource,
+                    manifest,
+                    cancellationToken);
+            }
             VerifySourceCleanupState(request, source, target, manifest);
             await UpdateJobPhaseAsync(
                 request.JobId,
@@ -180,6 +206,7 @@ internal sealed partial class AudiobookContentMoveService
                 targetInsideSource,
                 sourceInsideTarget,
                 manifest,
+                retainSource,
                 targetVerificationLease);
         }
         catch
@@ -204,14 +231,21 @@ internal sealed partial class AudiobookContentMoveService
         var physicalEntries = manifest
             .Where(IsPhysicalManifestEntry)
             .ToList();
-        var cleanupStarted = physicalEntries.Any(entry =>
-                entry.CleanupState != MoveJobEntryCleanupState.Pending)
-            || endpoints.SourceDirectoryCleanupState
-                != MoveJobEntryCleanupState.Pending;
-        if (!cleanupStarted)
+        var cleanupDisposition = ResolveMarkerlessSourceCleanupDisposition(
+            endpoints.SourceDirectoryCleanupState,
+            physicalEntries);
+        if (cleanupDisposition == MarkerlessSourceCleanupDisposition.NotStarted)
         {
             return null;
         }
+        if (request.ForceCopyAndRetainSource
+            && cleanupDisposition == MarkerlessSourceCleanupDisposition.Delete)
+        {
+            throw new MoveNeedsAttentionException(
+                "Forced source retention cannot resume after destructive source cleanup was authorized.");
+        }
+        var retainSource = cleanupDisposition
+            == MarkerlessSourceCleanupDisposition.Retain;
 
         if (physicalEntries
             .Where(entry => entry.EntryType == MoveJobEntryType.File)
@@ -234,26 +268,62 @@ internal sealed partial class AudiobookContentMoveService
             request.LeaseToken,
             MoveJobPhase.CleaningSource,
             cancellationToken);
-        await DeleteMarkerlessSourceAsync(
-            request,
-            source,
-            target,
-            targetInsideSource,
-            manifest,
-            cancellationToken);
+        if (retainSource)
+        {
+            if (physicalEntries.Any(entry => entry.CleanupState is
+                    MoveJobEntryCleanupState.DeleteAuthorized
+                        or MoveJobEntryCleanupState.Deleted))
+            {
+                throw new MoveNeedsAttentionException(
+                    "Cross-volume source retention cannot resume after destructive source cleanup began.");
+            }
+            await RetainMarkerlessSourceAsync(
+                request,
+                target,
+                manifest,
+                cancellationToken);
+        }
+        else
+        {
+            await DeleteMarkerlessSourceAsync(
+                request,
+                source,
+                target,
+                targetInsideSource,
+                manifest,
+                cancellationToken);
+        }
         VerifySourceCleanupState(request, source, target, manifest);
         await UpdateJobPhaseAsync(
             request.JobId,
             request.LeaseToken,
             MoveJobPhase.Finalizing,
             cancellationToken);
-        return CreateMarkerlessMoveResult(
-            request,
-            source,
-            target,
-            targetInsideSource,
-            sourceInsideTarget,
-            manifest);
+        MarkerlessTargetVerificationLease? targetVerificationLease =
+            new(request.TargetSemantics);
+        try
+        {
+            await VerifyMarkerlessTargetAsync(
+                request,
+                target,
+                manifest,
+                cancellationToken,
+                targetVerificationLease: targetVerificationLease);
+            return CreateMarkerlessMoveResult(
+                request,
+                source,
+                target,
+                targetInsideSource,
+                sourceInsideTarget,
+                manifest,
+                retainSource,
+                targetVerificationLease);
+        }
+        catch
+        {
+            targetVerificationLease.Dispose();
+            throw;
+        }
     }
 
     private static AudiobookContentMoveResult CreateMarkerlessMoveResult(
@@ -263,6 +333,7 @@ internal sealed partial class AudiobookContentMoveService
         bool targetInsideSource,
         bool sourceInsideTarget,
         IEnumerable<MoveJobEntry> manifest,
+        bool sourceRetained,
         MarkerlessTargetVerificationLease? targetVerificationLease = null)
     {
         var targetIdentities = CreatePersistedTargetPhysicalIdentityMap(
@@ -275,6 +346,7 @@ internal sealed partial class AudiobookContentMoveService
             targetInsideSource,
             sourceInsideTarget,
             SourceCleanupCompleted: true,
+            SourceRetained: sourceRetained,
             targetIdentities,
             targetVerificationLease);
     }
@@ -325,54 +397,65 @@ internal sealed partial class AudiobookContentMoveService
                 manifest,
                 cancellationToken,
                 targetVerificationLease: targetVerificationLease);
-        }
-        catch
-        {
-            targetVerificationLease.Dispose();
-            throw;
-        }
-        var endpoints = await GetEndpointObjectIdentitiesAsync(
-            request.JobId,
-            cancellationToken);
-        var sourceEntriesComplete = manifest
-            .Where(IsPhysicalManifestEntry)
-            .All(entry => entry.CleanupState is
+            var endpoints = await GetEndpointObjectIdentitiesAsync(
+                request.JobId,
+                cancellationToken);
+            var completedCleanupState = endpoints.SourceDirectoryCleanupState;
+            var sourceRootComplete = completedCleanupState is
                 MoveJobEntryCleanupState.Deleted
-                or MoveJobEntryCleanupState.Retained);
-        var sourceRootComplete = endpoints.SourceDirectoryCleanupState is
-            MoveJobEntryCleanupState.Deleted
-            or MoveJobEntryCleanupState.Retained;
-        if (!sourceEntriesComplete || !sourceRootComplete)
-        {
-            targetVerificationLease.Dispose();
-            return null;
-        }
+                or MoveJobEntryCleanupState.Retained;
+            var physicalEntries = manifest
+                .Where(IsPhysicalManifestEntry)
+                .ToList();
+            var sourceEntriesComplete = physicalEntries.All(entry =>
+                entry.CleanupState is MoveJobEntryCleanupState.Deleted
+                    or MoveJobEntryCleanupState.Retained);
+            if (!sourceEntriesComplete || !sourceRootComplete)
+            {
+                return null;
+            }
 
-        VerifySourceCleanupState(request, source, target, manifest);
-        var identities = CreatePersistedTargetPhysicalIdentityMap(
-            target,
-            files,
-            request.TargetSemantics);
-        if (targetVerificationLease.IsEmpty)
-        {
-            targetVerificationLease.Dispose();
-            return new AudiobookContentMoveResult(
+            VerifySourceCleanupState(request, source, target, manifest);
+            var sourceRetained = ResolveCompletedMarkerlessSourceRetention(
+                completedCleanupState,
+                physicalEntries);
+            if (request.ForceCopyAndRetainSource && !sourceRetained)
+            {
+                throw new MoveNeedsAttentionException(
+                    "Forced source retention has contradictory completed destructive cleanup evidence.");
+            }
+            var identities = CreatePersistedTargetPhysicalIdentityMap(
+                target,
+                files,
+                request.TargetSemantics);
+            if (targetVerificationLease.IsEmpty)
+            {
+                return new AudiobookContentMoveResult(
+                    source,
+                    target,
+                    IsSameOrInside(target, source, request.SourceSemantics),
+                    IsSameOrInside(source, target, request.TargetSemantics),
+                    SourceCleanupCompleted: true,
+                    SourceRetained: sourceRetained,
+                    identities);
+            }
+
+            var result = new AudiobookContentMoveResult(
                 source,
                 target,
                 IsSameOrInside(target, source, request.SourceSemantics),
                 IsSameOrInside(source, target, request.TargetSemantics),
                 SourceCleanupCompleted: true,
-                identities);
+                SourceRetained: sourceRetained,
+                identities,
+                targetVerificationLease);
+            targetVerificationLease = null;
+            return result;
         }
-
-        return new AudiobookContentMoveResult(
-            source,
-            target,
-            IsSameOrInside(target, source, request.SourceSemantics),
-            IsSameOrInside(source, target, request.TargetSemantics),
-            SourceCleanupCompleted: true,
-            identities,
-            targetVerificationLease);
+        finally
+        {
+            targetVerificationLease?.Dispose();
+        }
     }
 
     private static bool IsPhysicalManifestEntry(MoveJobEntry entry) =>

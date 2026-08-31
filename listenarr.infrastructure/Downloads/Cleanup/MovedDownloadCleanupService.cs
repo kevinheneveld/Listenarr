@@ -45,11 +45,11 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
             string CorrelationId,
             string? ProcessingJobId,
             DateTime? ProvenAt,
-            bool SourceRetained = false)
+            bool? SourceRetained = null)
         {
             public bool AllowsDestructiveCleanup =>
                 Kind is not ImportProofKind.LegacyMovedState
-                && !SourceRetained;
+                && SourceRetained is false;
         }
 
         /// <summary>
@@ -199,11 +199,16 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                     var deleteFiles = removalPolicy == "remove_and_delete";
                     if (deleteFiles && !proof.AllowsDestructiveCleanup)
                     {
-                        // Legacy Moved alone is enough to clean stale client/DB state, but not
-                        // enough to prove it is safe to delete files from the external client.
+                        var reason = proof.Kind == ImportProofKind.LegacyMovedState
+                            ? "only legacy Moved-state import proof is available"
+                            : proof.SourceRetained is true
+                                ? "the import retained its source"
+                                : "the source-retention disposition is unavailable";
                         logger.LogWarning(
-                            "Deferred removal: Download {DownloadId} has only legacy Moved-state import proof; remove_and_delete was downgraded to remove",
-                            download.Id);
+                            "Deferred removal: Download {DownloadId} cannot be deleted because {Reason}; " +
+                            "remove_and_delete was downgraded to remove",
+                            download.Id,
+                            reason);
                         deleteFiles = false;
                     }
 

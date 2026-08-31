@@ -29,6 +29,14 @@ internal sealed record AudiobookContentMoveRequest(
     IReadOnlyDictionary<string, string>? SourcePhysicalObjectIdentities = null,
     Func<double, string, CancellationToken, Task>? ProgressReporter = null,
     MarkerlessMoveBoundaryAuthorizationState? BoundaryAuthorization = null,
+    MoveSourceCleanupMode SourceCleanupMode = MoveSourceCleanupMode.RetainSource,
+    int? SourceRootFolderId = null,
+    int? SourcePolicyRevision = null,
+    int? TargetRootFolderId = null,
+    int? TargetPolicyRevision = null,
+    int? SourceStorageContractRevision = null,
+    int? TargetStorageContractRevision = null,
+    bool ForceCopyAndRetainSource = false,
     bool ReplaceStubTarget = false)
 {
     public string LeaseOwner => LeaseToken.Owner;
@@ -41,6 +49,7 @@ internal sealed record AudiobookContentMoveResult(
     bool TargetInsideSource,
     bool SourceInsideTarget,
     bool SourceCleanupCompleted,
+    bool SourceRetained,
     IReadOnlyDictionary<string, string> TargetPhysicalObjectIdentities,
     MarkerlessTargetVerificationLease? TargetVerificationLease = null);
 
@@ -53,7 +62,8 @@ internal sealed partial class AudiobookContentMoveService(
     IMoveFaultInjector? faultInjector = null,
     IMoveExecutionStore? moveExecutionStore = null,
     ILibraryDirectoryOwnershipStore? directoryOwnershipStore = null,
-    LibraryDirectoryOwnershipBoundaryAuthorizer? ownershipAuthorizer = null)
+    LibraryDirectoryOwnershipBoundaryAuthorizer? ownershipAuthorizer = null,
+    IMoveSourceCleanupPolicyResolver? sourceCleanupPolicyResolver = null)
 {
     private const int MaxCopyAttempts = 5;
     private readonly IMoveExecutionStore executionStore =
@@ -63,6 +73,8 @@ internal sealed partial class AudiobookContentMoveService(
     private readonly LibraryDirectoryOwnershipBoundaryAuthorizer ownershipAuthorizer =
         ownershipAuthorizer
         ?? new LibraryDirectoryOwnershipBoundaryAuthorizer(dbContextFactory);
+    private readonly IMoveSourceCleanupPolicyResolver? sourceCleanupPolicyResolver =
+        sourceCleanupPolicyResolver;
 
     internal void OnCompletionHandoff(
         Guid jobId,

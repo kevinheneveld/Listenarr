@@ -1,7 +1,7 @@
 /*
  * Listenarr - Audiobook Management System
  * Copyright (C) 2024-2026 Listenarr Contributors
- * 
+ *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
  * by the Free Software Foundation, either version 3 of the License, or
@@ -29,6 +29,11 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
             IDownloadHistoryRepository downloadHistoryRepository,
             CancellationToken cancellationToken)
         {
+            var persistedSourceRetained = bool.TryParse(
+                download.GetMetadataString(Download.SourceRetainedMetadataKey),
+                out var parsedPersistedSourceRetained)
+                    ? parsedPersistedSourceRetained
+                    : (bool?)null;
             var completedJob = (await processingJobRepository.GetByDownloadIdAsync(download.Id))
                 .Where(job => job.Status == ProcessingJobStatus.Completed)
                 .OrderByDescending(job => job.CompletedAt ?? job.CreatedAt)
@@ -40,22 +45,12 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                     completedJob.GetOrCreateCorrelationId(),
                     completedJob.Id,
                     completedJob.CompletedAt,
-                    completedJob.JobData.TryGetValue(
-                        "SourceRetained",
-                        out var retainedValue)
-                    && bool.TryParse(
-                        retainedValue?.ToString(),
-                        out var sourceRetained)
-                    && sourceRetained);
-            }
-
-            if (download.LastImportedAt.HasValue)
-            {
-                return new ImportProof(
-                    ImportProofKind.LastImportedAt,
-                    download.Id.ToUpperInvariant(),
-                    null,
-                    download.LastImportedAt.Value);
+                    completedJob.TryGetJobDataString(
+                            Download.SourceRetainedMetadataKey,
+                            out var retainedValue)
+                        && bool.TryParse(retainedValue, out var sourceRetained)
+                            ? sourceRetained
+                            : persistedSourceRetained);
             }
 
             var importedHistory = await historyRepository.GetSucceededImportedByDownloadIdAsync(
@@ -67,7 +62,18 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                     ImportProofKind.ImportedHistory,
                     importedHistory.CorrelationId ?? download.Id.ToUpperInvariant(),
                     null,
-                    importedHistory.Timestamp);
+                    importedHistory.Timestamp,
+                    persistedSourceRetained ?? ReadSourceRetained(importedHistory.Data));
+            }
+
+            if (download.LastImportedAt.HasValue)
+            {
+                return new ImportProof(
+                    ImportProofKind.LastImportedAt,
+                    download.Id.ToUpperInvariant(),
+                    null,
+                    download.LastImportedAt.Value,
+                    persistedSourceRetained);
             }
 
             var legacyDownloadHistory = await downloadHistoryRepository.GetImportedByDownloadIdAsync(
@@ -113,8 +119,13 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
                 ["ImportProof"] = proof.Kind.ToString(),
                 ["RemovalPolicy"] = removalPolicy,
                 ["DeleteFiles"] = deleteFiles,
-                ["SourceRetained"] = proof.SourceRetained
+                ["SourceRetentionKnown"] = proof.SourceRetained.HasValue
             };
+
+            if (proof.SourceRetained.HasValue)
+            {
+                details[Download.SourceRetainedMetadataKey] = proof.SourceRetained.Value;
+            }
 
             if (!string.IsNullOrWhiteSpace(proof.ProcessingJobId))
             {
@@ -127,6 +138,34 @@ namespace Listenarr.Infrastructure.Downloads.Cleanup
             }
 
             return details;
+        }
+
+        private static bool? ReadSourceRetained(string? data)
+        {
+            if (string.IsNullOrWhiteSpace(data)) return null;
+
+            try
+            {
+                using var document = JsonDocument.Parse(data);
+                if (!document.RootElement.TryGetProperty(
+                        Download.SourceRetainedMetadataKey,
+                        out var value))
+                {
+                    return null;
+                }
+
+                return value.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+                    _ => null
+                };
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         private static Task AddCleanupHistoryAsync(

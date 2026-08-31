@@ -17,7 +17,6 @@
  */
 using Listenarr.Domain.Common;
 using Microsoft.Extensions.Logging;
-
 namespace Listenarr.Application.Downloads.Import
 {
     public partial class DownloadImportService(
@@ -39,7 +38,8 @@ namespace Listenarr.Application.Downloads.Import
         IMoveQueueService moveQueueService,
         ILibraryDirectoryOwnershipStore directoryOwnershipStore,
         ILogger<DownloadImportService> logger,
-        IFilePublicationCapabilityResolver? filePublicationCapabilityResolver = null)
+        IFilePublicationCapabilityResolver? filePublicationCapabilityResolver = null,
+        ICompatibilitySourceCleanupCoordinator? compatibilitySourceCleanupCoordinator = null)
         : IDownloadImportService
     {
         private async Task<List<ImportResult>> ImportDownloadFilesCoreAsync(
@@ -47,7 +47,8 @@ namespace Listenarr.Application.Downloads.Import
             List<string> files,
             CancellationToken ct,
             DownloadImportOptions? options,
-            IReadOnlyList<FileRegistrationRecoveryReceipt> recoveryReceipts)
+            IReadOnlyList<FileRegistrationRecoveryReceipt> recoveryReceipts,
+            Guid compatibilityBatchId)
         {
             if (string.IsNullOrEmpty(audiobook.BasePath))
             {
@@ -227,6 +228,7 @@ namespace Listenarr.Application.Downloads.Import
                                             destinationSemantics),
                                         sourceProof.Value,
                                         audiobook.Id,
+                                        compatibilityBatchId,
                                         ct);
                                 if (companionPublication == null)
                                 {
@@ -434,6 +436,7 @@ namespace Listenarr.Application.Downloads.Import
                                 file,
                                 destination,
                                 sourceProof.Value,
+                                compatibilityBatchId,
                                 ct);
                             if (!publicationPlan.IsAllowed)
                             {
@@ -444,7 +447,7 @@ namespace Listenarr.Application.Downloads.Import
                                 continue;
                             }
 
-                            if (!await PrepareRegisterAndCompletePublicationAsync(
+                            var publicationFailure = await PrepareRegisterAndCompletePublicationAsync(
                                     publicationPlan,
                                     file,
                                     destination,
@@ -455,12 +458,10 @@ namespace Listenarr.Application.Downloads.Import
                                     sourceProof.Value,
                                     audiobook,
                                     ownership,
-                                    ct))
+                                    ct);
+                            if (publicationFailure != null)
                             {
-                                results.Add(ImportResult.ImportFailure(
-                                    completedFileAction,
-                                    file,
-                                    destination));
+                                results.Add(publicationFailure);
                                 continue;
                             }
 
@@ -470,7 +471,8 @@ namespace Listenarr.Application.Downloads.Import
                             results.Add(ImportResult.ImportSuccess(
                                 completedFileAction,
                                 publicationPlan.EffectiveAction,
-                                ToImportSourceDisposition(publicationPlan),
+                                ToImportSourceDisposition(
+                                    publicationPlan.SourceDisposition),
                                 file,
                                 destination,
                                 wasRegisteredToAudiobook: true,

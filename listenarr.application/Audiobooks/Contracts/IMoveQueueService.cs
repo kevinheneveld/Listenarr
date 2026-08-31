@@ -33,6 +33,14 @@ namespace Listenarr.Application.Audiobooks.Contracts
         bool DeleteEmptySource = true,
         string? SourceCleanupBoundary = null,
         Guid? RelocationId = null,
+        MoveSourceCleanupMode SourceCleanupMode = MoveSourceCleanupMode.RetainSource,
+        int? SourceRootFolderId = null,
+        int? SourcePolicyRevision = null,
+        int? TargetRootFolderId = null,
+        int? TargetPolicyRevision = null,
+        int? SourceStorageContractRevision = null,
+        int? TargetStorageContractRevision = null,
+        bool ForceCopyAndRetainSource = false,
         bool ReplaceStubTarget = false);
 
     public enum MoveHeartbeatOutcome

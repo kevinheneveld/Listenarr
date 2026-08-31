@@ -32,6 +32,7 @@ internal static class LibraryRegistrationExtensions
         services.AddSingleton<IAudiobookUpdatePublisher, AudiobookUpdatePublisher>();
         services.AddSingleton<IRootFolderRelocationService, RootFolderRelocationService>();
         services.AddSingleton<IMoveCleanupBoundaryResolver, MoveCleanupBoundaryResolver>();
+        services.AddSingleton<IMoveSourceCleanupPolicyResolver, MoveSourceCleanupPolicyResolver>();
         services.AddSingleton<ILibraryDirectoryOwnershipStore, EfLibraryDirectoryOwnershipStore>();
         services.AddSingleton<IAudiobookDeletionIntentProbe, AudiobookDeletionIntentProbe>();
         services.AddSingleton<IFileRegistrationRecoveryProbe, FileRegistrationRecoveryProbe>();
@@ -41,6 +42,8 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<IAudiobookDeletionIntentStore, AudiobookDeletionIntentStore>();
         services.AddScoped<IAudiobookDeletionIntentReconciler, AudiobookDeletionIntentReconciler>();
         services.AddScoped<IRootFolderStorageConfirmationService, RootFolderStorageConfirmationService>();
+        services.AddScoped<IRootFolderWeakStoragePolicyService, RootFolderWeakStoragePolicyService>();
+        services.AddScoped<ICompatibilitySourceCleanupCoordinator, CompatibilitySourceCleanupCoordinator>();
         services.AddScoped<IAudiobookFilePathIdentityResolver, AudiobookFilePathIdentityResolver>();
         services.AddScoped<IFileRenameCommitStore, FileRenameCommitStore>();
         services.AddScoped<IFileRegistrationRecoveryService, FileRegistrationRecoveryService>();
@@ -69,6 +72,7 @@ internal static class LibraryRegistrationExtensions
 
         services.AddScoped<IScanPathAuthorizationService, ScanPathAuthorizationService>();
         services.AddScoped<IAudiobookScanService, AudiobookScanService>();
+        services.AddScoped<IWeakStorageScanCandidateStore, WeakStorageScanCandidateStore>();
         services.AddScoped<MoveSourceManifestService>();
         services.AddScoped<IMoveSourceManifestService>(serviceProvider =>
             serviceProvider.GetRequiredService<MoveSourceManifestService>());
