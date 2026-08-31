@@ -88,6 +88,38 @@ namespace Listenarr.Application.Downloads.Import
         }
 
         /// <summary>
+        /// Compute the best existing quality among the audiobook's tracked files,
+        /// used as the acceptance baseline when scoring incoming candidates.
+        /// </summary>
+        private static (string? BestExisting, QualityProfile? Profile)
+            ResolveExistingQualityBaseline(Audiobook audiobook)
+        {
+            string? bestExisting = null;
+            QualityProfile? abProfile = audiobook.QualityProfile;
+            if (audiobook.Files != null && audiobook.Files.Count != 0)
+            {
+                foreach (var f in audiobook.Files)
+                {
+                    string q = string.Empty;
+                    if (!string.IsNullOrEmpty(f.Format)) q = f.Format;
+                    if (f.Bitrate.HasValue)
+                    {
+                        var kb = f.Bitrate.Value / 1000;
+                        if (kb >= 320) q = "MP3 320kbps";
+                        else if (kb >= 256) q = "MP3 256kbps";
+                        else if (kb >= 192) q = "MP3 192kbps";
+                        else if (kb >= 128) q = "MP3 128kbps";
+                    }
+                    if (string.IsNullOrEmpty(q) && !string.IsNullOrEmpty(f.Path)) q = ImportQualityEvaluator.Determine(null, f.Path);
+                    if (string.IsNullOrEmpty(bestExisting)) bestExisting = q;
+                    else if (!string.IsNullOrEmpty(q) && !string.IsNullOrEmpty(bestExisting) && abProfile != null && ImportQualityEvaluator.IsAcceptable(q, bestExisting, abProfile)) bestExisting = q;
+                }
+            }
+
+            return (bestExisting, abProfile);
+        }
+
+        /// <summary>
         /// Reuse the pre-ingest extraction; fall back to a direct probe only
         /// when the cache has no entry for this file.
         /// </summary>

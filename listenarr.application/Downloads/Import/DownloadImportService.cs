@@ -145,27 +145,7 @@ namespace Listenarr.Application.Downloads.Import
                 {
                     var metadataByPath = await InspectPreIngestOrSkipAllAsync(audiobook, orderedFiles, settings, results);
                     if (metadataByPath == null) return results;
-                    string? bestExisting = null;
-                    QualityProfile? abProfile = audiobook.QualityProfile;
-                    if (audiobook.Files != null && audiobook.Files.Count != 0)
-                    {
-                        foreach (var f in audiobook.Files)
-                        {
-                            string q = string.Empty;
-                            if (!string.IsNullOrEmpty(f.Format)) q = f.Format;
-                            if (f.Bitrate.HasValue)
-                            {
-                                var kb = f.Bitrate.Value / 1000;
-                                if (kb >= 320) q = "MP3 320kbps";
-                                else if (kb >= 256) q = "MP3 256kbps";
-                                else if (kb >= 192) q = "MP3 192kbps";
-                                else if (kb >= 128) q = "MP3 128kbps";
-                            }
-                            if (string.IsNullOrEmpty(q) && !string.IsNullOrEmpty(f.Path)) q = ImportQualityEvaluator.Determine(null, f.Path);
-                            if (string.IsNullOrEmpty(bestExisting)) bestExisting = q;
-                            else if (!string.IsNullOrEmpty(q) && !string.IsNullOrEmpty(bestExisting) && abProfile != null && ImportQualityEvaluator.IsAcceptable(q, bestExisting, abProfile)) bestExisting = q;
-                        }
-                    }
+                    var (bestExisting, abProfile) = ResolveExistingQualityBaseline(audiobook);
 
                     foreach (var file in orderedFiles)
                     {
