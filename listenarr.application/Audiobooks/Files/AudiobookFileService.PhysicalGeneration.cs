@@ -274,10 +274,10 @@ public partial class AudiobookFileService
         string? source,
         bool replaceMetadata)
     {
+        var fileInfo = new FileInfo(registrationLease.MetadataPath);
         var replacement = AudiobookFile.CreateUnresolved(currentFile.Path);
         replacement.AudiobookId = currentFile.AudiobookId;
-        replacement.Size = TryGetRegisteredFileLength(registrationLease.MetadataPath)
-            ?? currentFile.Size;
+        replacement.Size = fileInfo.Exists ? fileInfo.Length : currentFile.Size;
         replacement.DurationSeconds = replaceMetadata
             ? metadata?.Duration.TotalSeconds
             : Math.Abs(metadata?.Duration.TotalSeconds ?? 0) > double.Epsilon
@@ -429,13 +429,9 @@ public partial class AudiobookFileService
         if (!string.IsNullOrWhiteSpace(source.PhysicalObjectIdentity)
             && source.PhysicalIdentityObservedAtUtc.HasValue)
         {
-            // The source row may have been materialized from the database, where
-            // the UTC-by-contract observation time round-trips as Unspecified.
             clone.ApplyPhysicalObjectIdentity(
                 source.PhysicalObjectIdentity,
-                DateTime.SpecifyKind(
-                    source.PhysicalIdentityObservedAtUtc.Value,
-                    DateTimeKind.Utc));
+                source.PhysicalIdentityObservedAtUtc.Value);
         }
 
         return clone;
