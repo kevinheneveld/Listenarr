@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Domain.Audiobooks.Enumerations;
 using Microsoft.EntityFrameworkCore;
 
 namespace Listenarr.Infrastructure.Persistence.Repositories
@@ -38,6 +39,11 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
                 .AsNoTracking()
                 .Include(a => a.ExternalIdentifiers)
                 .Where(a => a.Files!.Any())
+                // Only books whose audio passed verification (agent or human):
+                // never spend provider lookups enriching a grab that may still be
+                // rejected as wrong content.
+                .Where(a => a.VerificationStatus == VerificationStatus.AgentVerified
+                    || a.VerificationStatus == VerificationStatus.ManuallyVerified)
                 .Where(a => a.MetadataBackfillAttemptedAt == null || a.MetadataBackfillAttemptedAt < retryBeforeUtc)
                 .Where(a => (a.Asin != null && a.Asin != string.Empty)
                     || a.ExternalIdentifiers!.Any(i =>

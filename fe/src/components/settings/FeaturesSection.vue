@@ -51,7 +51,7 @@
         :modelValue="settings.metadataAutoBackfillEnabled ?? false"
         @update:modelValue="updateMetadataAutoBackfillEnabled"
         title="Fill missing metadata from online sources automatically"
-        description="Books that have files but lack a description, cover, narrators, publisher, language or release date are looked up by their own ASIN/ISBN in the background and only the blank fields are filled in. Existing values are never overwritten. Runs a small batch every 15 minutes."
+        description="Books that have files, passed audio verification, and lack a description, cover, narrators, publisher, language or release date are looked up by their own ASIN/ISBN in the background and only the blank fields are filled in. Existing values are never overwritten. Runs a small batch every 15 minutes."
       />
     </div>
   </div>

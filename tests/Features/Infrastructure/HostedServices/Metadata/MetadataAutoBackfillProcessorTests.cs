@@ -66,6 +66,7 @@ namespace Listenarr.Tests.Features.Infrastructure.HostedServices.Metadata
                 .WithBasePath(Path.GetDirectoryName(audioPath)!)
                 .Build();
             audiobook.Asin = Asin;
+            audiobook.VerificationStatus = VerificationStatus.AgentVerified;
             configure?.Invoke(audiobook);
             audiobook = await _audiobookRepository.AddAsync(audiobook);
             await _audiobookFileRepository.AddAsync(new AudiobookFileBuilder()
@@ -151,6 +152,26 @@ namespace Listenarr.Tests.Features.Infrastructure.HostedServices.Metadata
             await CreateProcessor().RunCycleAsync(CancellationToken.None);
 
             var persisted = await ReloadAsync(wishlist.Id);
+            Assert.Null(persisted.Description);
+            Assert.Null(persisted.MetadataBackfillAttemptedAt);
+            metadataService.VerifyNoOtherCalls();
+        }
+
+        [Fact]
+        public async Task RunCycleAsync_UnverifiedBook_IsNotACandidate()
+        {
+            // Deploy-branch gate: a grab that has not passed audio verification may
+            // still be rejected as wrong content, so no provider lookup is spent on it.
+            var metadataService = new Mock<IAudiobookMetadataService>(MockBehavior.Strict);
+            Init(builder => builder.WithSingleton(metadataService.Object));
+            await EnableBackfillAsync();
+            var audiobook = await SeedBookWithFileAsync(
+                "metadata-backfill-unverified",
+                book => book.VerificationStatus = VerificationStatus.Unverified);
+
+            await CreateProcessor().RunCycleAsync(CancellationToken.None);
+
+            var persisted = await ReloadAsync(audiobook.Id);
             Assert.Null(persisted.Description);
             Assert.Null(persisted.MetadataBackfillAttemptedAt);
             metadataService.VerifyNoOtherCalls();
