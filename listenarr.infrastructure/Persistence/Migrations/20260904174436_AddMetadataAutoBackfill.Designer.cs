@@ -3,6 +3,7 @@ using System;
 using Listenarr.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Listenarr.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ListenArrDbContext))]
-    partial class ListenArrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904174436_AddMetadataAutoBackfill")]
+    partial class AddMetadataAutoBackfill
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.8");
@@ -313,27 +316,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Title")
-                        .HasColumnType("TEXT");
-
-                    b.Property<double?>("VerificationConfidence")
-                        .HasColumnType("REAL");
-
-                    b.Property<string>("VerificationDetailJson")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("VerificationMethod")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("VerificationStatus")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("VerificationTranscript")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("VerifiedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("VerifiedBy")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Version")
@@ -657,33 +639,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.ToTable("AuthorCacheEntries");
                 });
 
-            modelBuilder.Entity("Listenarr.Domain.Audiobooks.AuthorMonitoringExclusion", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Asin")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AuthorName")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TitleAuthorKey")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("AuthorMonitoringExclusions");
-                });
-
             modelBuilder.Entity("Listenarr.Domain.Audiobooks.LibraryDirectoryOwnership", b =>
                 {
                     b.Property<long>("Id")
@@ -955,9 +910,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<bool>("AsinPinned")
-                        .HasColumnType("INTEGER");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
@@ -1075,9 +1027,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("RelocationId")
                         .HasColumnType("TEXT");
-
-                    b.Property<bool>("ReplaceStubTarget")
-                        .HasColumnType("INTEGER");
 
                     b.Property<string>("RequestedPath")
                         .HasColumnType("TEXT");
@@ -1752,34 +1701,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.ToTable("SeriesCacheEntries");
                 });
 
-            modelBuilder.Entity("Listenarr.Domain.Audiobooks.VerificationJobRecord", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AudiobookIdsJson")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("EnqueuedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Trigger")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("VerificationJobs");
-                });
-
             modelBuilder.Entity("Listenarr.Domain.Audiobooks.WeakStorageScanCandidate", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1884,52 +1805,13 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("AiAssistApiKey")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AiAssistBaseUrl")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("AiAssistEnabled")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("AiAssistGateSearches")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("AiAssistModel")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("AllowedFileExtensions")
                         .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AudiobookshelfApiKeyEncrypted")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AudiobookshelfLibraryId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool?>("AudiobookshelfNotifyOnImport")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("AudiobookshelfUrl")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("AudnexusApiUrl")
                         .IsRequired()
                         .HasColumnType("TEXT");
-
-                    b.Property<int>("AutomaticSearchBookDelaySeconds")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("AutomaticSearchIntervalHours")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("AutomaticSearchTitleOnlyFallback")
-                        .HasColumnType("INTEGER");
 
                     b.Property<int>("CompletedFileAction")
                         .HasColumnType("INTEGER");
@@ -2057,25 +1939,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("UnmatchedScanConcurrency")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("VerificationAutoRejectWrongContent")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("VerificationClosingSeconds")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("VerificationEscalationModel")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("VerificationLowCpuPriority")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<bool>("VerificationOnImport")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("VerificationOpeningSeconds")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("Version")
@@ -2626,33 +2489,6 @@ namespace Listenarr.Infrastructure.Persistence.Migrations
                     b.HasIndex("Username");
 
                     b.ToTable("UserSessions");
-                });
-
-            modelBuilder.Entity("Listenarr.Domain.Search.BlockedRelease", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("AudiobookId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Reason")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ReleaseTitle")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TorrentHash")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("BlockedReleases");
                 });
 
             modelBuilder.Entity("Listenarr.Domain.Search.Indexer", b =>
