@@ -73,7 +73,9 @@
           <CatalogTargetLookup
             :default-title="query"
             :default-author="(audiobook.authors || [])[0] || ''"
+            :exclude-id="audiobook.id"
             @added="onCatalogAdded"
+            @selected="onCatalogAdded"
           />
         </div>
 

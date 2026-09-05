@@ -38,10 +38,10 @@
             <span>
               <strong>Audio probe</strong>
               <small
-                >When file names carry no information (e.g. everything renamed to
-                "Title-001…NNN"), transcribe the openings of the few boundary-suspect files —
-                small intro/epilogue stubs, encoding changes, whole-book-length files — and
-                split by what the audio itself announces.</small
+                >When file names carry no information (e.g. everything renamed to "Title-001…NNN"),
+                transcribe the openings of the few boundary-suspect files — small intro/epilogue
+                stubs, encoding changes, whole-book-length files — and split by what the audio
+                itself announces.</small
               >
             </span>
             <button
@@ -113,7 +113,9 @@
                 <CatalogTargetLookup
                   :default-title="c.query || c.displayName"
                   :default-author="(audiobook?.authors || [])[0] || ''"
+                  :exclude-id="audiobook?.id"
                   @added="(book) => onCatalogAdded(c, book)"
+                  @selected="(book) => onCatalogAdded(c, book)"
                 />
               </template>
               <template v-else>
@@ -343,7 +345,8 @@ function pickTarget(c: ClusterRow, cand: { id: number; title: string }) {
 }
 
 function onCatalogAdded(c: ClusterRow, book: Audiobook) {
-  // Make the fresh record visible to occupancy badges and pick it.
+  // Fresh record OR an existing one the picker found: make it visible to the
+  // occupancy badges (a fresh one isn't in the store yet) and pick it.
   if (!libraryStore.audiobooks.some((b) => b.id === book.id)) {
     libraryStore.audiobooks.push(book)
   }

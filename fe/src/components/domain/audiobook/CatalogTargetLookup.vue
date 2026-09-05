@@ -22,6 +22,13 @@
   back to the parent to use as the destination (live case: splitting a
   Witch & Wizard collection, files tagged "04 The Kiss" had no destination
   because The Kiss was never added).
+
+  Two guards keep it from creating duplicates: records already in the library
+  whose title matches what was typed are offered first ("Select" instead of
+  "Add"), and when the add itself comes back 409 "already exists" the existing
+  record from the response is selected rather than surfacing the error (live
+  case: splitting Mavericks, "specops" was typed here while SpecOps id 40 sat
+  in the library; the add failed with a wall of JSON instead of picking it).
 -->
 <template>
   <div class="catalog-lookup">
@@ -41,6 +48,29 @@
           {{ searching ? 'Searching…' : 'Search' }}
         </button>
       </div>
+      <div v-if="libraryMatches.length > 0" class="catalog-results catalog-library">
+        <div class="catalog-section-label">Already in your library</div>
+        <div v-for="b in libraryMatches" :key="b.id" class="catalog-result">
+          <span class="catalog-result-text">
+            <strong>{{ b.title }}</strong>
+            <small>
+              id {{ b.id }}
+              <template v-if="(b.authors || []).length">
+                · {{ (b.authors || []).slice(0, 2).join(', ') }}</template
+              >
+              · {{ b.fileCount > 0 ? `${b.fileCount} file(s)` : 'empty' }}
+            </small>
+          </span>
+          <button
+            type="button"
+            class="catalog-add-btn catalog-select-btn"
+            :disabled="addingAsin !== null"
+            @click="selectExisting(b.record)"
+          >
+            Select
+          </button>
+        </div>
+      </div>
       <div v-if="error" class="catalog-error">{{ error }}</div>
       <div v-if="searched && !searching && results.length === 0" class="catalog-empty">
         Nothing found in the catalog.
@@ -51,7 +81,13 @@
             <strong>{{ r.title }}</strong>
             <small>
               <template v-if="r.subtitle">{{ r.subtitle }} · </template>
-              {{ (r.authors || []).map((a) => a?.name).filter(Boolean).slice(0, 2).join(', ') }}
+              {{
+                (r.authors || [])
+                  .map((a) => a?.name)
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .join(', ')
+              }}
               <template v-if="firstNarrator(r)"> · read by {{ firstNarrator(r) }}</template>
               <template v-if="r.lengthMinutes"> · {{ Math.round(r.lengthMinutes / 60) }}h</template>
             </small>
@@ -71,21 +107,89 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
+import { useLibraryStore } from '@/stores/library'
 import type { Audiobook, AudibleBookMetadata, AudibleSearchResult } from '@/types'
 
 const props = defineProps<{
   defaultTitle?: string | null
   defaultAuthor?: string | null
+  /** The record being split/moved from — never offered as its own destination. */
+  excludeId?: number | null
 }>()
 
 const emit = defineEmits<{
+  /** A brand-new record was added to the library and should become the destination. */
   (e: 'added', audiobook: Audiobook): void
+  /** An existing library record should become the destination (no add happened). */
+  (e: 'selected', audiobook: Audiobook): void
 }>()
 
 const toast = useToast()
+const libraryStore = useLibraryStore()
+
+const STOPWORDS = new Set(['the', 'a', 'an', 'of', 'and', 'in', 'on', 'to', 'book', 'novel'])
+
+function tokenize(text: string): string[] {
+  return (text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => (t.length > 1 || /^\d$/.test(t)) && !STOPWORDS.has(t))
+}
+
+/**
+ * Library records whose title shares tokens with the typed title, best first.
+ * "specops" finds "SpecOps"; "spec ops" finds it too via the squashed form.
+ */
+const libraryMatches = computed(() => {
+  const raw = title.value.trim()
+  if (!open.value || raw.length < 2) return []
+  const tokens = tokenize(raw)
+  const squashed = raw.toLowerCase().replace(/[^a-z0-9]+/g, '')
+  if (tokens.length === 0 && squashed.length < 3) return []
+  return libraryStore.audiobooks
+    .filter((b) => b.id !== props.excludeId)
+    .map((b) => {
+      const bookTitle = b.title || ''
+      const titleTokens = new Set(tokenize(bookTitle))
+      const bookSquashed = bookTitle.toLowerCase().replace(/[^a-z0-9]+/g, '')
+      let score = tokens.reduce(
+        (s, t) => s + (titleTokens.has(t) ? (/^\d+$/.test(t) ? 2 : 1) : 0),
+        0,
+      )
+      if (squashed.length >= 3 && bookSquashed === squashed) score += 3
+      else if (squashed.length >= 4 && bookSquashed.includes(squashed)) score += 1
+      return {
+        id: b.id,
+        title: bookTitle,
+        authors: b.authors,
+        fileCount: b.fileCount ?? b.files?.length ?? 0,
+        score,
+        record: b,
+      }
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
+    .slice(0, 5)
+})
+
+function selectExisting(book: Audiobook) {
+  emit('selected', book)
+}
+
+/** Pull `{ message, audiobook }` out of an API error body when the server sent JSON. */
+function parseErrorBody(err: unknown): { message?: string; audiobook?: Audiobook } | null {
+  const body = (err as { body?: unknown })?.body
+  if (typeof body !== 'string' || body.length === 0) return null
+  try {
+    const parsed = JSON.parse(body) as { message?: string; audiobook?: Audiobook }
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
 
 const open = ref(false)
 const title = ref('')
@@ -102,6 +206,9 @@ function expand() {
   open.value = true
   title.value = (props.defaultTitle || '').trim()
   author.value = (props.defaultAuthor || '').trim()
+  if (libraryStore.audiobooks.length === 0) {
+    void libraryStore.fetchLibrary().catch(() => {})
+  }
 }
 
 function firstNarrator(r: AudibleSearchResult): string | null {
@@ -155,7 +262,23 @@ async function addAndSelect(candidate: AudibleSearchResult) {
     toast.success('Record added', `"${result.audiobook.title}" is now in your library.`)
     emit('added', result.audiobook)
   } catch (err) {
-    toast.error('Add failed', err instanceof Error ? err.message : 'unknown error')
+    const status = (err as { status?: number })?.status
+    const body = parseErrorBody(err)
+    if (status === 409 && body?.audiobook?.id) {
+      // The library already has this edition: use it rather than failing.
+      const existing = body.audiobook
+      toast.info(
+        'Already in your library',
+        `Selected the existing record "${existing.title || `id ${existing.id}`}".`,
+      )
+      emit('selected', existing)
+      return
+    }
+    const detail =
+      body?.message ||
+      (err instanceof Error ? err.message.replace(/^API error: \d+\s*/, '') : '') ||
+      'unknown error'
+    toast.error('Add failed', detail.length > 300 ? `${detail.slice(0, 300)}…` : detail)
   } finally {
     addingAsin.value = null
   }
@@ -163,6 +286,17 @@ async function addAndSelect(candidate: AudibleSearchResult) {
 </script>
 
 <style scoped>
+.catalog-section-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin-bottom: 0.25rem;
+}
+.catalog-library {
+  margin-bottom: 0.5rem;
+}
+
 .catalog-lookup {
   margin-top: 0.5rem;
 }
