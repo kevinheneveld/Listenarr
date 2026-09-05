@@ -174,10 +174,34 @@ namespace Listenarr.Api.Features.Library
                     continue;
                 }
 
+                // Ownership first, disk second. The mover journals every move under
+                // the owner it is told about, and the startup reconciler resumes an
+                // interrupted (Planned) journal only while that owner still holds the
+                // file — otherwise it fails closed and DISABLES ALL filesystem
+                // mutations (live case: 17 moves failed on NFS, the rows were
+                // reassigned anyway, and the next restart found journals owned by the
+                // source pointing at files the destination now owned). Reassigning
+                // before moving keeps any leftover journal owner-consistent, so a
+                // failed move is simply completed by the reconciler on the next start.
+                var newPath = file.Path;
+                try
+                {
+                    await _audioFileRepository.ReassignAsync(file.Id, target.Id, file.Path, ct);
+                    file.AudiobookId = target.Id;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    // Same last-resort guard as below: a per-file DB failure is a
+                    // warning, never a 500 that aborts the whole transfer — and the
+                    // file is left untouched on disk since it never changed owner.
+                    warnings.Add($"Could not reassign {Path.GetFileName(file.Path)} — left in place");
+                    _logger.LogWarning(ex, "transfer-files: DB reassign failed for file {FileId}", file.Id);
+                    continue;
+                }
+
                 // Physical relocation is best-effort: ownership (the DB row) is the
                 // core semantic, and a file left in the old folder is fixable via
                 // the Organize tool. A failed disk move must not abort the transfer.
-                var newPath = file.Path;
                 if (!string.IsNullOrWhiteSpace(target.BasePath) && !string.IsNullOrWhiteSpace(file.Path))
                 {
                     try
@@ -202,7 +226,8 @@ namespace Listenarr.Api.Features.Library
                                 _fileSystem.CreateDirectory(target.BasePath);
                             }
 
-                            if (await _fileMover.PerformActionOn(FileAction.Move, file.Path, destination, Guid.NewGuid(), file.AudiobookId, file.Id))
+                            // Journal under the NEW owner (see above).
+                            if (await _fileMover.PerformActionOn(FileAction.Move, file.Path, destination, Guid.NewGuid(), target.Id, file.Id))
                             {
                                 newPath = destination;
                                 physicallyMoved++;
@@ -220,25 +245,30 @@ namespace Listenarr.Api.Features.Library
                     }
                 }
 
-                try
+                if (!string.Equals(newPath, file.Path, StringComparison.Ordinal))
                 {
-                    await _audioFileRepository.ReassignAsync(file.Id, target.Id, newPath, ct);
-                    // Record the claimed path only after the DB update succeeds, so a caught
-                    // failure can't leave a stale path in the collision checks above.
-                    file.AudiobookId = target.Id;
-                    if (!string.IsNullOrWhiteSpace(newPath))
+                    try
                     {
-                        transferredPaths.Add(newPath);
+                        // The file moved: record its new path under the (already
+                        // reassigned) owner.
+                        await _audioFileRepository.ReassignAsync(file.Id, target.Id, newPath, ct);
                     }
-                    reassigned++;
+                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                    {
+                        // The row already belongs to the target; the mover's journal
+                        // carries the destination, so the reconciler repairs the path
+                        // on the next start. Surface it rather than failing the batch.
+                        warnings.Add($"Moved {Path.GetFileName(newPath)} but could not record its new path — will be reconciled on restart");
+                        _logger.LogWarning(ex, "transfer-files: path update failed for file {FileId} after move", file.Id);
+                    }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                // Record the claimed path only after the DB update succeeds, so a caught
+                // failure can't leave a stale path in the collision checks above.
+                if (!string.IsNullOrWhiteSpace(newPath))
                 {
-                    // Last-resort guard: any per-file DB failure (e.g. a same-name collision within
-                    // this batch) becomes a warning, never a 500 that aborts the whole transfer.
-                    warnings.Add($"Could not reassign {Path.GetFileName(newPath)} — left in place");
-                    _logger.LogWarning(ex, "transfer-files: DB reassign failed for file {FileId}", file.Id);
+                    transferredPaths.Add(newPath);
                 }
+                reassigned++;
             }
 
             // Source bookkeeping: when its audio is gone, the legacy single-file
