@@ -623,5 +623,161 @@ namespace Listenarr.Tests.Features.Infrastructure.Downloads.Processing
             Assert.Equal(1, downloadClientGatewayMock.GetCallCount(nameof(downloadClientGatewayMock.GetQueueItemAsync)));
             Assert.Equal(2, downloadClientGatewayMock.GetCallCount(nameof(downloadClientGatewayMock.MarkItemAsImportedAsync)));
         }
+
+        [Fact]
+        [Trait("Scenario", "ImportFailureBlocklistsRelease")]
+        public async Task Import_NoImportableFiles_AfterRetriesExhausted_BlocklistsRelease()
+        {
+            // The client calls the release complete but resolves nothing importable.
+            // Nothing on disk changes between attempts, and the same release would
+            // score top on the next automatic search, so exhausting the retries
+            // must blocklist it for this book (info-hash first, title fallback).
+            downloadClientGatewayMock.SourceFiles = [];
+            const string hash = "0123456789abcdef0123456789abcdef01234567";
+            var audiobook = await CreateAudiobook();
+            var download = await _downloadRepository.AddAsync(new DownloadBuilder()
+                .WithAudiobook(audiobook)
+                .WithDownloadClientConfiguration(await CreateDownloadClientConfiguration())
+                .WithTitle("Robyn Hood Iron Maiden 02 (of 02) (2021) (digital) cbr")
+                .WithTorrentHash(hash)
+                .WithPath(FileService.GetTempDirectory("empty-payload"))
+                .WithCompletedStatus(at: DateTime.UtcNow)
+                .Build());
+            var job = await _downloadProcessingJobRepository.AddAsync(new DownloadProcessingJobBuilder()
+                .WithDownload(download)
+                .Build());
+            var blockedReleases = _provider.GetRequiredService<IBlockedReleaseRepository>();
+            var processor = _provider.GetRequiredService<DownloadProcessingJobProcessor>();
+
+            // First attempt only schedules a retry — nothing is blocklisted yet.
+            await processor.ProcessQueueAsync(CancellationToken.None);
+
+            job = (await _downloadProcessingJobRepository.GetByIdAsync(job.Id))!;
+            Assert.Equal(ProcessingJobStatus.Pending, job.Status);
+            Assert.Contains("No importable files found", job.ErrorMessage);
+            Assert.Empty(await blockedReleases.GetByAudiobookIdAsync(audiobook.Id));
+
+            // Last attempt exhausts the retries.
+            job.RetryCount = job.MaxRetries;
+            await TestUtils.CancelJobRetryWait(_downloadProcessingJobRepository, job);
+            await processor.ProcessQueueAsync(CancellationToken.None);
+
+            job = (await _downloadProcessingJobRepository.GetByIdAsync(job.Id))!;
+            Assert.Equal(ProcessingJobStatus.Failed, job.Status);
+            download = (await _downloadRepository.FindAsync(download.Id))!;
+            Assert.Equal(DownloadStatus.ImportBlocked, download.Status);
+
+            var blocked = Assert.Single(await blockedReleases.GetByAudiobookIdAsync(audiobook.Id));
+            Assert.Equal(audiobook.Id, blocked.AudiobookId);
+            Assert.Equal("Robyn Hood Iron Maiden 02 (of 02) (2021) (digital) cbr", blocked.ReleaseTitle);
+            Assert.Equal(hash, blocked.TorrentHash);
+            Assert.Contains("No importable files found", blocked.Reason);
+        }
+
+        [Fact]
+        [Trait("Scenario", "ImportFailureBlocklistsRelease")]
+        public async Task Import_NoAudioFilesRegistered_BlocklistsRelease()
+        {
+            // The import ran but registered no audio to a book that has none — a
+            // music/comic/ebook payload, or files already owned by another record.
+            // The same release would produce the same empty import next time.
+            var importService = new Mock<IDownloadImportService>();
+            var sourceDirectory = FileService.GetTempDirectory("no-audio-registered-source");
+            var sourcePath = await FileService.GetFileAsync(sourceDirectory, "track01.mp3");
+            importService
+                .Setup(service => service.ImportDownloadFilesAsync(
+                    It.IsAny<Audiobook>(),
+                    It.IsAny<List<string>>(),
+                    It.IsAny<CancellationToken>(),
+                    It.IsAny<DownloadImportOptions?>()))
+                .ReturnsAsync([
+                    new ImportResult
+                    {
+                        Success = true,
+                        Action = FileAction.Move,
+                        SourcePath = sourcePath,
+                        FinalPath = null,
+                        WasRegisteredToAudiobook = false,
+                        Message = "Pre-ingest verification rejected the release as music"
+                    }
+                ]);
+            Init(builder => builder.WithSingleton<IDownloadImportService>(importService.Object));
+            var audiobook = await CreateAudiobook();
+            var download = await _downloadRepository.AddAsync(new Download
+            {
+                Id = $"ddl-{Guid.NewGuid():N}",
+                AudiobookId = audiobook.Id,
+                Title = "Pathfinder OST (45s tracks)",
+                Artist = "DDL Author",
+                Album = "Pathfinder OST",
+                DownloadClientId = DirectDownloadMetadataKeys.ClientId,
+                Status = DownloadStatus.Completed,
+                StartedAt = DateTime.UtcNow.AddMinutes(-5),
+                CompletedAt = DateTime.UtcNow,
+                DownloadPath = sourcePath,
+                Metadata = new Dictionary<string, object>
+                {
+                    [DirectDownloadMetadataKeys.DownloadType] = DirectDownloadMetadataKeys.ClientId
+                }
+            });
+            var job = await _downloadProcessingJobRepository.AddAsync(new DownloadProcessingJobBuilder()
+                .WithDownload(download)
+                .Build());
+
+            await _provider.GetRequiredService<DownloadProcessingJobProcessor>()
+                .ProcessQueueAsync(CancellationToken.None);
+
+            job = (await _downloadProcessingJobRepository.GetByIdAsync(job.Id))!;
+            Assert.Equal(ProcessingJobStatus.Failed, job.Status);
+            download = (await _downloadRepository.FindAsync(download.Id))!;
+            Assert.Equal(DownloadStatus.ImportBlocked, download.Status);
+
+            var blockedReleases = _provider.GetRequiredService<IBlockedReleaseRepository>();
+            var blocked = Assert.Single(await blockedReleases.GetByAudiobookIdAsync(audiobook.Id));
+            Assert.Equal("Pathfinder OST (45s tracks)", blocked.ReleaseTitle);
+            Assert.Null(blocked.TorrentHash);
+            Assert.Contains("No audio files were registered", blocked.Reason);
+        }
+
+        [Fact]
+        [Trait("Scenario", "ImportFailureBlocklistsRelease")]
+        public async Task Import_MissingDirectDownloadSource_AfterRetriesExhausted_DoesNotBlocklist()
+        {
+            // A staged file that vanished says nothing about the release itself: a
+            // re-grab could succeed, so this transient exhaustion must NOT blocklist.
+            var missingPath = Path.Join(FileService.GetTempDirectory("ddl-vanished"), "missing.m4b");
+            var audiobook = await CreateAudiobook();
+            var download = await _downloadRepository.AddAsync(new Download
+            {
+                Id = $"ddl-{Guid.NewGuid():N}",
+                AudiobookId = audiobook.Id,
+                Title = "DDL Book",
+                Artist = "DDL Author",
+                Album = "DDL Book",
+                DownloadClientId = DirectDownloadMetadataKeys.ClientId,
+                Status = DownloadStatus.Completed,
+                StartedAt = DateTime.UtcNow.AddMinutes(-5),
+                CompletedAt = DateTime.UtcNow,
+                DownloadPath = missingPath,
+                Metadata = new Dictionary<string, object>
+                {
+                    [DirectDownloadMetadataKeys.DownloadType] = DirectDownloadMetadataKeys.ClientId
+                }
+            });
+            var job = new DownloadProcessingJobBuilder().WithDownload(download).Build();
+            job.RetryCount = job.MaxRetries;
+            job = await _downloadProcessingJobRepository.AddAsync(job);
+
+            await _provider.GetRequiredService<DownloadProcessingJobProcessor>()
+                .ProcessQueueAsync(CancellationToken.None);
+
+            job = (await _downloadProcessingJobRepository.GetByIdAsync(job.Id))!;
+            Assert.Equal(ProcessingJobStatus.Failed, job.Status);
+            download = (await _downloadRepository.FindAsync(download.Id))!;
+            Assert.Equal(DownloadStatus.ImportBlocked, download.Status);
+
+            var blockedReleases = _provider.GetRequiredService<IBlockedReleaseRepository>();
+            Assert.Empty(await blockedReleases.GetByAudiobookIdAsync(audiobook.Id));
+        }
     }
 }

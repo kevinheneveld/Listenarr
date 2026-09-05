@@ -270,6 +270,12 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                         : "Files reported by the download client and files on disk do not match";
                     await ScheduleRetryAsync(job, downloadProcessingJobService, historyRepository, download, audiobook,
                         correlationId, reason, cancellationToken);
+                    if (files.Count == 0 && job.Status == ProcessingJobStatus.Failed)
+                    {
+                        // Nothing to import on any attempt: a re-grab of the same release reproduces this.
+                        await BlocklistImportFailedReleaseAsync(scope, download,
+                            $"Import failed: {reason} after {job.RetryCount + 1} attempts", cancellationToken);
+                    }
                     return;
                 }
 
@@ -317,8 +323,11 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                     var existingAudiobookFiles = await audiobookFileRepository.GetByAudiobookIdAsync(audiobook.Id, cancellationToken);
                     if (existingAudiobookFiles.Count <= 0)
                     {
+                        const string reason = "No audio files were registered after file import";
                         await FailImportAsync(job, downloadProcessingJobService, historyRepository, download, audiobook,
-                            correlationId, "No audio files were registered after file import", cancellationToken);
+                            correlationId, reason, cancellationToken);
+                        // No audio this book can own (music/comic/ebook payload, or files owned by another record).
+                        await BlocklistImportFailedReleaseAsync(scope, download, $"Import failed: {reason}", cancellationToken);
                         return;
                     }
                 }
