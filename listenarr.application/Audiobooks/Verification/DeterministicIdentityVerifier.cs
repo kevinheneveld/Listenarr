@@ -15,6 +15,8 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using System.Text.RegularExpressions;
+using Listenarr.Domain.Common;
 using Listenarr.Application.Audiobooks.Verification.Contracts;
 using Microsoft.Extensions.Logging;
 
@@ -253,7 +255,10 @@ namespace Listenarr.Application.Audiobooks.Verification
             var transcript = BuildTranscript(openingText, closingText);
             var tokens = TranscriptMatcher.Tokenize(transcript);
 
-            var title = TranscriptMatcher.MatchTitle(tokens, audiobook.Title);
+            var title = DiscountSeriesPhraseTitleMatch(
+                TranscriptMatcher.MatchTitle(tokens, audiobook.Title),
+                transcript,
+                audiobook.Title);
             var author = TranscriptMatcher.MatchNames(tokens, audiobook.Authors);
             var narrator = TranscriptMatcher.MatchNames(tokens, audiobook.Narrators);
             var publisher = TranscriptMatcher.MatchPhrase(tokens, audiobook.Publisher);
@@ -334,6 +339,62 @@ namespace Listenarr.Application.Audiobooks.Verification
                 PublisherMatch = publisher,
                 Transcript = transcript
             };
+        }
+
+        // "Book One of Expeditionary Force Mavericks", "Book Four of Convergence",
+        // "book four in the Incarnations of Immortality series": the phrase that
+        // NAMES THE SERIES in spoken credits.
+        private static readonly Regex SeriesPhraseRegex = new(
+            @"\b(?:book|volume|vol\.?|part|episode)\s+(?<num>[a-z0-9\-]+)\s+(?:of|in)\s+(?:the\s+)?(?<series>[^.,;!?]+?)(?:\s+(?:series|saga|trilogy|sequence|chronicles))?\s*(?=[.,;!?]|$)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <summary>
+        /// A record title that is heard ONLY inside the spoken series phrase is
+        /// not a title match. Live case: a 99-file series dump on the record
+        /// "Mavericks" opened with "Death Trap, Book One of Expeditionary Force
+        /// Mavericks" and scored a perfect title hit on the series name — every
+        /// book in that sub-series would have "verified" against it. When the
+        /// title tokens all sit inside a "Book N of &lt;series&gt;" phrase and
+        /// the title does not also stand on its own elsewhere in the transcript,
+        /// the match is rescored from the transcript with the series phrases
+        /// removed, so the verdict falls to Uncertain (human review) instead of a
+        /// confident Match. Titles heard outside the phrase ("Fallout, Book 13 of
+        /// Expeditionary Force") are untouched. Public + pure for unit testing.
+        /// </summary>
+        public static VerificationFieldMatch? DiscountSeriesPhraseTitleMatch(
+            VerificationFieldMatch? title,
+            string? transcript,
+            string? recordTitle)
+        {
+            if (title == null || title.Score < TitleMatchThreshold) return title;
+            if (string.IsNullOrWhiteSpace(transcript) || string.IsNullOrWhiteSpace(recordTitle)) return title;
+
+            var phrases = SeriesPhraseRegex.Matches(transcript);
+            if (phrases.Count == 0) return title;
+
+            var titleTokens = TranscriptMatcher.Tokenize(TitleUtils.NormalizeTitle(recordTitle));
+            if (titleTokens.Count == 0) return title;
+
+            var seriesTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match phrase in phrases)
+            {
+                foreach (var token in TranscriptMatcher.Tokenize(phrase.Groups["series"].Value))
+                {
+                    seriesTokens.Add(token);
+                }
+            }
+
+            // Only a title fully contained in a series phrase is suspect.
+            if (!titleTokens.All(seriesTokens.Contains)) return title;
+
+            // Does the title also stand on its own once the series phrases are gone?
+            var stripped = SeriesPhraseRegex.Replace(transcript, " ");
+            var outside = TranscriptMatcher.MatchTitle(TranscriptMatcher.Tokenize(stripped), recordTitle);
+            if ((outside?.Score ?? 0) >= TitleMatchThreshold) return title;
+
+            return new VerificationFieldMatch(
+                outside?.Score ?? 0,
+                $"series phrase only: {title.MatchedText}");
         }
 
         private static double WeightedScore(VerificationFieldMatch? title, VerificationFieldMatch? author, VerificationFieldMatch? narrator, VerificationFieldMatch? publisher)

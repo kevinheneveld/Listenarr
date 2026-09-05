@@ -46,6 +46,82 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Publisher = "Audible Studios"
         };
 
+        private static Audiobook ExForce(string title, string? series = "Expeditionary Force") => new()
+        {
+            Id = 2,
+            Title = title,
+            Series = series,
+            Authors = new List<string> { "Craig Alanson" },
+            Narrators = new List<string> { "R.C. Bray" },
+            Publisher = "Podium Audio"
+        };
+
+        [Fact]
+        public void Evaluate_TitleHeardOnlyInsideSeriesPhrase_IsNotAMatch()
+        {
+            // Live case: a 99-file series dump on the record "Mavericks". The
+            // opening announces Death Trap, BOOK ONE OF Expeditionary Force
+            // Mavericks — "mavericks" is the sub-series name, not this book.
+            var verdict = CreateVerifier().Evaluate(
+                ExForce("Mavericks"),
+                "This is Audible. Blue Heron Audio presents Death Trap, Book One of Expeditionary Force Mavericks, " +
+                "by Craig Alanson, performed by R.C. Bray. Chapter one.",
+                closingText: null);
+
+            Assert.NotEqual(VerificationOutcome.Match, verdict.Outcome);
+            Assert.NotNull(verdict.TitleMatch);
+            Assert.True(verdict.TitleMatch!.Score < 0.75, $"title score {verdict.TitleMatch.Score}");
+            Assert.StartsWith("series phrase only", verdict.TitleMatch.MatchedText);
+        }
+
+        [Fact]
+        public void Evaluate_SeriesNameEqualsRecordTitle_IsNotAMatch()
+        {
+            // Second live case: "Recon, Book Four of Convergence" on the record
+            // titled "Convergence" (48 h of audio on a 17 h book).
+            var verdict = CreateVerifier().Evaluate(
+                ExForce("Convergence", series: "Convergence"),
+                "Recon, Book Four of Convergence, written by Craig Alanson, narrated by R.C. Bray.",
+                closingText: null);
+
+            Assert.NotEqual(VerificationOutcome.Match, verdict.Outcome);
+        }
+
+        [Fact]
+        public void Evaluate_TitleHeardBeforeSeriesPhrase_StillMatches()
+        {
+            // The ordinary shape: the real title precedes the series phrase.
+            var verdict = CreateVerifier().Evaluate(
+                ExForce("Fallout"),
+                "Podium Audio presents Fallout, Book 13 of Expeditionary Force, written by Craig Alanson, performed by R.C. Bray.",
+                closingText: null);
+
+            Assert.Equal(VerificationOutcome.Match, verdict.Outcome);
+            Assert.Equal(1.0, verdict.TitleMatch!.Score);
+        }
+
+        [Fact]
+        public void Evaluate_SubSeriesBookOne_StillMatchesItsOwnTitle()
+        {
+            // Deathtrap IS Mavericks book one: its title stands outside the
+            // phrase, so the guard must leave it alone.
+            var verdict = CreateVerifier().Evaluate(
+                ExForce("Deathtrap", series: "Expeditionary Force Mavericks"),
+                "Blue Heron Audio presents Deathtrap, Book One of Expeditionary Force Mavericks, by Craig Alanson, performed by R.C. Bray.",
+                closingText: null);
+
+            Assert.Equal(VerificationOutcome.Match, verdict.Outcome);
+        }
+
+        [Fact]
+        public void DiscountSeriesPhraseTitleMatch_NoSeriesPhrase_ReturnsInputUnchanged()
+        {
+            var input = new VerificationFieldMatch(1.0, "mavericks");
+            var result = DeterministicIdentityVerifier.DiscountSeriesPhraseTitleMatch(
+                input, "Mavericks by Craig Alanson, performed by R.C. Bray.", "Mavericks");
+            Assert.Same(input, result);
+        }
+
         [Fact]
         public void Evaluate_CleanCredits_IsMatch()
         {
