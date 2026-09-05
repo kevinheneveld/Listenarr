@@ -39,6 +39,41 @@ public class AudiobookOnlyFilter : ISearchResultFilter
         @"\b(SINGLE|EP|ALBUM|CDM|CDS|CDEP|MCD|VLS|CDA|VINYL|LP|MAXI)[-_ .](WEB|CD|CDDA|VINYL|FLAC|CABLE|SAT|DAB|DVBC|MP3)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Comic/ebook releases whose title carries the format WITHOUT a dotted extension — indexers
+    // routinely strip the dot ("... (2021) (digital) (The Seeker Empire) cbr"), so the dotted list
+    // below never saw them (live case: that comic was grabbed for the audiobook "The Iron Maiden",
+    // import-failed four times, and automatic search kept re-picking it for weeks).
+    //  - Comic issue grammar: "02 (of 02)" issue counts and the "(digital)" / "(Digital-HD)" scan tag.
+    //  - Bare ebook/comic tokens that never mean anything else: cbz, cb7, epub, mobi, azw/azw3.
+    //  - Bare "cbr": ALSO the audio term for constant bitrate ("MP3 CBR 64kbps"), so it only counts
+    //    when the title carries no audio marker at all.
+    private static readonly Regex ComicIssuePattern = new(
+        @"\b\d{1,3}\s*\(\s*of\s+\d{1,3}\s*\)|\(\s*digital(?:[- ](?:hd|dcp|webrip))?\s*\)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex BareNonAudioExtensionPattern = new(
+        @"\b(?:cbz|cb7|epub|mobi|azw3?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex BareCbrPattern = new(
+        @"\bcbr\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex AudioMarkerPattern = new(
+        @"\b(?:m4b|mp3|m4a|flac|aac|ogg|opus|wma|kbps|kbit|kb/s|unabridged|abridged|audiobook|audio\s*book|narrat(?:ed|or)|read\s+by)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// True when the release title reads as a comic or ebook release even without a dotted
+    /// file extension, and nothing in the title says "audio". Public + pure for unit testing.
+    /// </summary>
+    public static bool LooksLikeUndottedComicOrEbookRelease(string? title, string? format = null)
+    {
+        var text = $"{title} {format}";
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        if (AudioMarkerPattern.IsMatch(text)) return false;
+        return ComicIssuePattern.IsMatch(text)
+            || BareNonAudioExtensionPattern.IsMatch(text)
+            || BareCbrPattern.IsMatch(text);
+    }
+
     public bool ShouldFilter(SearchResult result)
     {
         // If enriched with a metadata source, prefer that metadata only when the
@@ -106,7 +141,9 @@ public class AudiobookOnlyFilter : ISearchResultFilter
         var hasSimple = HasAny(simpleIndicators, title) || HasAny(simpleIndicators, format);
         var hasPhrase = HasAny(phraseIndicators, title) || HasAny(phraseIndicators, format);
         var hasSuffix = HasAny(suffixIndicators, title) || HasAny(suffixIndicators, format);
-        var hasNonAudioFormat = HasAny(nonAudioFormatIndicators, title) || HasAny(nonAudioFormatIndicators, format);
+        var hasNonAudioFormat = HasAny(nonAudioFormatIndicators, title)
+            || HasAny(nonAudioFormatIndicators, format)
+            || LooksLikeUndottedComicOrEbookRelease(title, format);
         var hasMusicSceneFormat = MusicSceneReleasePattern.IsMatch(title) || MusicSceneReleasePattern.IsMatch(format);
 
         // If we see strong signals of a print/box-set/collection, a non-audio media format, or a
