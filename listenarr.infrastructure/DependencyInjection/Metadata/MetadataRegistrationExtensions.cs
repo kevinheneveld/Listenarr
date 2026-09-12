@@ -40,8 +40,22 @@ internal static class MetadataRegistrationExtensions
         // No retry policy: LLM generation is slow, and every consumer already
         // degrades to deterministic behavior on failure — retrying would just
         // triple a timeout nobody is waiting on.
+        // Endpoint-health memory shared by every (transient) AiAssistService instance.
+        services.AddSingleton<Listenarr.Infrastructure.AiAssist.AiAssistEndpointHealth>();
         services.AddHttpClient<IAiAssistService, Listenarr.Infrastructure.AiAssist.AiAssistService>()
-            .ConfigurePrimaryHttpMessageHandler(PlatformRegistrationExtensions.CreateExternalHandler);
+            // The service bounds each call itself (120s completion / 30s probe); lift the
+            // client's 100s default above that so the service's own limits are the ones
+            // that fire. A host that silently drops SYNs must not cost the whole request
+            // timeout to discover — cap the TCP connect (live: a firewalled Ollama box
+            // made every release-gate call wait 100s before falling back).
+            .ConfigureHttpClient(client => client.Timeout =
+                TimeSpan.FromSeconds(Listenarr.Infrastructure.AiAssist.AiAssistService.RequestTimeoutSeconds + 10))
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.All,
+                UseProxy = false,
+                ConnectTimeout = TimeSpan.FromSeconds(10)
+            });
         return services;
     }
 
