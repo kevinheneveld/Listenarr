@@ -37,17 +37,58 @@
         </div>
         <button
           class="btn btn-primary"
-          @click="searchMissing"
-          :disabled="categorizedWanted.missing.length === 0"
+          data-testid="wanted-search-button"
+          @click="queueWantedSearch"
+          :disabled="wantedSearchBusy || queueSnapshot.isRunning || searchableWanted.length === 0"
+          :title="
+            filterText
+              ? 'Queue every wanted book matching the filter for automatic search'
+              : 'Queue every wanted book for automatic search'
+          "
         >
           <PhRobot />
-          Search All
+          {{ wantedSearchButtonLabel }}
         </button>
         <button class="btn btn-secondary" @click="openManualImport">
           <PhFolderPlus />
           Manual Import
         </button>
       </div>
+    </div>
+
+    <!-- Server-side wanted-search batch progress -->
+    <div
+      v-if="showQueueStrip"
+      class="wanted-search-strip"
+      :class="{ done: !queueSnapshot.isRunning, cancelled: queueSnapshot.cancelled }"
+      data-testid="wanted-search-strip"
+    >
+      <PhSpinner v-if="queueSnapshot.isRunning" class="ph-spin strip-icon" :size="16" />
+      <PhCheckCircle v-else class="strip-icon" :size="16" />
+      <span class="strip-text">
+        <template v-if="queueSnapshot.isRunning">
+          Searching wanted books — {{ queueSnapshot.processed }} of {{ queueSnapshot.total }}
+          <span v-if="queueSnapshot.currentTitle" class="strip-current">
+            · {{ queueSnapshot.currentTitle }}
+          </span>
+        </template>
+        <template v-else>
+          Wanted search {{ queueSnapshot.cancelled ? 'cancelled' : 'finished' }} —
+          {{ queueSnapshot.processed }} of {{ queueSnapshot.total }} searched
+        </template>
+      </span>
+      <span class="strip-chip grabbed">{{ queueSnapshot.grabbed }} grabbed</span>
+      <span v-if="queueSnapshot.failed > 0" class="strip-chip failed">
+        {{ queueSnapshot.failed }} failed
+      </span>
+      <button
+        v-if="queueSnapshot.isRunning"
+        class="btn btn-secondary strip-cancel"
+        :disabled="wantedSearchBusy"
+        @click="cancelWantedSearch"
+      >
+        Cancel
+      </button>
     </div>
 
     <!-- Loading State -->
@@ -200,11 +241,12 @@ import { useLibraryStore } from '@/stores/library'
 import { useConfigurationStore } from '@/stores/configuration'
 import { apiService } from '@/services/api'
 import { errorTracking } from '@/services/errorTracking'
+import { useToast } from '@/services/toastService'
 import { handleImageError } from '@/utils/imageFallback'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import ManualImportModal from '@/components/feedback/ManualImportModal.vue'
 import { EmptyState, LoadingState } from '@/components/base'
-import type { Audiobook, SearchResult, Download } from '@/types'
+import type { Audiobook, SearchResult, Download, WantedSearchQueueSnapshot } from '@/types'
 import { safeText } from '@/utils/textUtils'
 import {
   PhHeart,
@@ -286,6 +328,7 @@ const getQualityProfileForAudiobook = (audiobook: Audiobook) => {
 }
 
 const loading = computed(() => libraryStore.loading)
+const toast = useToast()
 const searching = ref<Record<number, boolean>>({})
 const searchResults = ref<Record<number, string>>({})
 const showManualSearchModal = ref(false)
@@ -314,11 +357,20 @@ onMounted(async () => {
   await configurationStore.loadQualityProfiles()
 
   await syncWantedLayout()
+
+  // Pick up a batch that is already running (started before a reload, or from
+  // another tab) so the progress strip appears without a click.
+  void refreshWantedSearchQueue()
 })
 
 onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('resize', handleViewportResize)
+  }
+  stopQueuePolling()
+  if (queueSummaryTimer) {
+    clearTimeout(queueSummaryTimer)
+    queueSummaryTimer = null
   }
 })
 
@@ -335,17 +387,6 @@ const wantedAudiobooks = computed(() => {
 
     return !!audiobook.monitored && !hasFiles && !hasPrimaryFile
   })
-})
-
-// Categorize wanted audiobooks by their current search state
-const categorizedWanted = computed(() => {
-  const all = wantedAudiobooks.value
-  const missingItems = all.filter((a) => !searching.value[a.id] && !searchResults.value[a.id])
-
-  return {
-    all,
-    missing: missingItems,
-  }
 })
 
 const filteredWanted = computed(() => {
@@ -408,11 +449,27 @@ function getActiveDownload(item: Audiobook): Download | undefined {
   return activeDownloadsByAudiobook.value.get(item.id)
 }
 
+// What the header button will queue: the rows currently shown (so the filter
+// box scopes it), minus books already downloading or mid-search.
+const searchableWanted = computed(() =>
+  filteredWanted.value.filter((item) => !hasActiveDownload(item) && !searching.value[item.id]),
+)
+
+const wantedSearchButtonLabel = computed(() =>
+  filterText.value
+    ? `Search Filtered (${searchableWanted.value.length})`
+    : `Search All (${searchableWanted.value.length})`,
+)
+
+function isInWantedSearchBatch(item: Audiobook): boolean {
+  return queueSnapshot.value.isRunning && queueSnapshot.value.currentAudiobookId === item.id
+}
+
 function getStatusClass(item: Audiobook): string {
   if (hasActiveDownload(item)) {
     return 'downloading'
   }
-  if (searching.value[item.id]) {
+  if (searching.value[item.id] || isInWantedSearchBatch(item)) {
     return 'searching'
   }
   if (searchResults.value[item.id] && searchResults.value[item.id] !== 'Searching...') {
@@ -429,7 +486,7 @@ function getStatusText(item: Audiobook): string {
     }
     return download.status
   }
-  if (searching.value[item.id]) {
+  if (searching.value[item.id] || isInWantedSearchBatch(item)) {
     return 'Searching'
   }
   if (searchResults.value[item.id] && searchResults.value[item.id] !== 'Searching...') {
@@ -438,12 +495,140 @@ function getStatusText(item: Audiobook): string {
   return 'Missing'
 }
 
-const searchMissing = async () => {
-  logger.debug('Automatic search for all missing audiobooks')
+// --- Server-side wanted-search batch ------------------------------------------------
+// The old "Search All" was a loop in this component firing one request per book:
+// it ignored the filter, background-tab timer throttling stretched its 1s pause to
+// a minute, and closing the tab killed the batch. The server queue has none of
+// those problems; this page only queues ids and polls for progress.
 
-  for (const audiobook of categorizedWanted.value.missing) {
-    await searchAudiobook(audiobook)
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+const idleQueueSnapshot: WantedSearchQueueSnapshot = {
+  isRunning: false,
+  pending: 0,
+  processed: 0,
+  total: 0,
+  grabbed: 0,
+  failed: 0,
+  currentAudiobookId: null,
+  currentTitle: null,
+  startedAt: null,
+  completedAt: null,
+  cancelled: false,
+}
+
+const QUEUE_POLL_MS = 3000
+const QUEUE_SUMMARY_MS = 10000
+
+const queueSnapshot = ref<WantedSearchQueueSnapshot>(idleQueueSnapshot)
+const wantedSearchBusy = ref(false)
+const queueSummaryVisible = ref(false)
+let queuePollTimer: ReturnType<typeof setInterval> | null = null
+let queueSummaryTimer: ReturnType<typeof setTimeout> | null = null
+
+const showQueueStrip = computed(() => queueSnapshot.value.isRunning || queueSummaryVisible.value)
+
+function startQueuePolling() {
+  if (queuePollTimer) return
+  queuePollTimer = setInterval(() => {
+    void refreshWantedSearchQueue()
+  }, QUEUE_POLL_MS)
+}
+
+function stopQueuePolling() {
+  if (queuePollTimer) {
+    clearInterval(queuePollTimer)
+    queuePollTimer = null
+  }
+}
+
+function applyQueueSnapshot(next: WantedSearchQueueSnapshot) {
+  const wasRunning = queueSnapshot.value.isRunning
+  queueSnapshot.value = next
+  if (next.isRunning) {
+    startQueuePolling()
+    return
+  }
+  stopQueuePolling()
+  if (wasRunning) {
+    void onWantedSearchFinished(next)
+  }
+}
+
+async function refreshWantedSearchQueue() {
+  try {
+    applyQueueSnapshot(await apiService.getWantedSearchQueue())
+  } catch (err) {
+    logger.debug('Failed to read wanted-search queue status', err)
+  }
+}
+
+async function onWantedSearchFinished(snapshot: WantedSearchQueueSnapshot) {
+  queueSummaryVisible.value = true
+  if (queueSummaryTimer) clearTimeout(queueSummaryTimer)
+  queueSummaryTimer = setTimeout(() => {
+    queueSummaryVisible.value = false
+    queueSummaryTimer = null
+  }, QUEUE_SUMMARY_MS)
+
+  const summary = `${snapshot.processed} of ${snapshot.total} searched, ${snapshot.grabbed} grabbed${
+    snapshot.failed > 0 ? `, ${snapshot.failed} failed` : ''
+  }.`
+  if (snapshot.cancelled) {
+    toast.info('Wanted search cancelled', summary)
+  } else {
+    toast.success('Wanted search finished', summary)
+  }
+
+  try {
+    await downloadsStore.loadDownloads()
+  } catch (e) {
+    logger.warn('Failed to refresh downloads after wanted search:', e)
+  }
+  try {
+    await libraryStore.fetchLibrary()
+  } catch (e) {
+    logger.warn('Failed to refresh library after wanted search:', e)
+  }
+}
+
+const queueWantedSearch = async () => {
+  const ids = searchableWanted.value.map((item) => item.id)
+  if (ids.length === 0) return
+
+  wantedSearchBusy.value = true
+  try {
+    const result = await apiService.enqueueWantedSearch(ids)
+    if (result.accepted === 0 && result.alreadyQueued > 0) {
+      toast.info('Already queued', 'Those books are already waiting in the current search batch.')
+    } else {
+      toast.success(
+        `Queued ${result.accepted} book${result.accepted === 1 ? '' : 's'} for search`,
+        filterText.value
+          ? 'Only the filtered entries were queued. The search runs on the server, so you can leave this page.'
+          : 'The search runs on the server, so you can leave this page.',
+      )
+    }
+    queueSummaryVisible.value = false
+    applyQueueSnapshot(result.snapshot)
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'WantedView',
+      operation: 'queueWantedSearch',
+      metadata: { count: ids.length, filtered: !!filterText.value },
+    })
+    toast.error('Could not queue search', err instanceof Error ? err.message : 'Unknown error')
+  } finally {
+    wantedSearchBusy.value = false
+  }
+}
+
+const cancelWantedSearch = async () => {
+  wantedSearchBusy.value = true
+  try {
+    applyQueueSnapshot(await apiService.cancelWantedSearch())
+  } catch (err) {
+    toast.error('Could not cancel search', err instanceof Error ? err.message : 'Unknown error')
+  } finally {
+    wantedSearchBusy.value = false
   }
 }
 
@@ -571,6 +756,74 @@ const markAsSkipped = async (item: Audiobook) => {
   display: flex;
   gap: 0.75rem;
   align-items: center;
+}
+
+/* Server-side wanted-search batch progress */
+.wanted-search-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  margin: -1rem 0 1.25rem;
+  border-radius: 8px;
+  border: 1px solid rgba(var(--brand-rgb, 90, 169, 230), 0.35);
+  background: rgba(var(--brand-rgb, 90, 169, 230), 0.1);
+  color: #e9ecef;
+  font-size: 0.875rem;
+}
+
+.wanted-search-strip.done {
+  border-color: rgba(64, 192, 87, 0.35);
+  background: rgba(64, 192, 87, 0.1);
+}
+
+.wanted-search-strip.done.cancelled {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wanted-search-strip .strip-icon {
+  flex-shrink: 0;
+  color: var(--brand, #5aa9e6);
+}
+
+.wanted-search-strip.done .strip-icon {
+  color: #40c057;
+}
+
+.wanted-search-strip .strip-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wanted-search-strip .strip-current {
+  color: #aeb6c2;
+  overflow-wrap: anywhere;
+}
+
+.wanted-search-strip .strip-chip {
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.08);
+  color: #dee2e6;
+}
+
+.wanted-search-strip .strip-chip.grabbed {
+  background: rgba(64, 192, 87, 0.18);
+  color: #69db7c;
+}
+
+.wanted-search-strip .strip-chip.failed {
+  background: rgba(250, 82, 82, 0.18);
+  color: #ff8787;
+}
+
+.wanted-search-strip .strip-cancel {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
 }
 
 /* Filter input */

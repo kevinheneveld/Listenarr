@@ -22,12 +22,80 @@ import WantedView from '@/views/content/WantedView.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useDownloadsStore } from '@/stores/downloads'
 import { API_BASE_PATH } from '@/services/apiBase'
+import { apiService } from '@/services/api'
+
+const idleWantedSearchSnapshot = {
+  isRunning: false,
+  pending: 0,
+  processed: 0,
+  total: 0,
+  grabbed: 0,
+  failed: 0,
+  currentAudiobookId: null,
+  currentTitle: null,
+  startedAt: null,
+  completedAt: null,
+  cancelled: false,
+}
+
+vi.mock('@/services/toastService', () => ({
+  useToast: () => ({
+    info: vi.fn(),
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+  }),
+}))
 
 // Mock api service ensureImageCached and getImageUrl (and other helpers used by stores)
 vi.mock('@/services/api', () => ({
   apiService: {
     getImageUrl: vi.fn((url: string) => url || 'https://via.placeholder.com/300x450?text=No+Image'),
     getQualityProfiles: vi.fn(async () => []),
+    // Server-side wanted-search queue; resolves idle so polling never starts by default.
+    enqueueWantedSearch: vi.fn(async (ids: number[]) => ({
+      accepted: ids.length,
+      alreadyQueued: 0,
+      snapshot: {
+        isRunning: false,
+        pending: 0,
+        processed: 0,
+        total: ids.length,
+        grabbed: 0,
+        failed: 0,
+        currentAudiobookId: null,
+        currentTitle: null,
+        startedAt: null,
+        completedAt: null,
+        cancelled: false,
+      },
+    })),
+    getWantedSearchQueue: vi.fn(async () => ({
+      isRunning: false,
+      pending: 0,
+      processed: 0,
+      total: 0,
+      grabbed: 0,
+      failed: 0,
+      currentAudiobookId: null,
+      currentTitle: null,
+      startedAt: null,
+      completedAt: null,
+      cancelled: false,
+    })),
+    cancelWantedSearch: vi.fn(async () => ({
+      isRunning: false,
+      pending: 0,
+      processed: 0,
+      total: 0,
+      grabbed: 0,
+      failed: 0,
+      currentAudiobookId: null,
+      currentTitle: null,
+      startedAt: null,
+      completedAt: null,
+      cancelled: true,
+    })),
   },
   // Also expose the named helper so tests can import it directly
   getImageUrl: vi.fn((url: string) => url || 'https://via.placeholder.com/300x450?text=No+Image'),
@@ -165,5 +233,97 @@ describe('WantedView image recache behavior', () => {
     expect(wrapper.find('.wanted-grid-container').classes()).toContain('is-static')
     expect(wrapper.find('.wanted-body.is-static').exists()).toBe(true)
     expect(wrapper.findAll('.wanted-row')).toHaveLength(30)
+  })
+})
+
+describe('WantedView server-side search batch', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation(() => ({
+        matches: false,
+        media: '',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    )
+  })
+
+  function mountWithWanted() {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const libraryStore = useLibraryStore()
+    libraryStore.audiobooks = [
+      { id: 1, title: 'Alpha Book', monitored: true, files: [] },
+      { id: 2, title: 'Beta Book', monitored: true, files: [] },
+      { id: 3, title: 'Gamma Book', monitored: true, files: [] },
+    ] as unknown as ReturnType<typeof useLibraryStore>['audiobooks']
+    libraryStore.fetchLibrary = vi.fn(async () => undefined)
+    return mount(WantedView, { global: { plugins: [pinia] } })
+  }
+
+  it('queues only the filtered ids when the filter box has text', async () => {
+    const wrapper = mountWithWanted()
+    await new Promise((r) => setTimeout(r, 10))
+
+    await wrapper.find('input.filter-input').setValue('beta')
+    const button = wrapper.find('[data-testid="wanted-search-button"]')
+    expect(button.text()).toContain('Search Filtered (1)')
+
+    await button.trigger('click')
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(apiService.enqueueWantedSearch).toHaveBeenCalledTimes(1)
+    expect(apiService.enqueueWantedSearch).toHaveBeenCalledWith([2])
+    wrapper.unmount()
+  })
+
+  it('queues every wanted id when there is no filter', async () => {
+    const wrapper = mountWithWanted()
+    await new Promise((r) => setTimeout(r, 10))
+
+    const button = wrapper.find('[data-testid="wanted-search-button"]')
+    expect(button.text()).toContain('Search All (3)')
+
+    await button.trigger('click')
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(apiService.enqueueWantedSearch).toHaveBeenCalledWith([1, 2, 3])
+    expect(idleWantedSearchSnapshot.isRunning).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the progress strip and marks the current row while a batch is running', async () => {
+    vi.mocked(apiService.getWantedSearchQueue).mockResolvedValueOnce({
+      ...idleWantedSearchSnapshot,
+      isRunning: true,
+      pending: 1,
+      processed: 1,
+      total: 3,
+      grabbed: 1,
+      currentAudiobookId: 2,
+      currentTitle: 'Beta Book',
+    })
+    const wrapper = mountWithWanted()
+    await new Promise((r) => setTimeout(r, 20))
+
+    const strip = wrapper.find('[data-testid="wanted-search-strip"]')
+    expect(strip.exists()).toBe(true)
+    expect(strip.text()).toContain('1 of 3')
+    expect(strip.text()).toContain('Beta Book')
+    expect(
+      wrapper.find('[data-testid="wanted-search-button"]').attributes('disabled'),
+    ).toBeDefined()
+
+    const vm = wrapper.vm as unknown as { getStatusText: (a: { id: number }) => string }
+    expect(vm.getStatusText({ id: 2 })).toBe('Searching')
+    expect(vm.getStatusText({ id: 1 })).toBe('Missing')
+    wrapper.unmount()
   })
 })

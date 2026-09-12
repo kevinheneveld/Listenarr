@@ -212,6 +212,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<MetadataMerger>();
             services.AddSingleton<ISearchActivityTracker, SearchActivityTracker>();
             services.AddSingleton<SearchProgressReporter>();
+            services.AddSingleton<IWantedSearchQueue, Listenarr.Application.Search.WantedSearch.WantedSearchQueueService>();
             services.AddSingleton<IndexerAdditionalSettingsParser>();
             services.AddSingleton<IndexerSearchWorkflow>();
             services.AddSingleton<MetadataSourceCatalog>();
