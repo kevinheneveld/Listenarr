@@ -1609,6 +1609,28 @@ export interface SearchActivityResponse {
   recent: SearchActivityEvent[]
 }
 
+/** GET /search/wanted-queue — progress of the server-side Wanted "Search All / Search Filtered" batch. */
+export interface WantedSearchQueueSnapshot {
+  isRunning: boolean
+  pending: number
+  processed: number
+  total: number
+  grabbed: number
+  failed: number
+  currentAudiobookId: number | null
+  currentTitle: string | null
+  startedAt: string | null
+  completedAt: string | null
+  cancelled: boolean
+}
+
+/** POST /search/wanted-queue response. */
+export interface WantedSearchEnqueueResponse {
+  accepted: number
+  alreadyQueued: number
+  snapshot: WantedSearchQueueSnapshot
+}
+
 /** One row from GET /library/music-candidates — a book that "smells like music" or a TTS rip. */
 export interface MusicCandidate {
   id: number
@@ -1664,10 +1686,7 @@ export interface SeriesBackfillRunResult {
  * `invalid_target` based on the configured FolderNamingPattern.
  */
 export type OrganizePreviewStatus =
-  | 'already_canonical'
-  | 'will_move'
-  | 'collision'
-  | 'invalid_target'
+  'already_canonical' | 'will_move' | 'collision' | 'invalid_target'
 
 export interface OrganizePreviewRow {
   id: number
@@ -1931,12 +1950,7 @@ export interface RecoveryRunResult {
 }
 
 export type ExtractDuplicateStrategy =
-  | 'none'
-  | 'merge'
-  | 'duplicate'
-  | 'None'
-  | 'Merge'
-  | 'Duplicate'
+  'none' | 'merge' | 'duplicate' | 'None' | 'Merge' | 'Duplicate'
 
 export interface ExtractFileRequest {
   metadata: AudibleBookMetadata

@@ -71,6 +71,8 @@ import type {
   ActivityResponse,
   DashboardStatsResponse,
   SearchActivityResponse,
+  WantedSearchQueueSnapshot,
+  WantedSearchEnqueueResponse,
   SeriesHealthResponse,
   VerificationQueueStatus,
   SeriesBackfillRunResult,
@@ -373,6 +375,23 @@ class ApiService {
 
   async getSearchActivity(): Promise<SearchActivityResponse> {
     return this.request<SearchActivityResponse>(`/search/activity`)
+  }
+
+  // Server-side batch behind the Wanted page's "Search All / Search Filtered" button.
+  // The worker walks the ids one at a time; the batch outlives the browser tab.
+  async enqueueWantedSearch(audiobookIds: number[]): Promise<WantedSearchEnqueueResponse> {
+    return this.request<WantedSearchEnqueueResponse>('/search/wanted-queue', {
+      method: 'POST',
+      body: JSON.stringify({ audiobookIds }),
+    })
+  }
+
+  async getWantedSearchQueue(): Promise<WantedSearchQueueSnapshot> {
+    return this.request<WantedSearchQueueSnapshot>('/search/wanted-queue')
+  }
+
+  async cancelWantedSearch(): Promise<WantedSearchQueueSnapshot> {
+    return this.request<WantedSearchQueueSnapshot>('/search/wanted-queue', { method: 'DELETE' })
   }
 
   async searchByApi(

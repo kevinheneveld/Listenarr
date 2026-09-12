@@ -46,6 +46,9 @@ internal static class WorkerRegistrationExtensions
         AddHostedProcessor<AutomaticSearchProcessor, IAutomaticSearchProcessor, AutomaticSearchService>(services);
         // Manual per-book "search now" rides the same processor instance.
         services.AddSingleton<IAutomaticSearchInvoker>(sp => (AutomaticSearchProcessor)sp.GetRequiredService<IAutomaticSearchProcessor>());
+        // On-demand wanted-list batches (Wanted page "Search All / Search Filtered").
+        services.AddSingleton<IWantedSearchQueue, Listenarr.Application.Search.WantedSearch.WantedSearchQueueService>();
+        services.AddHostedService<WantedSearchBackgroundService>();
         AddHostedProcessor<AuthorMonitoringProcessor, IAuthorMonitoringProcessor, AuthorMonitoringBackgroundService>(services);
         AddHostedProcessor<SeriesMonitoringProcessor, ISeriesMonitoringProcessor, SeriesMonitoringBackgroundService>(services);
         AddHostedProcessor<FfmpegInstallProcessor, IFfmpegInstallProcessor, FfmpegInstallBackgroundService>(services);

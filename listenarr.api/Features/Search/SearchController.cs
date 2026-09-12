@@ -39,6 +39,7 @@ namespace Listenarr.Api.Features.Search
         private readonly IConfigurationService? _configurationService;
         private readonly ISearchActivityTracker? _searchActivityTracker;
         private readonly Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? _automaticSearchInvoker;
+        private readonly Listenarr.Application.Search.Contracts.IWantedSearchQueue? _wantedSearchQueue;
 
         public SearchController(
             ISearchService searchService,
@@ -53,8 +54,10 @@ namespace Listenarr.Api.Features.Search
             IDownloadReferenceService? downloadReferenceService = null,
             IConfigurationService? configurationService = null,
             ISearchActivityTracker? searchActivityTracker = null,
-            Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? automaticSearchInvoker = null)
+            Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? automaticSearchInvoker = null,
+            Listenarr.Application.Search.Contracts.IWantedSearchQueue? wantedSearchQueue = null)
         {
+            _wantedSearchQueue = wantedSearchQueue;
             _searchService = searchService;
             _logger = logger;
             _audibleService = audibleService;
