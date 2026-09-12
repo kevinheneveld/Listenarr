@@ -37,7 +37,7 @@ namespace Listenarr.Infrastructure.AiAssist
         // preview asking for a few hundred output tokens can legitimately take
         // over a minute on an 8B model. Still bounded — never the 100s default
         // on top of unbounded generation.
-        private const int RequestTimeoutSeconds = 120;
+        public const int RequestTimeoutSeconds = 120;
         private const int TestTimeoutSeconds = 30;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -48,15 +48,21 @@ namespace Listenarr.Infrastructure.AiAssist
         private readonly HttpClient _httpClient;
         private readonly IConfigurationService _configurationService;
         private readonly ILogger<AiAssistService> _logger;
+        private readonly AiAssistEndpointHealth _health;
+        private readonly TimeProvider _timeProvider;
 
         public AiAssistService(
             HttpClient httpClient,
             IConfigurationService configurationService,
-            ILogger<AiAssistService> logger)
+            ILogger<AiAssistService> logger,
+            AiAssistEndpointHealth? health = null,
+            TimeProvider? timeProvider = null)
         {
             _httpClient = httpClient;
             _configurationService = configurationService;
             _logger = logger;
+            _health = health ?? new AiAssistEndpointHealth();
+            _timeProvider = timeProvider ?? TimeProvider.System;
         }
 
         public async Task<bool> IsConfiguredAsync(CancellationToken ct = default)
@@ -74,6 +80,18 @@ namespace Listenarr.Infrastructure.AiAssist
                 || string.IsNullOrWhiteSpace(settings.AiAssistBaseUrl)
                 || string.IsNullOrWhiteSpace(settings.AiAssistModel))
             {
+                return null;
+            }
+
+            // A dead or unreachable endpoint costs the full connect/request timeout per
+            // call, and consumers call once per book (release gate, split previews…).
+            // Skip for the cooldown instead: the caller keeps its deterministic path now.
+            var now = _timeProvider.GetUtcNow();
+            if (_health.IsUnavailable(settings.AiAssistBaseUrl, now))
+            {
+                _logger.LogDebug(
+                    "AI assist endpoint {BaseUrl} is in its unavailable cooldown (until {Until:u}); skipping the call",
+                    settings.AiAssistBaseUrl, _health.UnavailableUntil(settings.AiAssistBaseUrl, now));
                 return null;
             }
 
@@ -95,6 +113,7 @@ namespace Listenarr.Infrastructure.AiAssist
                 });
 
                 var response = await _httpClient.SendAsync(request, linked.Token);
+                _health.MarkAvailable();
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger.LogWarning("AI assist endpoint returned {StatusCode}", response.StatusCode);
@@ -114,13 +133,33 @@ namespace Listenarr.Infrastructure.AiAssist
             {
                 throw; // caller cancelled — propagate normally
             }
+            catch (Exception ex) when (IsTransportFailure(ex))
+            {
+                // Unreachable host, refused connection, or a timeout (the linked CTS or
+                // HttpClient.Timeout — never the caller's token, handled above). Open the
+                // cooldown so the next consumers don't each wait the timeout out again.
+                var opened = _health.MarkUnavailable(settings.AiAssistBaseUrl, _timeProvider.GetUtcNow());
+                if (opened)
+                {
+                    _logger.LogWarning(ex,
+                        "AI assist endpoint {BaseUrl} is unreachable or not answering; skipping AI assist for {Minutes} minutes (consumers keep deterministic behavior)",
+                        settings.AiAssistBaseUrl, AiAssistEndpointHealth.DefaultCooldown.TotalMinutes);
+                }
+                else
+                {
+                    _logger.LogDebug(ex, "AI assist completion failed again inside the unavailable cooldown");
+                }
+                return null;
+            }
             catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
-                // Timeouts land here too (the linked CTS, not the caller's token).
                 _logger.LogWarning(ex, "AI assist completion failed; consumer keeps deterministic behavior");
                 return null;
             }
         }
+
+        private static bool IsTransportFailure(Exception ex)
+            => ex is HttpRequestException || ex is OperationCanceledException;
 
         public async Task<AiAssistTestResult> TestConnectionAsync(CancellationToken ct = default)
         {
@@ -162,6 +201,9 @@ namespace Listenarr.Infrastructure.AiAssist
 
                 using var doc = JsonDocument.Parse(body);
                 var answeredModel = doc.RootElement.TryGetProperty("model", out var m) ? m.GetString() : model;
+                // The settings-page probe just proved the endpoint alive: lift any cooldown
+                // so the user doesn't have to wait it out after fixing the box.
+                _health.MarkAvailable();
                 return new AiAssistTestResult(true, $"Connected — model \"{answeredModel}\" answered.");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
