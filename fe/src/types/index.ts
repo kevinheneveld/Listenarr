@@ -1686,7 +1686,10 @@ export interface SeriesBackfillRunResult {
  * `invalid_target` based on the configured FolderNamingPattern.
  */
 export type OrganizePreviewStatus =
-  'already_canonical' | 'will_move' | 'collision' | 'invalid_target'
+  | 'already_canonical'
+  | 'will_move'
+  | 'collision'
+  | 'invalid_target'
 
 export interface OrganizePreviewRow {
   id: number
@@ -1950,7 +1953,12 @@ export interface RecoveryRunResult {
 }
 
 export type ExtractDuplicateStrategy =
-  'none' | 'merge' | 'duplicate' | 'None' | 'Merge' | 'Duplicate'
+  | 'none'
+  | 'merge'
+  | 'duplicate'
+  | 'None'
+  | 'Merge'
+  | 'Duplicate'
 
 export interface ExtractFileRequest {
   metadata: AudibleBookMetadata
