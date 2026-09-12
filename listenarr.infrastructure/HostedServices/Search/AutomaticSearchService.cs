@@ -393,14 +393,24 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
-            var topResult = scoredResults
+            var acceptable = scoredResults
                 .Where(s => !s.IsRejected) // Only non-rejected results
                 .OrderByDescending(s => s.TotalScore)
-                .FirstOrDefault(); // Pick only the top scoring result
+                .ToList();
 
-            if (topResult == null)
+            if (acceptable.Count == 0)
             {
                 _logger.LogInformation("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
+                return 0;
+            }
+
+            // AI release gate — the same gate the per-book search-and-download path runs.
+            // This path never consulted it and grabbed "White Rural Rage: The Threat to
+            // American Democracy" for James Patterson's "American Rage" (title-only fallback).
+            var topResult = await PickThroughAiGateAsync(audiobook, acceptable, stoppingToken);
+            if (topResult == null)
+            {
+                _logger.LogWarning("AI release gate flagged every acceptable candidate for audiobook '{Title}' — skipping this cycle", audiobook.Title);
                 return 0;
             }
 
@@ -455,6 +465,20 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             }
 
             return downloadsQueued;
+        }
+
+
+        private async Task<QualityScore?> PickThroughAiGateAsync(Audiobook audiobook, List<QualityScore> acceptable, CancellationToken ct)
+        {
+            using var scope = _serviceScopeFactory.CreateScope();
+            var aiAssist = scope.ServiceProvider.GetService<IAiAssistService>();
+            var configuration = scope.ServiceProvider.GetService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
+            if (aiAssist == null || configuration == null)
+            {
+                return acceptable[0];
+            }
+
+            return await new AiReleaseGate(aiAssist, configuration, _logger).PickAsync(audiobook, acceptable, ct);
         }
 
     }
