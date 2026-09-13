@@ -2,7 +2,6 @@
  * Listenarr - Audiobook Management System
  * Copyright (C) 2024-2026 Listenarr Contributors
  */
-using System.Globalization;
 using System.Text;
 
 namespace Listenarr.Application.Audiobooks.Monitoring
@@ -123,37 +122,8 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             return string.Equals(normalizedBookLanguage, preferredLanguage, StringComparison.OrdinalIgnoreCase);
         }
 
-        private static string NormalizeSeriesName(string? name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                return string.Empty;
-            }
-
-            var decomposed = name.Trim().Normalize(NormalizationForm.FormD);
-            var builder = new StringBuilder(decomposed.Length);
-            foreach (var character in decomposed)
-            {
-                if (CharUnicodeInfo.GetUnicodeCategory(character) == UnicodeCategory.NonSpacingMark)
-                {
-                    continue;
-                }
-
-                if (char.IsLetterOrDigit(character))
-                {
-                    builder.Append(char.ToLowerInvariant(character));
-                }
-                else if (char.IsWhiteSpace(character))
-                {
-                    builder.Append(' ');
-                }
-            }
-
-            return string.Join(
-                ' ',
-                builder.ToString()
-                    .Split(' ', StringSplitOptions.RemoveEmptyEntries));
-        }
+        // Shared with the series-triage decisions so both key on the same string.
+        private static string NormalizeSeriesName(string? name) => SeriesNameNormalizer.Normalize(name);
 
         private static string NormalizeRegion(string? region)
         {

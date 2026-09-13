@@ -88,6 +88,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/series/triage',
+    name: 'series-triage',
+    component: () => import('../views/library/SeriesTriageView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/calendar',
     name: 'calendar',
     component: () => import('../views/content/CalendarView.vue'),

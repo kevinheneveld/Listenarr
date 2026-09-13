@@ -106,6 +106,7 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<IMoveJobRepository, EfMoveJobRepository>();
         services.AddScoped<IMonitoredAuthorRepository, EfMonitoredAuthorRepository>();
         services.AddScoped<IMonitoredSeriesRepository, EfMonitoredSeriesRepository>();
+        services.AddScoped<ISeriesTriageDecisionRepository, EfSeriesTriageDecisionRepository>();
         services.AddScoped<IAuthorMonitoringExclusionRepository, EfAuthorMonitoringExclusionRepository>();
         services.AddScoped<IRootFolderRepository, EfRootFolderRepository>();
         return services;

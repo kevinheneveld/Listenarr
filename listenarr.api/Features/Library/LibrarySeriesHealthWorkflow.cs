@@ -60,16 +60,87 @@ namespace Listenarr.Api.Features.Library
             // (or a re-added duplicate) are one logical book to the user.
             public HashSet<string> OwnedWorks { get; } = new(StringComparer.Ordinal);
             public HashSet<string> TrackedNoFileWorks { get; } = new(StringComparer.Ordinal);
+            // First non-empty series ASIN seen on a membership — lets a consumer
+            // pin the catalog identity when it starts monitoring the series.
+            public string? SeriesAsin { get; set; }
+            // Author frequency among OWNED books, for a "who wrote this" hint.
+            public Dictionary<string, int> OwnedAuthorCounts { get; } = new(StringComparer.OrdinalIgnoreCase);
         }
+
+        /// <summary>The user's most-built recording edition of a series.</summary>
+        public sealed record SeriesHealthBestRun(
+            string Label,
+            string Kind,
+            IReadOnlyList<string> Narrators,
+            int Owned,
+            int Total,
+            double Completion);
+
+        /// <summary>
+        /// One series as the health computation sees it. Typed so other
+        /// workflows (series triage) can reuse the exact same numbers the
+        /// dashboard shows instead of re-deriving them.
+        /// </summary>
+        public sealed record SeriesHealthRow(
+            string Name,
+            string? SeriesAsin,
+            IReadOnlyList<string> Authors,
+            int Owned,
+            int MissingTracked,
+            int? CatalogTotal,
+            int? Editions,
+            bool Monitored,
+            bool Complete,
+            double? Completion,
+            SeriesHealthBestRun? BestRun);
+
+        public sealed record SeriesHealthRows(string Region, IReadOnlyList<SeriesHealthRow> Rows);
 
         public async Task<IActionResult> HealthAsync(CancellationToken ct)
         {
-            // Full-library aggregate; memoized ~5 min (see DashboardAggregateCache).
-            var payload = await _aggregateCache.GetOrCreateAsync<object>("series-health", () => ComputeHealthPayloadAsync(ct));
-            return new OkObjectResult(payload);
+            var computed = await ComputeRowsAsync(ct);
+
+            // JSON shape the dashboard depends on — keep it stable; `seriesAsin`
+            // and `authors` are additive.
+            var rows = computed.Rows
+                .Select(r => new
+                {
+                    name = r.Name,
+                    seriesAsin = r.SeriesAsin,
+                    authors = r.Authors,
+                    owned = r.Owned,
+                    missingTracked = r.MissingTracked,
+                    catalogTotal = r.CatalogTotal,
+                    editions = r.Editions,
+                    monitored = r.Monitored,
+                    complete = r.Complete,
+                    completion = r.Completion,
+                    bestRun = r.BestRun == null ? null : new
+                    {
+                        label = r.BestRun.Label,
+                        kind = r.BestRun.Kind,
+                        narrators = r.BestRun.Narrators,
+                        owned = r.BestRun.Owned,
+                        total = r.BestRun.Total,
+                        completion = r.BestRun.Completion
+                    }
+                })
+                .ToList();
+
+            return new OkObjectResult(new { region = computed.Region, rows });
         }
 
-        private async Task<object> ComputeHealthPayloadAsync(CancellationToken ct)
+        /// <summary>
+        /// Full-library aggregate; memoized ~5 min (see DashboardAggregateCache).
+        /// Monitoring changes therefore show up in health/triage rows after the
+        /// cache TTL; per-series decisions are merged on top by their consumers.
+        /// </summary>
+        public Task<SeriesHealthRows> ComputeRowsAsync(CancellationToken ct)
+        {
+            return _aggregateCache.GetOrCreateAsync("series-health-rows", () => ComputeRowsUncachedAsync(ct));
+        }
+
+        private async Task<SeriesHealthRows> ComputeRowsUncachedAsync(CancellationToken ct)
         {
             var settings = await _settingsRepository.GetAsync(ct);
             var region = string.IsNullOrWhiteSpace(settings?.DefaultSearchRegion)
@@ -89,6 +160,7 @@ namespace Listenarr.Api.Features.Library
                 // Per-series position matters for the work key (volume-numbered
                 // sets must stay distinct), so track (name → position) pairs.
                 var nameToPosition = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+                var nameToAsin = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
                 if (memberships.TryGetValue(book.Id, out var ms) && ms.Count > 0)
                 {
                     foreach (var m in ms)
@@ -97,6 +169,7 @@ namespace Listenarr.Api.Features.Library
                         if (!string.IsNullOrWhiteSpace(n))
                         {
                             nameToPosition.TryAdd(n!, m.SeriesNumber);
+                            nameToAsin.TryAdd(n!, string.IsNullOrWhiteSpace(m.SeriesAsin) ? null : m.SeriesAsin.Trim());
                         }
                     }
                 }
@@ -119,6 +192,11 @@ namespace Listenarr.Api.Features.Library
                         bySeries[name] = acc;
                     }
 
+                    if (acc.SeriesAsin == null && nameToAsin.TryGetValue(name, out var asin) && asin != null)
+                    {
+                        acc.SeriesAsin = asin;
+                    }
+
                     var workKey = SeriesWorkKey.Build(book.Title, book.Authors, position);
                     if (workKey.Length == 0)
                     {
@@ -128,6 +206,16 @@ namespace Listenarr.Api.Features.Library
                     if (owned)
                     {
                         acc.OwnedWorks.Add(workKey);
+                        foreach (var author in book.Authors ?? new List<string>())
+                        {
+                            var a = author?.Trim();
+                            if (string.IsNullOrWhiteSpace(a))
+                            {
+                                continue;
+                            }
+
+                            acc.OwnedAuthorCounts[a!] = acc.OwnedAuthorCounts.TryGetValue(a!, out var n) ? n + 1 : 1;
+                        }
                     }
                     else
                     {
@@ -181,39 +269,43 @@ namespace Listenarr.Api.Features.Library
                         ? ownedWorks >= catalogTotal.Value
                         : missingTracked == 0;
                     var bestRun = bestRuns.TryGetValue(acc.Name, out var br) ? br : null;
-                    return new
-                    {
-                        name = acc.Name,
-                        owned = ownedWorks,
+                    var authors = acc.OwnedAuthorCounts
+                        .OrderByDescending(kv => kv.Value)
+                        .ThenBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                        .Take(3)
+                        .Select(kv => kv.Key)
+                        .ToList();
+                    return new SeriesHealthRow(
+                        acc.Name,
+                        acc.SeriesAsin,
+                        authors,
+                        ownedWorks,
                         missingTracked,
                         catalogTotal,
-                        editions = summary?.Editions,
-                        monitored = monitoredNames.Contains(acc.Name),
+                        summary?.Editions,
+                        monitoredNames.Contains(acc.Name),
                         complete,
-                        completion = catalogTotal is > 0
+                        catalogTotal is > 0
                             ? Math.Round(Math.Min(1.0, (double)ownedWorks / catalogTotal.Value), 3)
-                            : (double?)null,
-                        bestRun = bestRun == null ? null : new
-                        {
-                            label = bestRun.Label,
-                            kind = bestRun.Kind,
-                            narrators = bestRun.Narrators,
-                            owned = bestRun.OwnedWorks,
-                            total = bestRun.TotalWorks,
-                            completion = Math.Round(bestRun.Completion, 3)
-                        }
-                    };
+                            : null,
+                        bestRun == null ? null : new SeriesHealthBestRun(
+                            bestRun.Label,
+                            bestRun.Kind,
+                            bestRun.Narrators,
+                            bestRun.OwnedWorks,
+                            bestRun.TotalWorks,
+                            Math.Round(bestRun.Completion, 3)));
                 })
-                .OrderByDescending(r => (r.catalogTotal ?? (r.owned + r.missingTracked)) - r.owned)
-                .ThenByDescending(r => r.catalogTotal ?? (r.owned + r.missingTracked))
-                .ThenBy(r => r.name, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(r => (r.CatalogTotal ?? (r.Owned + r.MissingTracked)) - r.Owned)
+                .ThenByDescending(r => r.CatalogTotal ?? (r.Owned + r.MissingTracked))
+                .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
             _logger.LogDebug(
                 "Series health: {Series} series, {WithCatalog} with cached catalog totals",
-                rows.Count, rows.Count(r => r.catalogTotal.HasValue));
+                rows.Count, rows.Count(r => r.CatalogTotal.HasValue));
 
-            return new { region, rows };
+            return new SeriesHealthRows(region, rows);
         }
     }
 }

@@ -74,6 +74,8 @@ import type {
   WantedSearchQueueSnapshot,
   WantedSearchEnqueueResponse,
   SeriesHealthResponse,
+  SeriesTriageResponse,
+  SeriesTriageDecisionResult,
   VerificationQueueStatus,
   SeriesBackfillRunResult,
   EmbeddedFileMetadata,
@@ -1925,6 +1927,32 @@ class ApiService {
 
   async getSeriesHealth(): Promise<SeriesHealthResponse> {
     return this.request<SeriesHealthResponse>(`/library/series/health`)
+  }
+
+  // Series the user owns books from but isn't collecting, plus the per-series
+  // "not interested" decision.
+  async getSeriesTriage(includeDismissed = false): Promise<SeriesTriageResponse> {
+    return this.request<SeriesTriageResponse>(
+      `/library/series/triage?includeDismissed=${includeDismissed ? 'true' : 'false'}`,
+    )
+  }
+
+  async dismissSeries(payload: {
+    seriesName: string
+    seriesAsin?: string | null
+    note?: string | null
+  }): Promise<SeriesTriageDecisionResult> {
+    return this.request<SeriesTriageDecisionResult>(`/library/series/triage/dismiss`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  }
+
+  async undismissSeries(seriesName: string): Promise<SeriesTriageDecisionResult> {
+    return this.request<SeriesTriageDecisionResult>(`/library/series/triage/dismiss`, {
+      method: 'DELETE',
+      body: JSON.stringify({ seriesName }),
+    })
   }
 
   async getVerificationQueueStatus(): Promise<VerificationQueueStatus> {
