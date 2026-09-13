@@ -265,6 +265,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<DuplicateCopyProposalBuilder>();
             services.AddSingleton<LibraryDuplicateCopyApplyWorkflow>();
             services.AddSingleton<LibrarySeriesHealthWorkflow>();
+            services.AddSingleton<LibrarySeriesTriageWorkflow>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.IWrongContentAutoRejector, WrongContentAutoRejector>();
             services.AddSingleton<LibraryNotAudiobookWorkflow>();
             services.AddSingleton<LibraryEmbeddedMetadataWorkflow>();

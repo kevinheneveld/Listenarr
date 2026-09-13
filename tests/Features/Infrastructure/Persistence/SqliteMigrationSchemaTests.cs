@@ -46,6 +46,8 @@ public class SqliteMigrationSchemaTests : BaseTests
         "20260825021432_AddWeakStorageVerifiedCleanup";
     private const string MetadataAutoBackfillMigrationId =
         "20260904174436_AddMetadataAutoBackfill";
+    private const string SeriesTriageDecisionsMigrationId =
+        "20260913012044_AddSeriesTriageDecisions";
 
     private static (SqliteConnection Connection, ListenArrDbContext Context)
         CreateMigratedSqliteContext()
@@ -217,7 +219,8 @@ public class SqliteMigrationSchemaTests : BaseTests
                 FileMutationParentGenerationProofsMigrationId,
                 CompatibilityFilePublicationMigrationId,
                 WeakStorageVerifiedCleanupMigrationId,
-                MetadataAutoBackfillMigrationId
+                MetadataAutoBackfillMigrationId,
+                SeriesTriageDecisionsMigrationId
             ],
             postCanary);
         Assert.Contains("20251124102000_AddMoveJobSourcePath", applied);

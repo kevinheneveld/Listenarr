@@ -59,6 +59,7 @@ namespace Listenarr.Api.Features.Library
         private readonly LibraryDuplicatesMergeWorkflow _duplicatesMergeWorkflow;
         private readonly LibraryMusicCandidatesWorkflow _musicCandidatesWorkflow;
         private readonly Listenarr.Application.Audiobooks.Contracts.IFileExtractionService? _fileExtractionService;
+        private readonly LibrarySeriesTriageWorkflow? _seriesTriageWorkflow;
         /// <summary>Initializes the library transport façade.</summary>
         public LibraryController(
             ILibraryListService libraryListService,
@@ -94,8 +95,10 @@ namespace Listenarr.Api.Features.Library
             LibraryMusicCandidatesWorkflow musicCandidatesWorkflow,
             LibraryDashboardStatsWorkflow dashboardStatsWorkflow,
             Listenarr.Application.Common.Images.IExternalCoverArtSweepService? externalCoverArtSweepService = null,
-            Listenarr.Application.Audiobooks.Contracts.IFileExtractionService? fileExtractionService = null)
+            Listenarr.Application.Audiobooks.Contracts.IFileExtractionService? fileExtractionService = null,
+            LibrarySeriesTriageWorkflow? seriesTriageWorkflow = null)
         {
+            _seriesTriageWorkflow = seriesTriageWorkflow;
             _libraryListService = libraryListService;
             _addWorkflow = addWorkflow;
             _metadataRescanWorkflow = metadataRescanWorkflow;

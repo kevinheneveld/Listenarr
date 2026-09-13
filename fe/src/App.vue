@@ -326,6 +326,14 @@
                 <span>Series</span>
               </RouterLink>
               <RouterLink
+                to="/series/triage"
+                class="nav-subitem"
+                @click="closeMobileMenu"
+                :class="{ active: route.name === 'series-triage' }"
+              >
+                <span>Series to decide</span>
+              </RouterLink>
+              <RouterLink
                 :to="{ path: '/audiobooks', query: { group: 'narrators' } }"
                 class="nav-subitem"
                 @click="closeMobileMenu"

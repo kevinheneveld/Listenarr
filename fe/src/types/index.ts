@@ -1604,6 +1604,44 @@ export interface SeriesHealthResponse {
   rows: SeriesHealthApiRow[]
 }
 
+/** One series the user owns books from but isn't monitoring (GET /library/series/triage). */
+export interface SeriesTriageRow {
+  name: string
+  seriesAsin: string | null
+  /** Top authors among the OWNED books in this series. */
+  authors: string[]
+  owned: number
+  missingTracked: number
+  catalogTotal: number | null
+  completion: number | null
+  editions: number | null
+  dismissed: boolean
+  dismissedAt: string | null
+  note: string | null
+}
+
+export interface SeriesTriageSummary {
+  candidates: number
+  dismissed: number
+  ownedBooksInCandidates: number
+  singleBook: number
+  withCatalog: number
+}
+
+export interface SeriesTriageResponse {
+  summary: SeriesTriageSummary
+  rows: SeriesTriageRow[]
+}
+
+export interface SeriesTriageDecisionResult {
+  seriesName: string
+  seriesAsin?: string | null
+  decision?: string
+  note?: string | null
+  createdAt?: string
+  removed?: boolean
+}
+
 export interface SearchActivityResponse {
   current: SearchActivityEvent | null
   recent: SearchActivityEvent[]

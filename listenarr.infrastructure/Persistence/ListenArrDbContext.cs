@@ -60,6 +60,7 @@ namespace Listenarr.Infrastructure.Persistence
         public DbSet<UserSession> UserSessions { get; set; } = null!;
         public DbSet<Listenarr.Domain.Search.BlockedRelease> BlockedReleases { get; set; } = null!;
         public DbSet<VerificationJobRecord> VerificationJobs { get; set; } = null!;
+        public DbSet<SeriesTriageDecision> SeriesTriageDecisions { get; set; } = null!;
 
         public ListenArrDbContext(DbContextOptions<ListenArrDbContext> options)
             : base(options)

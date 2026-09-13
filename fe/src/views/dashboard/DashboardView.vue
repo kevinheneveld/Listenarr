@@ -206,6 +206,14 @@
             >{{ seriesBuckets.complete }} complete · {{ seriesBuckets.singleBook }} single-book ·
             {{ seriesBuckets.gaps }} with gaps</small
           >
+          <RouterLink
+            v-if="triageSummary && triageSummary.candidates > 0"
+            to="/series/triage"
+            class="h2-chip"
+            title="Series you own books from but aren't monitoring — decide whether to collect the rest"
+          >
+            {{ triageSummary.candidates }} you're not collecting → decide
+          </RouterLink>
         </h2>
         <div v-if="incompleteSeries.length === 0" class="dash-empty">
           Every tracked series is complete. 🎉
@@ -432,6 +440,7 @@ import type {
   MoveQueueSummary,
   MusicCandidate,
   SeriesHealthApiRow,
+  SeriesTriageSummary,
   VerificationQueueStatus,
   DashboardStatsResponse,
 } from '@/types'
@@ -453,7 +462,10 @@ async function dismissFailedMoves() {
     toast.success('Failed moves cleared', `${result.dismissed} job(s) dismissed.`)
     moveSummary.value = await apiService.getMoveQueueSummary(3)
   } catch (err) {
-    toast.error('Could not clear failed moves', err instanceof Error ? err.message : 'Unknown error')
+    toast.error(
+      'Could not clear failed moves',
+      err instanceof Error ? err.message : 'Unknown error',
+    )
   } finally {
     dismissingFailedMoves.value = false
   }
@@ -505,6 +517,8 @@ async function openMissing(
 // Catalog-aware series health from the server; null until loaded (or on
 // failure), in which case the client-side tracked-only aggregation stands in.
 const serverSeries = ref<SeriesHealthApiRow[] | null>(null)
+// Summary of series with owned books that aren't monitored (the triage view).
+const triageSummary = ref<SeriesTriageSummary | null>(null)
 const seriesRows = computed<SeriesHealthRow[]>(() => {
   if (serverSeries.value) {
     return serverSeries.value.map((r) => {
@@ -654,6 +668,15 @@ onMounted(async () => {
     .catch(() => {
       /* endpoint unavailable — client-side tracked-only aggregation stands in */
     })
+  // "N series you're not collecting" chip; purely additive, never blocks the page.
+  void apiService
+    .getSeriesTriage(false)
+    .then((resp) => {
+      triageSummary.value = resp.summary
+    })
+    .catch(() => {
+      triageSummary.value = null
+    })
   try {
     if (libraryStore.audiobooks.length === 0) {
       await libraryStore.fetchLibrary()
@@ -709,6 +732,23 @@ onMounted(async () => {
   color: #868e96;
   font-size: 0.8rem;
   font-weight: 400;
+}
+
+.h2-chip {
+  margin-left: 0.6rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--brand, #5aa9e6);
+  background: rgba(var(--brand-rgb, 90, 169, 230), 0.12);
+  border: 1px solid rgba(var(--brand-rgb, 90, 169, 230), 0.35);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.h2-chip:hover {
+  background: rgba(var(--brand-rgb, 90, 169, 230), 0.22);
 }
 
 /* Glance cards */
