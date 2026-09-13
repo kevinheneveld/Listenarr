@@ -77,6 +77,35 @@ namespace Listenarr.Tests.Features.Infrastructure.Downloads.Monitoring
 
         [Fact]
         [Trait("Method", "MonitorDownloadsAsync")]
+        public async Task MonitorDownloadsAsync_RowFinalizedDuringPoll_IsNotRevertedBySnapshotSave()
+        {
+            var download = await _downloadRepository.AddAsync(new DownloadBuilder()
+                .WithDownloading(50)
+                .WithExternalId("1")
+                .WithDownloadClientConfiguration(client)
+                .Build());
+
+            // Another writer (import finalization) moves the row on while the poll is in flight.
+            var finalized = await _downloadRepository.GetByIdAsync(download.Id);
+            Assert.NotNull(finalized);
+            finalized.Imported();
+            finalized.LastImportedAt = DateTime.UtcNow;
+            await _downloadRepository.UpdateAsync(finalized);
+
+            Assert.True(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.Downloading, DownloadStatus.Moved));
+            Assert.False(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.Downloading, DownloadStatus.Downloading));
+
+            downloadMonitorService.ScheduleNextClientPoll(client, -100);
+            await downloadMonitorService.MonitorDownloadsAsync(CancellationToken.None);
+
+            var after = await _downloadRepository.GetByIdAsync(download.Id);
+            Assert.NotNull(after);
+            Assert.Equal(DownloadStatus.Moved, after.Status);
+            Assert.NotNull(after.LastImportedAt);
+        }
+
+        [Fact]
+        [Trait("Method", "MonitorDownloadsAsync")]
         public async Task MonitorDownloadsAsync_DownloadingBecomesCompleted()
         {
             var download = await _downloadRepository.AddAsync(new DownloadBuilder()

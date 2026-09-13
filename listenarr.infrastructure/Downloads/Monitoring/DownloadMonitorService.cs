@@ -209,6 +209,12 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
 
                     foreach (Download download in updatedDownloads)
                     {
+                        var previousDownload = previousDownloads.FirstOrDefault(d => d.Id == download.Id);
+                        if (await WasChangedByAnotherWriterAsync(download, previousDownload))
+                        {
+                            continue;
+                        }
+
                         var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
                         await downloadService.UpdateAsync(download);
 
@@ -220,7 +226,6 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                             EvaluateStallSnapshot(download, now, reaperOptions, reapCandidates);
                         }
 
-                        var previousDownload = previousDownloads.FirstOrDefault(d => d.Id == download.Id);
                         if (previousDownload == null)
                         {
                             continue;
