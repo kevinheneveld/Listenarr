@@ -92,8 +92,11 @@ namespace Listenarr.Tests.Features.Infrastructure.Downloads.Monitoring
             finalized.LastImportedAt = DateTime.UtcNow;
             await _downloadRepository.UpdateAsync(finalized);
 
-            Assert.True(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.Downloading, DownloadStatus.Moved));
-            Assert.False(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.Downloading, DownloadStatus.Downloading));
+            // Finalized to Moved while the poll reported Completed → foreign change, skip.
+            Assert.True(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.ImportPending, DownloadStatus.Completed, DownloadStatus.Moved));
+            // Unchanged row, or a row that already carries what the poll will write → save.
+            Assert.False(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.Downloading, DownloadStatus.Completed, DownloadStatus.Downloading));
+            Assert.False(DownloadMonitorProcessor.StatusChangedByAnotherWriter(DownloadStatus.Queued, DownloadStatus.Completed, DownloadStatus.Completed));
 
             downloadMonitorService.ScheduleNextClientPoll(client, -100);
             await downloadMonitorService.MonitorDownloadsAsync(CancellationToken.None);

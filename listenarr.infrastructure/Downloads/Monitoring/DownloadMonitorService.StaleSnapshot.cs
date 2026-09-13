@@ -52,17 +52,23 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                 return true;
             }
 
-            if (!StatusChangedByAnotherWriter(previous.Status, fresh.Status))
+            if (!StatusChangedByAnotherWriter(previous.Status, polled.Status, fresh.Status))
             {
                 return false;
             }
 
             logger.LogInformation(
-                "Skipping monitor update for download {Id}: status changed from {Snapshot} to {Fresh} by another writer during the poll",
-                LogRedaction.SanitizeText(polled.Id), previous.Status, fresh.Status);
+                "Skipping monitor update for download {Id}: status changed from {Snapshot} to {Fresh} by another writer during the poll (client reported {Polled})",
+                LogRedaction.SanitizeText(polled.Id), previous.Status, fresh.Status, polled.Status);
             return true;
         }
 
-        internal static bool StatusChangedByAnotherWriter(DownloadStatus snapshot, DownloadStatus fresh) => snapshot != fresh;
+        /// <summary>
+        /// Foreign change = the row no longer matches the snapshot AND does not match what
+        /// this poll is about to write. A row that already carries the polled status (the
+        /// client adapter or a test double persisted it first) is safe to save over.
+        /// </summary>
+        internal static bool StatusChangedByAnotherWriter(DownloadStatus snapshot, DownloadStatus polled, DownloadStatus fresh)
+            => fresh != snapshot && fresh != polled;
     }
 }
