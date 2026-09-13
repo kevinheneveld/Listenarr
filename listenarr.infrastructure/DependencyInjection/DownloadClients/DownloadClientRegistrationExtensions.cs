@@ -230,7 +230,8 @@ internal static class DownloadClientRegistrationExtensions
             new NzbgetHistoryEnrichmentWorkflow(
                 sp.GetRequiredService<NzbgetHistoryReader>(),
                 sp.GetRequiredService<ILogger<NzbgetAdapter>>(),
-                sp.GetRequiredService<TimeProvider>()));
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<Listenarr.Application.Common.RepeatedLogSuppressor>()));
         services.AddScoped<NzbgetConnectionTester>(sp =>
             new NzbgetConnectionTester(
                 sp.GetRequiredService<NzbgetXmlRpcClient>(),

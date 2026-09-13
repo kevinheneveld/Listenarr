@@ -53,12 +53,59 @@ namespace Listenarr.Infrastructure.Metadata.Jobs
         ILogger<MetadataRescanProcessor> logger) : IMetadataRescanProcessor
     {
         private readonly AsyncNonKeyedLocker _sem = new(2); // bound concurrent extractions
+        private const int BatchSize = 20;
+        private const int MaxBackoffLookahead = 480;
+
+        // Files whose metadata could not be extracted keep matching the "missing
+        // metadata" query, so without a backoff the same files were re-probed every
+        // cycle forever (live: 20 zero-byte leftovers re-ran ffprobe every 5 minutes,
+        // 1,200+ warnings a day, and crowded out any genuinely new file). Exponential
+        // per-file backoff, capped at a day; entries fall out after two days unused.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, RescanBackoff> _backoff = new();
+
+        private sealed record RescanBackoff(int Attempts, DateTime RetryAfterUtc, DateTime LastAttemptUtc);
+
+        internal static TimeSpan BackoffDelay(int attempts) =>
+            TimeSpan.FromMinutes(Math.Min(24 * 60, 10 * Math.Pow(2, Math.Max(0, attempts - 1))));
+
+        private void PruneBackoff(DateTime nowUtc)
+        {
+            foreach (var entry in _backoff)
+            {
+                if (nowUtc - entry.Value.LastAttemptUtc > TimeSpan.FromDays(2))
+                {
+                    _backoff.TryRemove(entry.Key, out _);
+                }
+            }
+        }
+
+        private void RecordAttempt(int fileId, string? path, DateTime nowUtc)
+        {
+            var next = _backoff.AddOrUpdate(
+                fileId,
+                _ => new RescanBackoff(1, nowUtc + BackoffDelay(1), nowUtc),
+                (_, prev) => new RescanBackoff(prev.Attempts + 1, nowUtc + BackoffDelay(prev.Attempts + 1), nowUtc));
+            if (next.Attempts >= 3)
+            {
+                logger.LogInformation(
+                    "Metadata rescan: file id={Id} path={Path} still lacks extractable metadata after {Attempts} attempt(s); next retry after {RetryAfter:u}",
+                    fileId, LogRedaction.SanitizeFilePath(path), next.Attempts, next.RetryAfterUtc);
+            }
+        }
 
         public async Task RunCycleAsync(CancellationToken cancellationToken)
         {
             using var scope = scopeFactory.CreateScope();
             var fileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
-            var candidates = await fileRepository.GetMissingMetadataAsync(20, cancellationToken);
+            var nowUtc = DateTime.UtcNow;
+            PruneBackoff(nowUtc);
+            // Look past the backed-off files so they don't pin the batch.
+            var lookahead = BatchSize + Math.Min(_backoff.Count, MaxBackoffLookahead);
+            var fetched = await fileRepository.GetMissingMetadataAsync(lookahead, cancellationToken);
+            var candidates = fetched
+                .Where(f => !_backoff.TryGetValue(f.Id, out var b) || b.RetryAfterUtc <= nowUtc)
+                .Take(BatchSize)
+                .ToList();
 
             if (candidates.Any())
             {
@@ -173,6 +220,12 @@ namespace Listenarr.Infrastructure.Metadata.Jobs
                     catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
                     {
                         logger.LogWarning(ex, "Failed to rescan metadata for file id={Id} path={Path}", candidate.Id, LogRedaction.SanitizeFilePath(candidate.Path));
+                    }
+                    finally
+                    {
+                        // A file that gained metadata is never selected again, so its
+                        // entry is harmless; one that didn't waits out the backoff.
+                        RecordAttempt(candidate.Id, candidate.Path, DateTime.UtcNow);
                     }
                 }));
             }

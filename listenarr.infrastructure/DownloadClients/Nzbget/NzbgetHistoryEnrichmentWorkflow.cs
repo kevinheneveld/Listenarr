@@ -24,7 +24,8 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
     internal sealed class NzbgetHistoryEnrichmentWorkflow(
         NzbgetHistoryReader historyReader,
         ILogger logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        RepeatedLogSuppressor? logSuppressor = null)
     {
         private const long SlowHistoryThresholdMilliseconds = 2_000;
         private const string QueueSurface = "GetQueueAsync";
@@ -292,6 +293,17 @@ namespace Listenarr.Infrastructure.DownloadClients.Nzbget
         {
             if (entry.Outcome != NzbgetHistoryOutcome.Failed)
             {
+                return;
+            }
+
+            // A failed history entry stays in NZBGet's history until the user clears
+            // it, and this runs on every poll — warn once per entry per window.
+            var key = $"nzbget:history-failed:{client.Id}:{entry.CanonicalNzbId}";
+            if (logSuppressor != null && !logSuppressor.ShouldLog(key))
+            {
+                logger.LogDebug(
+                    "NZBGet history still reports failure for {NzbId} (suppressed repeat)",
+                    LogRedaction.SanitizeText(entry.CanonicalNzbId));
                 return;
             }
 

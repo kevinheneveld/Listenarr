@@ -34,7 +34,8 @@ namespace Listenarr.Application.Downloads.Common
         IDownloadClientAdapterFactory factory,
         IFileSystem fileSystem,
         IFileSystemSemanticsResolver semanticsResolver,
-        ILogger<DownloadClientGateway> logger) : IDownloadClientGateway
+        ILogger<DownloadClientGateway> logger,
+        RepeatedLogSuppressor? logSuppressor = null) : IDownloadClientGateway
     {
         internal IDownloadClientAdapter ResolveAdapter(DownloadClientConfiguration client)
         {
@@ -370,12 +371,29 @@ namespace Listenarr.Application.Downloads.Common
                 return;
             }
 
-            logger.LogWarning(
-                exception,
-                "Download client {ClientId} reported no source files and {Reason} for item {Title}",
-                client.Id,
-                reason,
-                item.Title);
+            // The monitor re-translates every active/terminal client item on each poll
+            // (every ~15s), so a stale history entry whose folder is gone repeated this
+            // warning ~6,500 times a day per item. Warn once per item per window; the
+            // repeats stay at debug.
+            var key = $"gateway:missing-source:{client.Id}:{item.Id}:{item.ContentPath}";
+            if (logSuppressor == null || logSuppressor.ShouldLog(key))
+            {
+                logger.LogWarning(
+                    exception,
+                    "Download client {ClientId} reported no source files and {Reason} for item {Title} (repeats logged at debug for {Hours}h)",
+                    client.Id,
+                    reason,
+                    item.Title,
+                    RepeatedLogSuppressor.DefaultWindow.TotalHours);
+            }
+            else
+            {
+                logger.LogDebug(
+                    "Download client {ClientId} reported no source files and {Reason} for item {Title} (suppressed repeat)",
+                    client.Id,
+                    reason,
+                    item.Title);
+            }
         }
 
         internal static bool IsImportSourceExpectedStatus(string? status)

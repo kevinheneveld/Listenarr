@@ -55,6 +55,8 @@ internal static class DownloadRegistrationExtensions
         IConfiguration configuration)
     {
         services.TryAddSingleton(TimeProvider.System);
+        // Shared once-per-window gate for warnings that repeat on every poll.
+        services.TryAddSingleton<Listenarr.Application.Common.RepeatedLogSuppressor>();
 
         services.AddSingleton<IDownloadPushService, DownloadPushService>();
         services.AddScoped<IDownloadService, DownloadService>();
