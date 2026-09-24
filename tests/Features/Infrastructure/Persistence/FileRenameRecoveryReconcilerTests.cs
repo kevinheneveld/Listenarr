@@ -302,6 +302,135 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
     }
 
     [Fact]
+    public async Task ReconcileAsync_CompletedJournalWhoseFileMovedToAnotherAudiobook_IsRetiredNotFatal()
+    {
+        // Live case (2026-09-24): a transfer reassigned the file row to another record
+        // after its organize move completed; the next restart threw and disabled every
+        // filesystem operation on the instance.
+        var root = FileService.GetTempDirectory("rename-recovery-orphaned-owner");
+        var path = Path.Join(root, "Book.m4b");
+        await File.WriteAllTextAsync(path, "audio");
+        var owner = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+            .WithTitle("Original Owner")
+            .WithBasePath(root)
+            .WithFilePath(path)
+            .Build());
+        var newOwner = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+            .WithTitle("New Owner")
+            .WithBasePath(root)
+            .Build());
+        var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
+        var operationId = Guid.NewGuid();
+        int fileId;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var file = AudiobookFile.CreateUnresolved(path);
+            file.AudiobookId = owner.Id;
+            db.AudiobookFiles.Add(file);
+            await db.SaveChangesAsync();
+            fileId = file.Id;
+            db.FileMutationJournals.Add(new FileMutationJournal
+            {
+                OperationId = operationId,
+                Action = FileAction.Move,
+                SourcePath = Path.Join(root, "Old.m4b"),
+                DestinationPath = path,
+                SourcePhysicalObjectIdentity = "test-identity",
+                TargetPhysicalObjectIdentity = "test-identity",
+                SourceLength = 5,
+                AudiobookId = owner.Id,
+                AudiobookFileId = fileId,
+                State = FileMutationJournalState.Completed
+            });
+            await db.SaveChangesAsync();
+            // The transfer: the file now belongs to another record.
+            file.AudiobookId = newOwner.Id;
+            await db.SaveChangesAsync();
+        }
+
+        var reconciler = new FileRenameRecoveryReconciler(
+            factory,
+            _provider.GetRequiredService<FileMover>(),
+            _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
+            _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
+            TimeProvider.System,
+            NullLogger<FileRenameRecoveryReconciler>.Instance);
+
+        await reconciler.ReconcileAsync();
+
+        await AssertJournalStateAsync(operationId, FileMutationJournalState.OwnerMetadataReconciled);
+        await using var verify = await factory.CreateDbContextAsync();
+        var reassigned = await verify.AudiobookFiles.AsNoTracking().SingleAsync(candidate => candidate.Id == fileId);
+        Assert.Equal(newOwner.Id, reassigned.AudiobookId);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_InterruptedCompanionJournalOfDeletedAudiobook_IsRetiredNotFatal()
+    {
+        var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
+        var operationId = Guid.NewGuid();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.FileMutationJournals.Add(new FileMutationJournal
+            {
+                OperationId = operationId,
+                Action = FileAction.Move,
+                SourcePath = "/library/gone/cover.png",
+                DestinationPath = "/library/gone/renamed/cover.png",
+                AudiobookId = 987654,
+                AudiobookFileId = -2,
+                State = FileMutationJournalState.TargetVerified
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var reconciler = new FileRenameRecoveryReconciler(
+            factory,
+            _provider.GetRequiredService<FileMover>(),
+            _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
+            _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
+            TimeProvider.System,
+            NullLogger<FileRenameRecoveryReconciler>.Instance);
+
+        await reconciler.ReconcileAsync();
+
+        await AssertJournalStateAsync(operationId, FileMutationJournalState.OwnerMetadataReconciled);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_InterruptedJournalOfDeletedAudiobook_IsRetiredWithWarning()
+    {
+        var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
+        var operationId = Guid.NewGuid();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.FileMutationJournals.Add(new FileMutationJournal
+            {
+                OperationId = operationId,
+                Action = FileAction.Move,
+                SourcePath = "/library/gone/Old.m4b",
+                DestinationPath = "/library/gone/New.m4b",
+                AudiobookId = 987655,
+                AudiobookFileId = 424242,
+                State = FileMutationJournalState.Planned
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var reconciler = new FileRenameRecoveryReconciler(
+            factory,
+            _provider.GetRequiredService<FileMover>(),
+            _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
+            _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
+            TimeProvider.System,
+            NullLogger<FileRenameRecoveryReconciler>.Instance);
+
+        await reconciler.ReconcileAsync();
+
+        await AssertJournalStateAsync(operationId, FileMutationJournalState.OwnerMetadataReconciled);
+    }
+
+    [Fact]
     public async Task ReconcileAsync_OwnerBindingChangesAfterInitialRead_MarksJournalNeedsAttention()
     {
         var scenario = await CreateScenarioAsync("owner-binding-changed");

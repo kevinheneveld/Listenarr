@@ -93,19 +93,33 @@ public sealed partial class FileRenameRecoveryReconciler(
             ownerAudiobookId = journal.AudiobookId.Value;
             ownerAudiobookFileId = journal.AudiobookFileId.Value;
             var isCompanionFile = FileMutationOwner.IsCompanionFile(ownerAudiobookFileId);
-            audiobook = await context.Audiobooks
+            var owner = await context.Audiobooks
                 .AsNoTracking()
                 .Include(candidate => candidate.Files)
                 .SingleOrDefaultAsync(
                     candidate => candidate.Id == journal.AudiobookId.Value,
-                    cancellationToken)
-                ?? throw new InvalidOperationException(
-                    "An owned file-mutation journal references a missing audiobook before metadata reconciliation.");
+                    cancellationToken);
+            if (owner == null)
+            {
+                await RetireOrphanedOwnerBindingAsync(
+                    journal,
+                    "its owning audiobook no longer exists",
+                    cancellationToken);
+                return;
+            }
+
+            audiobook = owner;
             audiobookFile = ownerAudiobookFileId == 0 || isCompanionFile
                 ? null
-                : audiobook.Files?.SingleOrDefault(file => file.Id == ownerAudiobookFileId)
-                    ?? throw new InvalidOperationException(
-                        "An owned file-mutation journal references a missing audiobook file before metadata reconciliation.");
+                : audiobook.Files?.SingleOrDefault(file => file.Id == ownerAudiobookFileId);
+            if (audiobookFile == null && ownerAudiobookFileId != 0 && !isCompanionFile)
+            {
+                await RetireOrphanedOwnerBindingAsync(
+                    journal,
+                    "its audiobook file no longer belongs to the journal's owner",
+                    cancellationToken);
+                return;
+            }
         }
 
         if (AfterInitialOwnerBindingLoadedForTestAsync != null)
