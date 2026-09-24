@@ -235,6 +235,18 @@ namespace Listenarr.Application.Audiobooks.Catalog
                 return MapCachedSeries(cachedEntry, normalizedName, region);
             }
 
+            // A plain name lookup returns whichever Audible series carries the slug first —
+            // for a US-region search that is often a translation (live: "Red Rising" resolved
+            // to the German narration, "The Expanse" to the Italian one, "Jane Hawk" to the
+            // French one; 9 of 239 cached series held a catalog containing none of the owned
+            // books). The picker behind "Wrong series?" already knows better: it asks Audible
+            // which series the OWNED books belong to. Prefer that answer whenever it exists.
+            var ownedSeries = await ResolveSeriesFromOwnedBooksAsync(normalizedName, region);
+            if (ownedSeries != null)
+            {
+                return ownedSeries;
+            }
+
             var series = await _audibleService.LookupSeriesAsync(normalizedName, region);
             if (!string.IsNullOrWhiteSpace(series?.Asin))
             {

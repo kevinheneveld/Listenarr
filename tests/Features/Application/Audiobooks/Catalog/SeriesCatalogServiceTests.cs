@@ -74,6 +74,69 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Catalog
         }
 
         [Fact]
+        public async Task GetCatalogAsync_PrefersTheSeriesTheOwnedBooksBelongTo_OverThePlainNameLookup()
+        {
+            // Live: "Red Rising" resolved by name to the German narration's series while the
+            // owned Morning Star belongs to the English one.
+            using var httpClientForAudible = new HttpClient();
+            var audible = new Mock<AudibleService>(httpClientForAudible, Mock.Of<ILogger<AudibleService>>()) { CallBase = false };
+            var audiobookRepository = new Mock<IAudiobookRepository>();
+            var logger = new Mock<ILogger<SeriesCatalogService>>();
+            audiobookRepository
+                .Setup(repository => repository.GetCachedSeriesByNameAsync("Red Rising", "us"))
+                .ReturnsAsync((SeriesCacheEntry?)null);
+            audiobookRepository
+                .Setup(repository => repository.GetLibraryAsync())
+                .ReturnsAsync(new List<Audiobook>
+                {
+                    new() { Id = 1, Title = "Morning Star", Asin = "BOOK-EN", Series = "Red Rising", Authors = new List<string> { "Pierce Brown" } }
+                });
+            audiobookRepository
+                .Setup(repository => repository.UpsertCachedSeriesAsync(It.IsAny<SeriesCacheEntry>()))
+                .ReturnsAsync((SeriesCacheEntry entry) => entry);
+            audible
+                .Setup(service => service.GetBookMetadataAsync("BOOK-EN", "us", It.IsAny<bool>(), It.IsAny<string?>()))
+                .ReturnsAsync(new AudibleBookResponse
+                {
+                    Series = new List<AudibleSeries> { new() { Asin = "SERIES-EN", Name = "Red Rising", Position = "3" } }
+                });
+            audible
+                .Setup(service => service.SearchSeriesByNameAsync("Red Rising", "us"))
+                .ReturnsAsync(new List<SeriesLookupItem>
+                {
+                    new() { Asin = "SERIES-DE", Name = "Red Rising" },
+                    new() { Asin = "SERIES-EN", Name = "Red Rising" }
+                });
+            audible
+                .Setup(service => service.LookupSeriesAsync("Red Rising", "us"))
+                .ReturnsAsync(new SeriesLookupItem { Asin = "SERIES-DE", Name = "Red Rising" });
+            audible
+                .Setup(service => service.GetTypedBooksBySeriesAsinAsync("SERIES-EN", "us"))
+                .ReturnsAsync(new List<AudibleSearchResult>
+                {
+                    new()
+                    {
+                        Asin = "BOOK-EN",
+                        Title = "Morning Star",
+                        Authors = new List<AudibleAuthor> { new() { Name = "Pierce Brown" } },
+                        Language = "english",
+                        Series = new List<AudibleSeries> { new() { Asin = "SERIES-EN", Name = "Red Rising", Position = "3" } }
+                    }
+                });
+
+            var service = new SeriesCatalogService(audible.Object, audiobookRepository.Object, logger.Object);
+
+            var result = await service.GetCatalogAsync("Red Rising", "us", 10);
+
+            Assert.NotNull(result);
+            Assert.Equal("SERIES-EN", result!.Series.Asin);
+            audible.Verify(svc => svc.GetTypedBooksBySeriesAsinAsync("SERIES-DE", "us"), Times.Never);
+            audiobookRepository.Verify(
+                repository => repository.UpsertCachedSeriesAsync(It.Is<SeriesCacheEntry>(entry => entry.SeriesAsin == "SERIES-EN")),
+                Times.Once);
+        }
+
+        [Fact]
         public async Task GetCatalogAsync_ForceRefresh_BypassesPersistedCatalogCache_AndPersistsFreshBooks()
         {
             using var httpClientForAudible = new HttpClient();

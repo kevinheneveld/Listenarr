@@ -203,5 +203,37 @@ namespace Listenarr.Application.Audiobooks.Catalog
                 .Where(entry => entry != null && !string.IsNullOrWhiteSpace(entry.Asin))
                 .ToList() ?? new List<AudibleSeries>();
         }
+
+        private async Task<SeriesLookupItem?> ResolveSeriesFromOwnedBooksAsync(string normalizedName, string region)
+        {
+            try
+            {
+                var candidates = await GetSeriesCandidatesAsync(normalizedName, region);
+                var best = candidates.Candidates.FirstOrDefault(candidate => candidate.OwnedMatchCount > 0);
+                if (best == null || string.IsNullOrWhiteSpace(best.Asin))
+                {
+                    return null;
+                }
+
+                _logger.LogInformation(
+                    "Resolved series '{Series}' to {Asin} ('{Name}') from {Owned} owned book(s)",
+                    LogRedaction.SanitizeText(normalizedName),
+                    best.Asin,
+                    LogRedaction.SanitizeText(best.Name),
+                    best.OwnedMatchCount);
+                return new SeriesLookupItem
+                {
+                    Asin = best.Asin,
+                    Name = string.IsNullOrWhiteSpace(best.Name) ? normalizedName : best.Name,
+                    Image = best.Image,
+                    Region = region
+                };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            {
+                _logger.LogWarning(ex, "Owned-book series resolution failed for {Series}; falling back to name lookup", LogRedaction.SanitizeText(normalizedName));
+                return null;
+            }
+        }
     }
 }
