@@ -43,6 +43,8 @@ namespace Listenarr.Api.Features.Library
         private readonly IScanQueueService? _scanQueueService;
         private readonly IMoveQueueService? _moveQueueService;
         private readonly ILogger<LibraryMaintenanceWorkflow> _logger;
+        private readonly IServiceScopeFactory? _scopeFactory;
+        private readonly AuthorAsinResolver? _authorAsinResolver;
 
         public LibraryMaintenanceWorkflow(
             IAudiobookRepository repo,
@@ -54,8 +56,12 @@ namespace Listenarr.Api.Features.Library
             LibraryOrganizeSweepWorkflow organizeSweep,
             ILogger<LibraryMaintenanceWorkflow> logger,
             IScanQueueService? scanQueueService = null,
-            IMoveQueueService? moveQueueService = null)
+            IMoveQueueService? moveQueueService = null,
+            IServiceScopeFactory? scopeFactory = null,
+            AuthorAsinResolver? authorAsinResolver = null)
         {
+            _scopeFactory = scopeFactory;
+            _authorAsinResolver = authorAsinResolver;
             _repo = repo;
             _fileRepository = fileRepository;
             _historyRepository = historyRepository;

@@ -980,6 +980,8 @@ export interface AudiobookUpdateRequest {
   title?: string
   subtitle?: string
   authors?: string[]
+  /** Audible author ASINs matching `authors`; when omitted and the author set changes, the backend re-resolves by name. */
+  authorAsins?: string[]
   imageUrl?: string
   publishYear?: string
   publishedDate?: string

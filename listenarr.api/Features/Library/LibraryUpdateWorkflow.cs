@@ -29,14 +29,17 @@ namespace Listenarr.Api.Features.Library
         private readonly IAudiobookOperationCoordinator _audiobookOperationCoordinator;
         private readonly IFileSystemSemanticsResolver _fileSystemSemanticsResolver;
         private readonly ILogger<LibraryUpdateWorkflow> _logger;
+        private readonly AuthorAsinResolver? _authorAsinResolver;
 
         public LibraryUpdateWorkflow(
             IServiceScopeFactory scopeFactory,
             IAudiobookDestinationRewriteService destinationRewriteService,
             IAudiobookOperationCoordinator audiobookOperationCoordinator,
             IFileSystemSemanticsResolver fileSystemSemanticsResolver,
-            ILogger<LibraryUpdateWorkflow> logger)
+            ILogger<LibraryUpdateWorkflow> logger,
+            AuthorAsinResolver? authorAsinResolver = null)
         {
+            _authorAsinResolver = authorAsinResolver;
             _scopeFactory = scopeFactory;
             _destinationRewriteService = destinationRewriteService;
             _audiobookOperationCoordinator = audiobookOperationCoordinator ?? throw new ArgumentNullException(nameof(audiobookOperationCoordinator));

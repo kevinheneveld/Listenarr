@@ -49,8 +49,15 @@ import { apiService } from '@/services/api'
 import FilePreviewModal from '@/components/domain/audiobook/FilePreviewModal.vue'
 import { useToast } from '@/services/toastService'
 import { logger } from '@/utils/logger'
+import { collectAuthorAsins } from '@/utils/authorAsins'
 import { parseVerificationDetail } from '@/utils/verificationStatus'
-import type { Audiobook, AudibleSearchResult, AudiobookUpdateRequest, EmbeddedFileMetadata, AsinConflictSide } from '@/types'
+import type {
+  Audiobook,
+  AudibleSearchResult,
+  AudiobookUpdateRequest,
+  EmbeddedFileMetadata,
+  AsinConflictSide,
+} from '@/types'
 
 interface Props {
   visible: boolean
@@ -96,6 +103,8 @@ interface FreshMetadata {
   series?: string
   seriesNumber?: string
   isbn?: string
+  /** Audible author ASINs matching `authors`; travel with a relabel so the record's AuthorAsins don't go stale. */
+  authorAsins?: string[]
 }
 
 type FieldKey =
@@ -270,7 +279,8 @@ function parseAsinFromInput(raw: string): string | null {
 function loadFromPaste() {
   const asin = parsedPasteAsin.value
   if (!asin) {
-    pasteAsinError.value = 'Paste an Audible or Amazon URL, or a 10-character ASIN (e.g. B0CSV7NJMB).'
+    pasteAsinError.value =
+      'Paste an Audible or Amazon URL, or a 10-character ASIN (e.g. B0CSV7NJMB).'
     return
   }
   pasteAsinError.value = null
@@ -662,6 +672,7 @@ function mapFresh(raw: unknown): FreshMetadata {
     authors: arr('authors')
       .map((a) => (a as { name?: string }).name)
       .filter((n): n is string => !!n && !!n.trim()),
+    authorAsins: collectAuthorAsins(arr('authors') as Array<{ asin?: string | null }>),
     narrators: arr('narrators')
       .map((n) => (n as { name?: string }).name)
       .filter((n): n is string => !!n && !!n.trim()),
@@ -788,8 +799,7 @@ function applyOmnibusHeuristic(
   // runtime — the stored value may itself be leftovers from a previous
   // wrong match (live case: a 7.8h file whose record said 21 min tripped
   // the banner against the correct full-novel edition).
-  const fileMinutes =
-    (book.files ?? []).reduce((s, f) => s + (f.durationSeconds ?? 0), 0) / 60
+  const fileMinutes = (book.files ?? []).reduce((s, f) => s + (f.durationSeconds ?? 0), 0) / 60
   const cur = fileMinutes > 0 ? fileMinutes : typeof book.runtime === 'number' ? book.runtime : 0
   const fresh = typeof metadata.runtime === 'number' ? metadata.runtime : 0
   if (cur <= 0 || fresh <= 0) return
@@ -904,6 +914,15 @@ async function applyChanges(includeAsin = true) {
     }
   }
 
+  // Authors and AuthorAsins must move together: a relabel that only rewrote the
+  // names left the OLD author's ASIN on the record, and the author page then
+  // resolved the new name to the old person. Send whatever ASINs the catalog
+  // result carries (possibly none — the backend then re-resolves by name).
+  if (selected.value.has('authors')) {
+    const candidate = candidates.value.find((c) => c.asin === chosenAsin.value)
+    const fromCandidate = collectAuthorAsins(candidate?.authors)
+    payload.authorAsins = fromCandidate.length > 0 ? fromCandidate : (metadata.authorAsins ?? [])
+  }
   // If the user is adopting a new ASIN from a candidate, include it explicitly.
   if (chosenAsin.value && (isEmpty(book.asin) || book.asin !== chosenAsin.value)) {
     // Only carry the chosen ASIN through if the user actually selected it,
@@ -1396,10 +1415,10 @@ function candidateYear(c: AudibleSearchResult): string {
               <div class="asin-conflict-text">
                 <strong>This ASIN is already used by another book in your library</strong>
                 <p class="muted">
-                  These look like two copies of the same audiobook. Compare them below, then
-                  either pick a survivor now (the other record's files are
-                  <strong>deleted from disk</strong>, its downloads/history move to the
-                  survivor) — or apply the metadata without the ASIN and decide later.
+                  These look like two copies of the same audiobook. Compare them below, then either
+                  pick a survivor now (the other record's files are
+                  <strong>deleted from disk</strong>, its downloads/history move to the survivor) —
+                  or apply the metadata without the ASIN and decide later.
                 </p>
                 <table class="asin-conflict-table">
                   <thead>
@@ -1492,64 +1511,64 @@ function candidateYear(c: AudibleSearchResult): string {
                   </span>
                   — likely an omnibus or anthology that contains your story. We've pre-unchecked
                   <strong>Title</strong>, <strong>Subtitle</strong>, and <strong>Runtime</strong> so
-                  they won't be overwritten with the bundle's values. The other fields (cover, series,
-                  author, description) are usually still good to import.
+                  they won't be overwritten with the bundle's values. The other fields (cover,
+                  series, author, description) are usually still good to import.
                 </div>
               </div>
 
               <table class="compare-table">
-              <thead>
-                <tr>
-                  <th class="col-pick"></th>
-                  <th class="col-field">Field</th>
-                  <th class="col-value">Current</th>
-                  <th class="col-value">Fresh from Audible</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in rows"
-                  :key="row.key"
-                  :class="{
-                    unchanged: row.unchanged,
-                    'no-fresh': !row.selectable && !row.unchanged,
-                  }"
-                >
-                  <td class="col-pick">
-                    <input
-                      v-if="row.selectable"
-                      type="checkbox"
-                      :checked="selected.has(row.key)"
-                      :disabled="phase === 'applying'"
-                      @change="toggleField(row.key)"
-                    />
-                    <PhCheckCircle v-else-if="row.unchanged" class="match-icon" />
-                  </td>
-                  <td class="col-field">{{ row.label }}</td>
-                  <td class="col-value">
-                    <img
-                      v-if="row.key === 'imageUrl' && !isEmpty(row.current)"
-                      :src="formatValue(row.current)"
-                      class="value-thumb"
-                      alt="current cover"
-                      loading="lazy"
-                    />
-                    <span v-else-if="!isEmpty(row.current)">{{ formatValue(row.current) }}</span>
-                    <span v-else class="muted">—</span>
-                  </td>
-                  <td class="col-value">
-                    <img
-                      v-if="row.key === 'imageUrl' && !isEmpty(row.fresh)"
-                      :src="formatValue(row.fresh)"
-                      class="value-thumb"
-                      alt="fresh cover"
-                      loading="lazy"
-                    />
-                    <span v-else-if="!isEmpty(row.fresh)">{{ formatValue(row.fresh) }}</span>
-                    <span v-else class="muted">—</span>
-                  </td>
-                </tr>
-              </tbody>
+                <thead>
+                  <tr>
+                    <th class="col-pick"></th>
+                    <th class="col-field">Field</th>
+                    <th class="col-value">Current</th>
+                    <th class="col-value">Fresh from Audible</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in rows"
+                    :key="row.key"
+                    :class="{
+                      unchanged: row.unchanged,
+                      'no-fresh': !row.selectable && !row.unchanged,
+                    }"
+                  >
+                    <td class="col-pick">
+                      <input
+                        v-if="row.selectable"
+                        type="checkbox"
+                        :checked="selected.has(row.key)"
+                        :disabled="phase === 'applying'"
+                        @change="toggleField(row.key)"
+                      />
+                      <PhCheckCircle v-else-if="row.unchanged" class="match-icon" />
+                    </td>
+                    <td class="col-field">{{ row.label }}</td>
+                    <td class="col-value">
+                      <img
+                        v-if="row.key === 'imageUrl' && !isEmpty(row.current)"
+                        :src="formatValue(row.current)"
+                        class="value-thumb"
+                        alt="current cover"
+                        loading="lazy"
+                      />
+                      <span v-else-if="!isEmpty(row.current)">{{ formatValue(row.current) }}</span>
+                      <span v-else class="muted">—</span>
+                    </td>
+                    <td class="col-value">
+                      <img
+                        v-if="row.key === 'imageUrl' && !isEmpty(row.fresh)"
+                        :src="formatValue(row.fresh)"
+                        class="value-thumb"
+                        alt="fresh cover"
+                        loading="lazy"
+                      />
+                      <span v-else-if="!isEmpty(row.fresh)">{{ formatValue(row.fresh) }}</span>
+                      <span v-else class="muted">—</span>
+                    </td>
+                  </tr>
+                </tbody>
               </table>
             </template>
           </template>

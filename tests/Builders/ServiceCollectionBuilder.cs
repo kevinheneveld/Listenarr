@@ -231,6 +231,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryMetadataRescanWorkflow>();
             services.AddSingleton<LibraryScanPathResolver>();
             services.AddSingleton<LibraryScanQueueWorkflow>();
+            services.AddSingleton<AuthorAsinResolver>();
             services.AddSingleton<LibraryAddWorkflow>();
             services.AddSingleton<LibraryManualScanWorkflow>();
             services.AddSingleton<LibraryUploadWorkflow>();
