@@ -113,6 +113,83 @@ public sealed class EfMoveScanHandoffStoreTests : BaseTests
     }
 
     [Fact]
+    public async Task CommitMoveCompletionAsync_RunsValidationBeforeTheWriteTransaction_SoAHeartbeatCanRenewMeanwhile()
+    {
+        // Live: the probe re-hashed 1,310 files over NFS inside a BEGIN IMMEDIATE transaction,
+        // the job's own heartbeat hit "database is locked" and cancelled the job, forever.
+        var databasePath = Path.Join(
+            FileService.GetTempPath(),
+            $"move-completion-lockfree-{Guid.NewGuid():N}.db");
+        var options = new DbContextOptionsBuilder<ListenArrDbContext>()
+            .UseSqlite($"Data Source={databasePath};Pooling=False")
+            .Options;
+        var factory = new TestDbContextFactory(options);
+        MoveJob job;
+        Audiobook audiobook;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            await db.Database.EnsureCreatedAsync();
+            audiobook = new Audiobook
+            {
+                Title = "Lock-free Completion",
+                BasePath = FileService.GetTempDirectory("lockfree-completion-audiobook")
+            };
+            db.Audiobooks.Add(audiobook);
+            await db.SaveChangesAsync();
+            job = new MoveJob
+            {
+                AudiobookId = audiobook.Id,
+                SourcePath = audiobook.BasePath + "-source",
+                RequestedPath = audiobook.BasePath,
+                Status = MoveJobStatus.Running,
+                Phase = MoveJobPhase.RecordingCompletion,
+                LeaseOwner = "completion-worker",
+                LeaseGeneration = 1,
+                LeaseExpiresAt = DateTime.UtcNow.AddMinutes(5),
+                ActiveDeduplicationKey = $"lockfree:{Guid.NewGuid():N}"
+            };
+            SetPathIdentities(job);
+            db.MoveJobs.Add(job);
+            await db.SaveChangesAsync();
+        }
+
+        var renewedDuringValidation = false;
+        var store = new EfMoveScanHandoffStore(factory);
+        var result = await store.CommitMoveCompletionAsync(
+            new MoveCompletionCommit(
+                job.Id,
+                job.LeaseOwner!,
+                job.LeaseGeneration,
+                audiobook.Id,
+                audiobook.Title,
+                job.SourcePath!,
+                job.RequestedPath!,
+                DateTimeOffset.UtcNow),
+            async _ =>
+            {
+                // The heartbeat: a concurrent writer on its own connection with a short
+                // busy timeout. It must get through while validation is in progress.
+                await using var heartbeat = await factory.CreateDbContextAsync();
+                heartbeat.Database.SetCommandTimeout(3);
+                var renewed = await heartbeat.MoveJobs
+                    .Where(candidate => candidate.Id == job.Id)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(
+                        candidate => candidate.LeaseExpiresAt,
+                        DateTime.UtcNow.AddMinutes(10)));
+                renewedDuringValidation = renewed == 1;
+                return RegistrationPublicationMatchOutcome.Match;
+            },
+            CancellationToken.None);
+
+        Assert.True(renewedDuringValidation, "the heartbeat write was blocked by the completion transaction");
+        Assert.True(result.MoveHistoryCreated);
+        await using var verification = await factory.CreateDbContextAsync();
+        Assert.Equal(
+            MoveJobStatus.Completed,
+            (await verification.MoveJobs.AsNoTracking().SingleAsync(candidate => candidate.Id == job.Id)).Status);
+    }
+
+    [Fact]
     public async Task CommitMoveCompletionAsync_RetryAfterCommittedCompletion_ReusesExistingRecords()
     {
         var audiobook = await _audiobookRepository.AddAsync(new Audiobook

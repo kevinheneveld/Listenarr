@@ -37,6 +37,29 @@ public sealed partial class EfMoveScanHandoffStore(
     {
         try
         {
+            // Validate the finalized target BEFORE taking the write transaction. The probe
+            // re-hashes every moved file (live: 1,310 files / 8.6 GB over NFS, minutes);
+            // Microsoft.Data.Sqlite opens transactions with BEGIN IMMEDIATE, so while the
+            // probe ran inside the transaction every other writer — including this job's own
+            // heartbeat — hit "database is locked", the heartbeat cancelled processing, and
+            // the job looped forever at RecordingCompletion. Nothing has been written when
+            // the probe runs here, so a mismatch still leaves no completion records behind.
+            if (commitValidation != null)
+            {
+                var validation = await commitValidation(CancellationToken.None);
+                if (validation == RegistrationPublicationMatchOutcome.Unavailable)
+                {
+                    throw new IOException(
+                        "The finalized move target is temporarily unavailable while durable completion is being committed.");
+                }
+
+                if (validation != RegistrationPublicationMatchOutcome.Match)
+                {
+                    throw new MoveNeedsAttentionException(
+                        "The finalized move target changed before durable completion could be committed.");
+                }
+            }
+
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
             await using var transaction = db.Database.IsRelational()
                 ? await db.Database.BeginTransactionAsync(cancellationToken)
@@ -177,44 +200,8 @@ public sealed partial class EfMoveScanHandoffStore(
             job.LeaseExpiresAt = null;
             job.UpdatedAt = now;
 
-            if (commitValidation != null && transaction == null)
-            {
-                var validation = await commitValidation(CancellationToken.None);
-                if (validation == RegistrationPublicationMatchOutcome.Unavailable)
-                {
-                    throw new IOException(
-                        "The finalized move target is temporarily unavailable while durable completion is being committed.");
-                }
-                if (validation != RegistrationPublicationMatchOutcome.Match)
-                {
-                    throw new MoveNeedsAttentionException(
-                        "The finalized move target changed before durable completion could be committed.");
-                }
-            }
 
             await db.SaveChangesAsync(cancellationToken);
-            if (commitValidation != null && transaction != null)
-            {
-                var validation = await commitValidation(CancellationToken.None);
-                if (validation == RegistrationPublicationMatchOutcome.Unavailable)
-                {
-                    if (transaction != null)
-                    {
-                        await transaction.RollbackAsync(CancellationToken.None);
-                    }
-                    throw new IOException(
-                        "The finalized move target is temporarily unavailable while durable completion is being committed.");
-                }
-                if (validation != RegistrationPublicationMatchOutcome.Match)
-                {
-                    if (transaction != null)
-                    {
-                        await transaction.RollbackAsync(CancellationToken.None);
-                    }
-                    throw new MoveNeedsAttentionException(
-                        "The finalized move target changed before durable completion could be committed.");
-                }
-            }
             if (transaction != null)
             {
                 cancellationToken.ThrowIfCancellationRequested();

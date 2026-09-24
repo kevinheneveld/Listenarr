@@ -247,6 +247,16 @@ public sealed class MoveBackgroundService(
             {
                 throw;
             }
+            catch (Exception exception) when (IsTransientDatabaseContention(exception))
+            {
+                // Another writer (very possibly this job's own long commit) holds the SQLite
+                // write lock. The lease is still ours until the ownership deadline; try again
+                // on the next tick instead of cancelling the job we are supposed to protect.
+                logger.LogDebug(
+                    exception,
+                    "Move heartbeat for job {JobId} hit database contention; retrying on the next tick",
+                    jobId);
+            }
             catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
             {
                 await CancelForLostOwnershipAsync(
@@ -280,6 +290,19 @@ public sealed class MoveBackgroundService(
 
         leaseLost.TrySetResult(new MoveLeaseLostException(jobId, generation));
         await processingCancellation.CancelAsync();
+    }
+
+    internal static bool IsTransientDatabaseContention(Exception exception)
+    {
+        for (var current = exception; current != null; current = current.InnerException)
+        {
+            if (current is Microsoft.Data.Sqlite.SqliteException { SqliteErrorCode: 5 or 6 })
+            {
+                return true; // SQLITE_BUSY / SQLITE_LOCKED
+            }
+        }
+
+        return false;
     }
 
     private sealed record OwnershipDeadlineContext(
