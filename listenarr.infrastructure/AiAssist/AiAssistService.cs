@@ -38,6 +38,12 @@ namespace Listenarr.Infrastructure.AiAssist
         // over a minute on an 8B model. Still bounded — never the 100s default
         // on top of unbounded generation.
         public const int RequestTimeoutSeconds = 120;
+
+        // Thinking-style models (Qwen3, Qwen3.5, …) reason at length before answering
+        // unless told not to; on a CPU/M1 box that turned a 3s verdict into a 2–5 minute
+        // one, past the request timeout, so the gate silently failed open. Ollama's
+        // OpenAI-compatible endpoint honours reasoning_effort; non-thinking models ignore it.
+        public const string ReasoningEffort = "none";
         private const int TestTimeoutSeconds = 30;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -104,6 +110,7 @@ namespace Listenarr.Infrastructure.AiAssist
                 {
                     model = settings.AiAssistModel,
                     temperature = 0,
+                    reasoning_effort = ReasoningEffort,
                     stream = false,
                     messages = new object[]
                     {
@@ -183,6 +190,7 @@ namespace Listenarr.Infrastructure.AiAssist
                 {
                     model,
                     temperature = 0,
+                    reasoning_effort = ReasoningEffort,
                     stream = false,
                     max_tokens = 20,
                     messages = new object[]

@@ -43,13 +43,15 @@ namespace Listenarr.Tests.Features.Infrastructure.AiAssist
         private sealed class ScriptedHandler : HttpMessageHandler
         {
             public int Calls { get; private set; }
+            public string? LastBody { get; private set; }
             public Func<CancellationToken, Task<HttpResponseMessage>> Script { get; set; } =
                 _ => throw new HttpRequestException("Connection refused");
 
-            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 Calls++;
-                return Script(cancellationToken);
+                LastBody = request.Content == null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+                return await Script(cancellationToken);
             }
         }
 
@@ -151,6 +153,19 @@ namespace Listenarr.Tests.Features.Infrastructure.AiAssist
             Assert.True(probe.Ok);
             Assert.Equal(3, handler.Calls);
             Assert.False(health.IsUnavailable(BaseUrl, clock.Now));
+        }
+
+        [Fact]
+        public async Task CompleteJsonAsync_SendsReasoningEffortNone_SoThinkingModelsAnswerPromptly()
+        {
+            var (service, handler, _, _) = Build();
+            handler.Script = _ => Task.FromResult(Ok("{\"choices\":[{\"message\":{\"content\":\"{}\"}}]}"));
+
+            await service.CompleteJsonAsync("sys", "user");
+
+            Assert.NotNull(handler.LastBody);
+            Assert.Contains("\"reasoning_effort\":\"none\"", handler.LastBody);
+            Assert.Contains("\"temperature\":0", handler.LastBody);
         }
 
         [Fact]
