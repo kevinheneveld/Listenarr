@@ -47,6 +47,9 @@ namespace Listenarr.Application.Search
             "identify releases that are clearly NOT an audiobook copy of the target: music albums or " +
             "discographies, movies or TV, e-book-only packs, or a different book entirely. " +
             "Release names use scene conventions (dots for spaces, quality tags, group suffixes) — that is normal, not suspicious. " +
+            "A release whose name contains the target's title and its author (in any order, with or without dots, series or volume numbers, " +
+            "'Unabridged'/'Unabr', 'Part N of M' or 'Dramatized Adaptation') IS the target — never flag it. " +
+            "A translation or a different-language edition of the target counts as a different book. " +
             "File format, bitrate, and size are NEVER reasons to flag. " +
             "Most shortlists contain no wrong releases: an empty list is the common correct answer. " +
             "Only flag a release when you are confident; when unsure, do not flag it. " +
