@@ -20,6 +20,7 @@
 #   ./scripts/deploy-local.sh --skip-tests         # Skip backend test run (hotfixes only)
 #   ./scripts/deploy-local.sh --tag listenarr:abc  # Use an explicit image tag
 #   ./scripts/deploy-local.sh --dry-run            # Show what would happen, don't actually deploy
+#   ./scripts/deploy-local.sh --no-cache           # docker build --no-cache (stale apt index in a cached layer)
 #
 # Requirements:
 #   - .deploy-local.env populated (copy from .deploy-local.env.example)
@@ -53,11 +54,13 @@ HEALTH_TIMEOUT=30
 # ── Flags ────────────────────────────────────────────────────────────────────
 SKIP_TESTS=false
 DRY_RUN=false
+NO_CACHE=false
 TAG="${DEFAULT_TAG}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-tests) SKIP_TESTS=true ;;
+    --no-cache) NO_CACHE=true ;;
     --dry-run)    DRY_RUN=true ;;
     --tag)        TAG="$2"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -163,7 +166,9 @@ fi
 # ── Build on media ───────────────────────────────────────────────────────────
 log "Building Docker image on ${MEDIA_SSH}: ${TAG}"
 if [[ "$DRY_RUN" == false ]]; then
-  ssh_media "cd '${BUILD_DIR_REMOTE}' && docker build -t '${TAG}' ." \
+  BUILD_FLAGS=""
+  [[ "$NO_CACHE" == true ]] && BUILD_FLAGS="--no-cache"
+  ssh_media "cd '${BUILD_DIR_REMOTE}' && docker build ${BUILD_FLAGS} -t '${TAG}' ." \
     || die "Docker build on ${MEDIA_SSH} failed"
   log "Build complete"
 else
