@@ -34,6 +34,7 @@ namespace Listenarr.Api.Features.Library
         private readonly ILibraryDestinationMutationGuard _destinationMutationGuard;
         private readonly IFilesystemMutationCoordinator _mutationCoordinator;
         private readonly ILogger<LibraryAddWorkflow> _logger;
+        private readonly AuthorAsinResolver? _authorAsinResolver;
 
         public LibraryAddWorkflow(
             IAudiobookRepository repo,
@@ -44,8 +45,10 @@ namespace Listenarr.Api.Features.Library
             IFilesystemMutationCoordinator mutationCoordinator,
             ILogger<LibraryAddWorkflow> logger,
             INotificationService? notificationService = null,
-            ILibraryAddService? libraryAddService = null)
+            ILibraryAddService? libraryAddService = null,
+            AuthorAsinResolver? authorAsinResolver = null)
         {
+            _authorAsinResolver = authorAsinResolver;
             _repo = repo;
             _imageCacheService = imageCacheService;
             _scopeFactory = scopeFactory;
@@ -386,46 +389,21 @@ namespace Listenarr.Api.Features.Library
         {
             try
             {
-                using var scope = _scopeFactory.CreateScope();
-                var audible = scope.ServiceProvider.GetRequiredService<AudibleService>();
-
                 if (audiobook.Authors == null || !audiobook.Authors.Any())
                 {
                     return;
                 }
 
+                // Shared with the update workflow (author set changed) and the
+                // author-ASIN audit so every path resolves names the same way.
+                var resolver = _authorAsinResolver
+                    ?? new AuthorAsinResolver(_scopeFactory, Microsoft.Extensions.Logging.Abstractions.NullLogger<AuthorAsinResolver>.Instance, _imageCacheService);
                 audiobook.AuthorAsins ??= new List<string>();
-                foreach (var authorName in audiobook.Authors)
+                foreach (var asin in await resolver.ResolveAsync(audiobook.Authors))
                 {
-                    try
+                    if (!audiobook.AuthorAsins.Contains(asin))
                     {
-                        var info = await audible.LookupAuthorAsync(authorName);
-                        if (info == null || string.IsNullOrWhiteSpace(info.Asin))
-                        {
-                            continue;
-                        }
-
-                        if (!audiobook.AuthorAsins.Contains(info.Asin))
-                        {
-                            audiobook.AuthorAsins.Add(info.Asin);
-                        }
-
-                        try
-                        {
-                            var moved = await _imageCacheService.MoveToAuthorLibraryStorageAsync(info.Asin, info.Image);
-                            if (moved != null)
-                            {
-                                _logger.LogInformation("Cached author image for {Author} (ASIN: {Asin})", authorName, info.Asin);
-                            }
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                        {
-                            _logger.LogWarning(ex, "Failed to cache author image for {Author}", authorName);
-                        }
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-                    {
-                        _logger.LogWarning(ex, "Author lookup failed for {Author}", authorName);
+                        audiobook.AuthorAsins.Add(asin);
                     }
                 }
 

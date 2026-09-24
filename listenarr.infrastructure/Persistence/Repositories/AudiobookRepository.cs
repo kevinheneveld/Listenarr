@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Application.Audiobooks;
 using Microsoft.EntityFrameworkCore;
 
 namespace Listenarr.Infrastructure.Persistence.Repositories
@@ -185,34 +186,6 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             _db.Audiobooks.Remove(audiobook);
             await _db.SaveChangesAsync();
             return true;
-        }
-
-        public async Task<string?> GetAuthorAsinByNameAsync(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return null;
-
-            var target = NormalizeAuthorName(name);
-
-            // Materialize first because SQLite cannot translate list-property checks on our JSON-backed columns.
-            var candidates = await _db.Audiobooks
-                .AsNoTracking()
-                .ToListAsync();
-
-            foreach (var b in candidates)
-            {
-                if (b.AuthorAsins == null || b.AuthorAsins.Count == 0 || b.Authors == null || b.Authors.Count == 0)
-                {
-                    continue;
-                }
-
-                if (b.Authors.Any(a => NormalizeAuthorName(a) == target))
-                {
-                    var asin = b.AuthorAsins.FirstOrDefault();
-                    if (!string.IsNullOrWhiteSpace(asin)) return asin;
-                }
-            }
-
-            return null;
         }
 
         public async Task<AuthorCacheEntry?> GetCachedAuthorByNameAsync(string name, string region)
@@ -436,22 +409,7 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
         }
 
-        private static string NormalizeAuthorName(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return string.Empty;
-            }
-
-            var cleaned = new string(value
-                .Where(character => char.IsLetterOrDigit(character) || char.IsWhiteSpace(character))
-                .ToArray());
-            var parts = cleaned.Split(
-                new[] { ' ', '\t', '\n', '\r' },
-                StringSplitOptions.RemoveEmptyEntries);
-
-            return string.Join(' ', parts).ToLowerInvariant();
-        }
+        private static string NormalizeAuthorName(string? value) => AuthorNameMatcher.Normalize(value);
 
         public async Task SaveChangesAsync(System.Threading.CancellationToken ct = default)
         {

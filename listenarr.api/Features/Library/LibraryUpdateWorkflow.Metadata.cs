@@ -1,3 +1,4 @@
+using Listenarr.Application.Audiobooks;
 using Listenarr.Application.Common;
 using Microsoft.AspNetCore.Mvc;
 
@@ -26,7 +27,10 @@ public sealed partial class LibraryUpdateWorkflow
         var legacyIdentifierFieldsTouched = false;
         if (request.Title != null) existingAudiobook.Title = request.Title;
         if (request.Subtitle != null) existingAudiobook.Subtitle = request.Subtitle;
-        if (request.Authors != null) existingAudiobook.Authors = request.Authors;
+        if (request.Authors != null)
+        {
+            await ApplyAuthorUpdateAsync(existingAudiobook, request, cancellationToken);
+        }
         if (request.ImageUrl != null && !suppressStaleImageUrl)
         {
             existingAudiobook.ImageUrl = request.ImageUrl;
@@ -114,6 +118,63 @@ public sealed partial class LibraryUpdateWorkflow
             message = "Audiobook updated successfully",
             audiobook = existingAudiobook
         });
+    }
+
+    /// <summary>
+    /// Authors and AuthorAsins must describe the same people. AuthorAsins are resolved
+    /// once at add time and were never revisited, so relabelling a wrong grab to a
+    /// different book rewrote Authors and left the OLD author's ASIN behind (live:
+    /// "Cross Fire" relabelled to Fonda Lee kept James Patterson's ASIN, and the
+    /// author page for Fonda Lee rendered Patterson). When the author set changes:
+    /// caller-supplied ASINs win; otherwise the stale ones are dropped and re-resolved
+    /// by name (best-effort — an empty list beats a wrong one).
+    /// </summary>
+    private async Task ApplyAuthorUpdateAsync(
+        Audiobook existingAudiobook,
+        AudiobookUpdateRequest request,
+        CancellationToken cancellationToken)
+    {
+        var incomingAuthors = request.Authors!;
+        var authorSetChanged = !SameAuthorSet(existingAudiobook.Authors, incomingAuthors);
+        existingAudiobook.Authors = incomingAuthors;
+
+        var suppliedAsins = request.AuthorAsins?
+            .Where(asin => !string.IsNullOrWhiteSpace(asin))
+            .Select(asin => asin.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (suppliedAsins != null)
+        {
+            existingAudiobook.AuthorAsins = suppliedAsins;
+            return;
+        }
+
+        if (!authorSetChanged)
+        {
+            return;
+        }
+
+        var previous = existingAudiobook.AuthorAsins?.Where(a => !string.IsNullOrWhiteSpace(a)).ToList() ?? new List<string>();
+        var resolver = _authorAsinResolver
+            ?? new AuthorAsinResolver(_scopeFactory, Microsoft.Extensions.Logging.Abstractions.NullLogger<AuthorAsinResolver>.Instance);
+        existingAudiobook.AuthorAsins = await resolver.ResolveAsync(incomingAuthors, cancellationToken);
+
+        if (previous.Count > 0)
+        {
+            _logger.LogInformation(
+                "Author set changed on audiobook {Id}; dropped stale author ASIN(s) {Stale} and resolved {Resolved}",
+                existingAudiobook.Id,
+                string.Join(",", previous),
+                existingAudiobook.AuthorAsins.Count > 0 ? string.Join(",", existingAudiobook.AuthorAsins) : "none");
+        }
+    }
+
+    private static bool SameAuthorSet(IEnumerable<string>? current, IEnumerable<string> incoming)
+    {
+        var a = new HashSet<string>((current ?? Array.Empty<string>()).Select(AuthorNameMatcher.Normalize).Where(n => n.Length > 0), StringComparer.Ordinal);
+        var b = new HashSet<string>(incoming.Select(AuthorNameMatcher.Normalize).Where(n => n.Length > 0), StringComparer.Ordinal);
+        return a.SetEquals(b);
     }
 
     private static async Task<IActionResult> BuildAsinConflictResponseAsync(

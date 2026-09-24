@@ -81,6 +81,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryMetadataRescanWorkflow>();
         services.AddScoped<LibraryScanPathResolver>();
         services.AddScoped<LibraryScanQueueWorkflow>();
+        services.AddScoped<AuthorAsinResolver>();
         services.AddScoped<LibraryAddWorkflow>();
         services.AddScoped<LibraryManualScanWorkflow>();
         services.AddScoped<LibraryUploadWorkflow>();

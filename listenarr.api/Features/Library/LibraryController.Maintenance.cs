@@ -54,6 +54,24 @@ namespace Listenarr.Api.Features.Library
         /// "Moved" history target (when it exists on disk with content) and re-scan.
         /// Dry-run by default.
         /// </summary>
+        /// <summary>
+        /// Audit: books whose stored author ASIN belongs to a different author than
+        /// their Authors (the relabel leftover). Read-only; resolves uncached ASINs
+        /// against Audible up to <paramref name="maxLookups"/> per call.
+        /// </summary>
+        [HttpGet("author-asin-audit")]
+        public async Task<IActionResult> AuditAuthorAsins([FromQuery] int maxLookups = 150, CancellationToken ct = default)
+        {
+            return await _maintenanceWorkflow.AuditAuthorAsinsAsync(repair: false, maxLookups, ct);
+        }
+
+        /// <summary>Same audit, then drops the stale ASINs and re-resolves them by author name.</summary>
+        [HttpPost("author-asin-audit/repair")]
+        public async Task<IActionResult> RepairAuthorAsins([FromQuery] int maxLookups = 150, CancellationToken ct = default)
+        {
+            return await _maintenanceWorkflow.AuditAuthorAsinsAsync(repair: true, maxLookups, ct);
+        }
+
         [HttpPost("recover-broken-moves")]
         public async Task<IActionResult> RecoverBrokenMoves([FromQuery] bool dryRun = true, CancellationToken ct = default)
         {

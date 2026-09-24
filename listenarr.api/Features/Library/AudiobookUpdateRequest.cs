@@ -19,6 +19,11 @@ public sealed record AudiobookUpdateRequest
     public string? Title { get; init; }
     public string? Subtitle { get; init; }
     public List<string>? Authors { get; init; }
+    /// <summary>
+    /// Audible author ASINs matching <see cref="Authors"/>. When the author set changes
+    /// and this is omitted, the stale ASINs are dropped and re-resolved by name.
+    /// </summary>
+    public List<string>? AuthorAsins { get; init; }
     public string? ImageUrl { get; init; }
     public string? PublishYear { get; init; }
     public string? PublishedDate { get; init; }
