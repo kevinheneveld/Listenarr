@@ -211,10 +211,11 @@ namespace Listenarr.Api.Features.Library
             // Mastrogiorgio): let runs of two or three consecutive heard tokens
             // stand in for one record token. The ≥3-letter filter above already
             // dropped the "of".
-            for (var i = 0; i < heardTokens.Count; i++)
+            var single = heardTokens.Count;
+            for (var i = 0; i < single; i++)
             {
-                if (i + 1 < heardTokens.Count) heardTokens.Add(heardTokens[i] + heardTokens[i + 1]);
-                if (i + 2 < heardTokens.Count) heardTokens.Add(heardTokens[i] + heardTokens[i + 1] + heardTokens[i + 2]);
+                if (i + 1 < single) heardTokens.Add(heardTokens[i] + heardTokens[i + 1]);
+                if (i + 2 < single) heardTokens.Add(heardTokens[i] + heardTokens[i + 1] + heardTokens[i + 2]);
             }
 
             var agreeing = recordTokens.Count(rt => heardTokens.Any(ht => TokensAgree(rt, ht)));

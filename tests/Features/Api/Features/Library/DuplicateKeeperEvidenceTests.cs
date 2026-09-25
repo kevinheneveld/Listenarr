@@ -57,6 +57,19 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.False(DuplicateKeeperEvidence.NamesAgree(record, heard));
         }
 
+        [Fact]
+        public void NamesAgree_ManyTokenCredit_TerminatesAndRejects()
+        {
+            // The split-surname re-join once appended to the list it iterated
+            // and never terminated on any multi-word credit (live OOM crash
+            // loop, exit 137). Bounded now: ten tokens, instant answer.
+            var task = System.Threading.Tasks.Task.Run(() => DuplicateKeeperEvidence.NamesAgree(
+                "Dick Hill",
+                "Fool Moon by Jim Butcher print publication by Roc a division of Penguin Putnam"));
+            Assert.True(task.Wait(TimeSpan.FromSeconds(5)), "NamesAgree did not terminate");
+            Assert.False(task.Result);
+        }
+
         [Theory]
         [InlineData("ballerini", "valarini", true)]
         [InlineData("flosnik", "blasnick", true)]
