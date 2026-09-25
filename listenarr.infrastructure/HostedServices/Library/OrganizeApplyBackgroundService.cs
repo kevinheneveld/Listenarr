@@ -90,7 +90,11 @@ namespace Listenarr.Infrastructure.HostedServices.Library
                 else
                 {
                     var outcome = await enqueuer.EnqueueAsync(item, linked.Token);
-                    if (outcome.Accepted && outcome.JobId is { } jobId)
+                    if (outcome.Accepted && outcome.Repointed)
+                    {
+                        _batch.MarkRepointed(item);
+                    }
+                    else if (outcome.Accepted && outcome.JobId is { } jobId)
                     {
                         _batch.MarkQueued(item, jobId);
                     }

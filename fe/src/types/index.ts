@@ -1758,6 +1758,8 @@ export type OrganizePreviewStatus =
   | 'will_move'
   | 'collision'
   | 'invalid_target'
+  /** Files already sit under the target; apply rewrites the stored path, no move. */
+  | 'repoint'
 
 export interface OrganizePreviewRow {
   id: number
@@ -1845,6 +1847,7 @@ export interface OrganizeLibraryPreview {
   willMoveCount: number
   collisionCount: number
   invalidTargetCount: number
+  repointCount: number
 }
 
 export interface OrganizeApplySkipped {
@@ -1876,6 +1879,13 @@ export interface OrganizeLibraryApplyResult {
   warnings: string[]
 }
 
+/** A row the batch resolved by rewriting the record's stored path (no move job). */
+export interface OrganizeApplyRepointedRow {
+  audiobookId: number
+  audiobookTitle: string | null
+  targetPath: string | null
+}
+
 export interface OrganizeApplyProblem {
   audiobookId: number
   title: string | null
@@ -1891,12 +1901,14 @@ export interface OrganizeApplyBatchSnapshot {
   queued: number
   notAccepted: number
   failed: number
+  repointed: number
   currentAudiobookId: number | null
   currentTitle: string | null
   startedAt: string | null
   completedAt: string | null
   cancelled: boolean
   queuedJobs: OrganizeQueuedJob[]
+  repointedRows: OrganizeApplyRepointedRow[]
   problems: OrganizeApplyProblem[]
 }
 

@@ -34,6 +34,7 @@ namespace Listenarr.Application.Audiobooks.Organizing
         private readonly ILogger<OrganizeApplyBatchService> _logger;
         private readonly TimeProvider _timeProvider;
         private readonly List<OrganizeApplyQueuedJob> _queuedJobs = [];
+        private readonly List<OrganizeApplyRepointedRow> _repointedRows = [];
         private readonly List<OrganizeApplyProblem> _problems = [];
 
         private Channel<OrganizeApplyItem> _channel = Channel.CreateUnbounded<OrganizeApplyItem>();
@@ -47,6 +48,7 @@ namespace Listenarr.Application.Audiobooks.Organizing
         private int _queued;
         private int _notAccepted;
         private int _failed;
+        private int _repointed;
         private int? _currentAudiobookId;
         private string? _currentTitle;
         private DateTime? _startedAt;
@@ -101,11 +103,13 @@ namespace Listenarr.Application.Audiobooks.Organizing
                 _queued = 0;
                 _notAccepted = 0;
                 _failed = 0;
+                _repointed = 0;
                 _currentAudiobookId = null;
                 _currentTitle = null;
                 _startedAt = _timeProvider.GetUtcNow().UtcDateTime;
                 _completedAt = null;
                 _queuedJobs.Clear();
+                _repointedRows.Clear();
                 _problems.Clear();
 
                 if (_batchCts.IsCancellationRequested)
@@ -168,12 +172,14 @@ namespace Listenarr.Application.Audiobooks.Organizing
                     _queued,
                     _notAccepted,
                     _failed,
+                    _repointed,
                     _currentAudiobookId,
                     _currentTitle,
                     _startedAt,
                     _completedAt,
                     _cancelled,
                     _queuedJobs.ToArray(),
+                    _repointedRows.ToArray(),
                     _problems.ToArray());
             }
         }
@@ -195,6 +201,16 @@ namespace Listenarr.Application.Audiobooks.Organizing
                 CompleteCurrentLocked(item);
                 _queued++;
                 _queuedJobs.Add(new OrganizeApplyQueuedJob(jobId.ToString(), item.AudiobookId, item.Title, item.TargetPath));
+            }
+        }
+
+        public void MarkRepointed(OrganizeApplyItem item)
+        {
+            lock (_sync)
+            {
+                CompleteCurrentLocked(item);
+                _repointed++;
+                _repointedRows.Add(new OrganizeApplyRepointedRow(item.AudiobookId, item.Title, item.TargetPath));
             }
         }
 

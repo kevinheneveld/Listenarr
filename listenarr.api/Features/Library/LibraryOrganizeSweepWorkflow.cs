@@ -170,6 +170,21 @@ namespace Listenarr.Api.Features.Library
                     }
                     if (TargetExistsWithContent(target))
                     {
+                        // The "occupant" may be this record's own files: an
+                        // earlier move relocated them without persisting the
+                        // new BasePath (or a scan re-rooted the record at the
+                        // parent folder). Nothing needs moving — only the stored
+                        // path lags — so offer a repoint instead of telling the
+                        // operator to clear a folder that holds the right files.
+                        if (TrackedFilesAllUnderTarget(files, target))
+                        {
+                            row.Status = OrganizePreviewStatus.Repoint;
+                            row.TargetPath = target;
+                            row.Reason = "Every tracked file already sits under the canonical folder; only the record's stored path is updated.";
+                            rows.Add(row);
+                            continue;
+                        }
+
                         // A populated target is only a hard conflict when it
                         // holds something worth protecting. A metadata-only husk
                         // (covers, .opf, playlists — leftovers from a removed
@@ -210,7 +225,9 @@ namespace Listenarr.Api.Features.Library
 
             foreach (var row in rows)
             {
-                if (row.Status == OrganizePreviewStatus.InvalidTarget) continue;
+                // Invalid and repoint rows were bucketed in the first pass and
+                // never joined a target group; only proposed moves compete.
+                if (row.Status is OrganizePreviewStatus.InvalidTarget or OrganizePreviewStatus.Repoint) continue;
                 var key = NormalizeOrganizeKey(row.TargetPath ?? string.Empty);
                 if (collisionKeys.ContainsKey(key))
                 {
@@ -228,9 +245,10 @@ namespace Listenarr.Api.Features.Library
                 Rows = rows.OrderBy(r => r.Status switch
                     {
                         OrganizePreviewStatus.WillMove => 0,
-                        OrganizePreviewStatus.Collision => 1,
-                        OrganizePreviewStatus.InvalidTarget => 2,
-                        _ => 3,
+                        OrganizePreviewStatus.Repoint => 1,
+                        OrganizePreviewStatus.Collision => 2,
+                        OrganizePreviewStatus.InvalidTarget => 3,
+                        _ => 4,
                     }).ThenBy(r => r.Author ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(r => r.Title ?? string.Empty, StringComparer.OrdinalIgnoreCase)
                     .ToList(),
@@ -238,6 +256,7 @@ namespace Listenarr.Api.Features.Library
                 WillMoveCount = rows.Count(r => r.Status == OrganizePreviewStatus.WillMove),
                 CollisionCount = rows.Count(r => r.Status == OrganizePreviewStatus.Collision),
                 InvalidTargetCount = rows.Count(r => r.Status == OrganizePreviewStatus.InvalidTarget),
+                RepointCount = rows.Count(r => r.Status == OrganizePreviewStatus.Repoint),
             };
             return new OkObjectResult(preview);
         }
@@ -293,6 +312,7 @@ namespace Listenarr.Api.Features.Library
             var allAudiobooksForStubCheck = await _repo.GetAllAsync();
             var allFilesForStubCheck = await _audioFileRepository.GetAllAsync(ct);
             var replaceStubIds = new HashSet<int>();
+            var repointIds = new HashSet<int>();
 
             foreach (var audiobook in audiobooks)
             {
@@ -339,7 +359,12 @@ namespace Listenarr.Api.Features.Library
                 if (!IsTargetAncestorOfSource(NormalizeOrganizePath(audiobook.BasePath), target)
                     && TargetExistsWithContent(target))
                 {
-                    if (IsReplaceableStubTarget(target, audiobook.Id, allAudiobooksForStubCheck, allFilesForStubCheck))
+                    var ownFiles = allFilesForStubCheck.Where(f => f.AudiobookId == audiobook.Id).ToList();
+                    if (TrackedFilesAllUnderTarget(ownFiles, target))
+                    {
+                        repointIds.Add(audiobook.Id);
+                    }
+                    else if (IsReplaceableStubTarget(target, audiobook.Id, allAudiobooksForStubCheck, allFilesForStubCheck))
                     {
                         replaceStubIds.Add(audiobook.Id);
                     }
@@ -393,7 +418,8 @@ namespace Listenarr.Api.Features.Library
                     a.Title,
                     NormalizeOrganizePath(a.BasePath),
                     targets[a.Id],
-                    replaceStubIds.Contains(a.Id)))
+                    replaceStubIds.Contains(a.Id),
+                    Repoint: repointIds.Contains(a.Id)))
                 .ToList();
 
             if (items.Count > 0)
@@ -420,8 +446,8 @@ namespace Listenarr.Api.Features.Library
 
             result.Accepted = items.Count;
             _logger.LogInformation(
-                "Organize apply: {Accepted} move(s) handed to the batch worker, {Skipped} skipped",
-                result.Accepted, result.Skipped);
+                "Organize apply: {Accepted} row(s) handed to the batch worker ({Repoints} repoint-only), {Skipped} skipped",
+                result.Accepted, repointIds.Count, result.Skipped);
             return new AcceptedResult((string?)null, result);
         }
     }

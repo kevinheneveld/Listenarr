@@ -49,14 +49,18 @@
               Each audiobook below has been compared against its canonical
               <code>{Author}/{Title}</code> path under the configured
               <strong>Folder Naming Pattern</strong>. Confirm the selection then click Apply to
-              queue per-book moves. <strong>Collision</strong> and
-              <strong>Invalid target</strong> rows are surfaced for your awareness — they must be
-              resolved by hand (run the duplicates tool, or fix missing metadata) before they can be
-              organized.
+              queue per-book moves. <strong>Repoint only</strong> rows already have their files in
+              the canonical folder — applying them rewrites the record's stored path and moves
+              nothing. <strong>Collision</strong> and <strong>Invalid target</strong> rows are
+              surfaced for your awareness — they must be resolved by hand (run the duplicates tool,
+              or fix missing metadata) before they can be organized.
             </p>
 
             <div class="bucket-summary">
               <span class="bucket pill pill-action">{{ preview.willMoveCount }} will move</span>
+              <span v-if="preview.repointCount > 0" class="bucket pill pill-action"
+                >{{ preview.repointCount }} repoint only</span
+              >
               <span class="bucket pill pill-ok"
                 >{{ preview.alreadyCanonicalCount }} already canonical</span
               >
@@ -115,6 +119,55 @@
                         title="The target folder exists but only holds leftover metadata (covers, .opf, playlists) that nothing references. The move will replace it."
                         >replaces leftover metadata</span
                       >
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </section>
+
+            <section v-if="repointRows.length > 0" class="section">
+              <header class="section-header">
+                <h3>Repoint only ({{ repointRows.length }})</h3>
+                <p class="section-help">
+                  Every tracked file of these books already sits under the canonical folder; only
+                  the record's stored path points somewhere else (a leftover of an earlier move).
+                  Applying rewrites the path — no files are touched.
+                </p>
+                <div class="section-tools">
+                  <button type="button" class="link" @click="toggleAllRepoint(true)">
+                    Select all
+                  </button>
+                  <button type="button" class="link" @click="toggleAllRepoint(false)">
+                    Select none
+                  </button>
+                </div>
+              </header>
+              <div class="rows">
+                <label v-for="row in repointRows" :key="row.id" class="row">
+                  <input
+                    type="checkbox"
+                    :checked="selected[row.id] === true"
+                    :disabled="applying"
+                    @change="onToggleRow(row.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <div class="row-body">
+                    <div class="row-title">
+                      <strong>{{ row.title || '(no title)' }}</strong>
+                      <span class="row-author">{{ row.author || 'Unknown Author' }}</span>
+                    </div>
+                    <div class="row-paths">
+                      <div class="row-path" :title="row.currentPath || ''">
+                        <span class="path-label">stored</span>
+                        <span class="path-value">{{ row.currentPath || '(empty)' }}</span>
+                      </div>
+                      <div class="row-path" :title="row.targetPath || ''">
+                        <span class="path-label">actual</span>
+                        <span class="path-value path-target">{{ row.targetPath }}</span>
+                      </div>
+                    </div>
+                    <div class="row-meta">
+                      {{ row.fileCount }} file{{ row.fileCount === 1 ? '' : 's' }} ·
+                      {{ formatBytes(row.totalSize) }} · already in place
                     </div>
                   </div>
                 </label>
@@ -241,6 +294,7 @@
             <div
               v-if="
                 willMoveRows.length === 0 &&
+                repointRows.length === 0 &&
                 collisionGroups.length === 0 &&
                 invalidRows.length === 0
               "
@@ -257,6 +311,9 @@
               <span v-if="!loading && preview">
                 {{ selectedCount }} of {{ willMoveRows.length }} ready to move ·
                 {{ formatBytes(selectedBytes) }}
+                <template v-if="repointRows.length > 0">
+                  · {{ selectedRepointCount }} of {{ repointRows.length }} to repoint
+                </template>
               </span>
               <span v-if="applyError" class="error">{{ applyError }}</span>
             </div>
@@ -265,7 +322,7 @@
               <button
                 type="button"
                 class="btn btn-primary"
-                :disabled="applying || loading || selectedCount === 0"
+                :disabled="applying || loading || selectedCount + selectedRepointCount === 0"
                 @click="pendingConfirm = true"
               >
                 Apply…
@@ -303,8 +360,8 @@
                 <span class="pill pill-ok">{{ completedCount }} completed</span>
                 <span class="pill pill-err">{{ failedCount }} failed</span>
                 <span class="results-meta"
-                  >{{ queuedCount }} queued · {{ skippedCount }} skipped ·
-                  {{ failedToQueueCount }} failed to queue</span
+                  >{{ queuedCount }} queued · {{ repointedCount }} repointed ·
+                  {{ skippedCount }} skipped · {{ failedToQueueCount }} failed to queue</span
                 >
               </div>
               <ul v-if="failedJobs.length > 0" class="results-failures">
@@ -341,6 +398,13 @@
                   }}
                   totaling {{ formatBytes(selectedBytes) }} will be moved to
                   <code>{Author}/{Title}</code>.
+                </li>
+                <li v-if="selectedRepointCount > 0">
+                  <strong>{{ selectedRepointCount }}</strong> record{{
+                    selectedRepointCount === 1 ? '' : 's'
+                  }}
+                  will only have their stored path rewritten — the files already sit in the
+                  canonical folder.
                 </li>
                 <li>
                   Each move runs through the existing background queue with the same safety checks
@@ -434,6 +498,7 @@ const skippedCount = computed(() => results.value?.skipped ?? 0)
 const failedToQueueCount = computed(
   () => (batch.value?.notAccepted ?? 0) + (batch.value?.failed ?? 0),
 )
+const repointedCount = computed(() => batch.value?.repointed ?? 0)
 const skippedDetails = computed(() => [
   ...(results.value?.skippedDetails ?? []),
   ...(batch.value?.problems ?? []).map((p) => ({ audiobookId: p.audiobookId, reason: p.reason })),
@@ -463,6 +528,7 @@ function jobErrorFor(jobId: string): string | null {
 const willMoveRows = computed(
   () => preview.value?.rows.filter((r) => r.status === 'will_move') ?? [],
 )
+const repointRows = computed(() => preview.value?.rows.filter((r) => r.status === 'repoint') ?? [])
 const invalidRows = computed(
   () => preview.value?.rows.filter((r) => r.status === 'invalid_target') ?? [],
 )
@@ -611,6 +677,14 @@ function toggleAll(checked: boolean) {
   for (const r of willMoveRows.value) selected[r.id] = checked
 }
 
+function toggleAllRepoint(checked: boolean) {
+  for (const r of repointRows.value) selected[r.id] = checked
+}
+
+const selectedRepointCount = computed(
+  () => repointRows.value.filter((r) => selected[r.id] === true).length,
+)
+
 async function load() {
   loading.value = true
   loadError.value = null
@@ -634,7 +708,7 @@ async function load() {
     preview.value = resp
     // Default every will_move row to selected so the user starts from "move everything".
     for (const r of resp.rows) {
-      if (r.status === 'will_move') selected[r.id] = true
+      if (r.status === 'will_move' || r.status === 'repoint') selected[r.id] = true
     }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : 'Unknown error'
@@ -649,7 +723,9 @@ async function load() {
 
 async function executeApply() {
   applyError.value = null
-  const ids = willMoveRows.value.filter((r) => selected[r.id] === true).map((r) => r.id)
+  const ids = [...willMoveRows.value, ...repointRows.value]
+    .filter((r) => selected[r.id] === true)
+    .map((r) => r.id)
   if (ids.length === 0) {
     applyError.value = 'Nothing selected to move.'
     return
@@ -718,6 +794,7 @@ function applySnapshot(snapshot: OrganizeApplyBatchSnapshot) {
 function announceBatchFinished(snapshot: OrganizeApplyBatchSnapshot) {
   const failedToQueue = snapshot.notAccepted + snapshot.failed
   const parts: string[] = [`Queued ${snapshot.queued} move${snapshot.queued === 1 ? '' : 's'}`]
+  if (snapshot.repointed > 0) parts.push(`${snapshot.repointed} repointed`)
   if (skippedCount.value > 0) parts.push(`${skippedCount.value} skipped`)
   if (failedToQueue > 0) parts.push(`${failedToQueue} failed to queue`)
   if (snapshot.cancelled) parts.push('cancelled')

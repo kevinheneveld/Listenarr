@@ -244,6 +244,26 @@ namespace Listenarr.Api.Features.Library
         internal static string NormalizeOrganizePath(string? path)
             => string.IsNullOrWhiteSpace(path) ? string.Empty : FileUtils.NormalizeStoredPath(path);
 
+        /// <summary>
+        /// True when the record tracks at least one file and every tracked
+        /// file's path lies strictly beneath <paramref name="target"/>. This is
+        /// the "files already there, BasePath stale" shape that an organize
+        /// apply resolves with a path rewrite instead of a move.
+        /// </summary>
+        internal static bool TrackedFilesAllUnderTarget(IReadOnlyCollection<AudiobookFile> files, string target)
+        {
+            if (files.Count == 0) return false;
+            var targetKey = NormalizeOrganizeKey(NormalizeOrganizePath(target));
+            if (string.IsNullOrEmpty(targetKey)) return false;
+            var prefix = targetKey + "/";
+            foreach (var file in files)
+            {
+                var pathKey = NormalizeOrganizeKey(NormalizeOrganizePath(file.Path));
+                if (!pathKey.StartsWith(prefix, StringComparison.Ordinal)) return false;
+            }
+            return true;
+        }
+
         private static string NormalizeOrganizeKey(string path)
         {
             if (string.IsNullOrEmpty(path)) return string.Empty;

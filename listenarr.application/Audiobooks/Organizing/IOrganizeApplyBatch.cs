@@ -29,7 +29,8 @@ namespace Listenarr.Application.Audiobooks.Organizing
         string? Title,
         string SourcePath,
         string TargetPath,
-        bool ReplaceStubTarget);
+        bool ReplaceStubTarget,
+        bool Repoint = false);
 
     /// <summary>A row the worker could not hand to the move queue.</summary>
     public sealed record OrganizeApplyProblem(int AudiobookId, string? Title, string Reason);
@@ -37,8 +38,15 @@ namespace Listenarr.Application.Audiobooks.Organizing
     /// <summary>A move job the worker queued on the batch's behalf.</summary>
     public sealed record OrganizeApplyQueuedJob(string JobId, int AudiobookId, string? AudiobookTitle, string? TargetPath);
 
-    /// <summary>Outcome of one enqueue attempt (see <see cref="IOrganizeMoveEnqueuer"/>).</summary>
-    public sealed record OrganizeMoveEnqueueOutcome(bool Accepted, Guid? JobId, string? Reason);
+    /// <summary>A row the batch resolved by rewriting the record's stored path (no move job).</summary>
+    public sealed record OrganizeApplyRepointedRow(int AudiobookId, string? AudiobookTitle, string? TargetPath);
+
+    /// <summary>
+    /// Outcome of one enqueue attempt (see <see cref="IOrganizeMoveEnqueuer"/>).
+    /// <paramref name="Repointed"/> is true when the item was a repoint that
+    /// completed in place — accepted, but there is no job to track.
+    /// </summary>
+    public sealed record OrganizeMoveEnqueueOutcome(bool Accepted, Guid? JobId, string? Reason, bool Repointed = false);
 
     /// <summary>
     /// Hands one organize row to the durable move queue with the same checks
@@ -58,16 +66,18 @@ namespace Listenarr.Application.Audiobooks.Organizing
         int Queued,
         int NotAccepted,
         int Failed,
+        int Repointed,
         int? CurrentAudiobookId,
         string? CurrentTitle,
         DateTime? StartedAt,
         DateTime? CompletedAt,
         bool Cancelled,
         IReadOnlyList<OrganizeApplyQueuedJob> QueuedJobs,
+        IReadOnlyList<OrganizeApplyRepointedRow> RepointedRows,
         IReadOnlyList<OrganizeApplyProblem> Problems)
     {
         public static OrganizeApplyBatchSnapshot Idle { get; } =
-            new(null, false, 0, 0, 0, 0, 0, null, null, null, null, false, Array.Empty<OrganizeApplyQueuedJob>(), Array.Empty<OrganizeApplyProblem>());
+            new(null, false, 0, 0, 0, 0, 0, 0, null, null, null, null, false, Array.Empty<OrganizeApplyQueuedJob>(), Array.Empty<OrganizeApplyRepointedRow>(), Array.Empty<OrganizeApplyProblem>());
     }
 
     /// <summary>
@@ -94,6 +104,7 @@ namespace Listenarr.Application.Audiobooks.Organizing
         CancellationToken BatchToken { get; }
         void MarkStarted(OrganizeApplyItem item);
         void MarkQueued(OrganizeApplyItem item, Guid jobId);
+        void MarkRepointed(OrganizeApplyItem item);
         void MarkNotAccepted(OrganizeApplyItem item, string reason);
         void MarkFailed(OrganizeApplyItem item, string reason);
         void MarkBatchFinishedIfDrained();

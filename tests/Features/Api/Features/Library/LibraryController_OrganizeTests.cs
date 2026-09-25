@@ -779,6 +779,101 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal(0, preview.InvalidTargetCount);
         }
 
+        [Fact(DisplayName = "Preview: every tracked file already under the canonical folder → repoint, not invalid_target")]
+        public async Task Preview_FilesAlreadyUnderTarget_IsRepoint()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            // The record's stored path is the AUTHOR folder (a scan re-rooted it
+            // there), but its file physically lives in the canonical
+            // <Author>/<Title> folder. The target "already exists with content"
+            // — its own content — so nothing needs moving.
+            var authorFolder = Path.Combine(root, "Author X");
+            var canonical = Path.Combine(authorFolder, "Already There");
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Already There",
+                Authors = new List<string> { "Author X" },
+                BasePath = authorFolder,
+            });
+            await AttachRealFileAsync(ab, canonical);
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.Repoint, row.Status);
+            Assert.Equal(canonical, row.TargetPath);
+            Assert.Null(row.ReasonCode);
+            Assert.Equal(1, preview.RepointCount);
+            Assert.Equal(0, preview.InvalidTargetCount);
+            Assert.Equal(0, preview.WillMoveCount);
+        }
+
+        [Fact(DisplayName = "Preview: target holds this record's files AND a stranger's → still invalid_target")]
+        public async Task Preview_TargetHoldsOwnAndForeignFiles_IsInvalidTarget()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var authorFolder = Path.Combine(root, "Author X");
+            var canonical = Path.Combine(authorFolder, "Mixed");
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Mixed",
+                Authors = new List<string> { "Author X" },
+                BasePath = authorFolder,
+            });
+            // One tracked file under the target, one tracked file elsewhere:
+            // not every file is in place, so a repoint would orphan the second.
+            await AttachRealFileAsync(ab, canonical, "part-1.m4b");
+            await AttachRealFileAsync(ab, Path.Combine(authorFolder, "Elsewhere"), "part-2.m4b");
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.InvalidTarget, row.Status);
+            Assert.Equal(OrganizeInvalidReasonCode.TargetExists, row.ReasonCode);
+            Assert.Equal(0, preview.RepointCount);
+        }
+
+        [Fact(DisplayName = "Apply: repoint rows rewrite BasePath in place — no move job, files untouched")]
+        public async Task Apply_RepointRow_RewritesBasePathWithoutQueuingMove()
+        {
+            using var tmp = new TempDirectory();
+            var root = tmp.Path;
+            await UseTempRootAsync(root);
+
+            var authorFolder = Path.Combine(root, "Author X");
+            var canonical = Path.Combine(authorFolder, "Already There");
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Already There",
+                Authors = new List<string> { "Author X" },
+                BasePath = authorFolder,
+            });
+            var filePath = await AttachRealFileAsync(ab, canonical);
+
+            var result = await ApplyAsync(new[] { ab.Id });
+            Assert.Equal(1, result.Accepted);
+            Assert.Equal(0, result.Skipped);
+
+            var snapshot = await DrainOrganizeBatchAsync();
+            Assert.Equal(1, snapshot.Repointed);
+            Assert.Equal(0, snapshot.Queued);
+            Assert.Equal(0, snapshot.NotAccepted);
+            Assert.Equal(0, snapshot.Failed);
+            var repointed = Assert.Single(snapshot.RepointedRows);
+            Assert.Equal(ab.Id, repointed.AudiobookId);
+            Assert.Equal(canonical, repointed.TargetPath);
+
+            var reloaded = await _audiobookRepository.GetByIdAsync(ab.Id);
+            Assert.Equal(canonical, reloaded!.BasePath);
+            Assert.True(File.Exists(filePath), "a repoint must not touch the file");
+            var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
+            Assert.Empty(jobs);
+        }
+
         private async Task<OrganizeLibraryPreviewDto> GetPreviewAsync()
         {
             var controller = _provider.GetRequiredService<LibraryController>();

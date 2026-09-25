@@ -27,6 +27,13 @@ namespace Listenarr.Api.Features.Library
         public const string WillMove = "will_move";
         public const string Collision = "collision";
         public const string InvalidTarget = "invalid_target";
+        /// <summary>
+        /// Every tracked file already sits under the canonical folder; only the
+        /// record's stored path lags behind (an earlier move that relocated the
+        /// files without persisting BasePath). Apply rewrites the path — no
+        /// files move.
+        /// </summary>
+        public const string Repoint = "repoint";
     }
 
     /// <summary>
@@ -120,6 +127,7 @@ namespace Listenarr.Api.Features.Library
         public int WillMoveCount { get; set; }
         public int CollisionCount { get; set; }
         public int InvalidTargetCount { get; set; }
+        public int RepointCount { get; set; }
     }
 
     /// <summary>

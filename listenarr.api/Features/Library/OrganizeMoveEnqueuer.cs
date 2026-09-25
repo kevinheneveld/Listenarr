@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using Listenarr.Application.Audiobooks.Organizing;
+using Listenarr.Application.Common.Exceptions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Listenarr.Api.Features.Library
@@ -29,14 +30,39 @@ namespace Listenarr.Api.Features.Library
     public sealed class OrganizeMoveEnqueuer : IOrganizeMoveEnqueuer
     {
         private readonly LibraryMoveWorkflow _moveWorkflow;
+        private readonly IAudiobookDestinationRewriteService _destinationRewriteService;
 
-        public OrganizeMoveEnqueuer(LibraryMoveWorkflow moveWorkflow)
+        public OrganizeMoveEnqueuer(
+            LibraryMoveWorkflow moveWorkflow,
+            IAudiobookDestinationRewriteService destinationRewriteService)
         {
             _moveWorkflow = moveWorkflow;
+            _destinationRewriteService = destinationRewriteService;
         }
 
         public async Task<OrganizeMoveEnqueueOutcome> EnqueueAsync(OrganizeApplyItem item, CancellationToken ct = default)
         {
+            if (item.Repoint)
+            {
+                // The files are already where the pattern wants them; only the
+                // record's stored path lags. Same code path as the per-book
+                // "move" with moveFiles:false — a BasePath rewrite under the
+                // filesystem-mutation lock, no move job, no bytes touched.
+                try
+                {
+                    await _destinationRewriteService.RewriteDestinationAsync(
+                        item.AudiobookId,
+                        item.TargetPath,
+                        item.SourcePath,
+                        ct);
+                    return new OrganizeMoveEnqueueOutcome(true, null, null, Repointed: true);
+                }
+                catch (ListenarrApplicationException ex)
+                {
+                    return new OrganizeMoveEnqueueOutcome(false, null, ex.Message);
+                }
+            }
+
             var result = await _moveWorkflow.EnqueueAsync(
                 item.AudiobookId,
                 new LibraryController.MoveRequest
