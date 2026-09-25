@@ -38,6 +38,8 @@ namespace Listenarr.Tests.Features.Api.Features.Library
         [InlineData("James Marsters", "James Masters")]
         [InlineData("Simon Vance", "Simon Vance.")]
         [InlineData("Kate Reading", "Kate Reading and Michael Kramer")]
+        [InlineData("Joshua Kane", "Joshua Caine")]
+        [InlineData("Danny Mastrogiorgio", "Danny Master of Giorgio")]
         public void NamesAgree_AcceptsSttMangledSpellingsOfTheSameNarrator(string record, string heard)
         {
             Assert.True(DuplicateKeeperEvidence.NamesAgree(record, heard));
@@ -59,6 +61,8 @@ namespace Listenarr.Tests.Features.Api.Features.Library
         [InlineData("ballerini", "valarini", true)]
         [InlineData("flosnik", "blasnick", true)]
         [InlineData("hill", "hall", false)]
+        [InlineData("kane", "caine", true)]
+        [InlineData("lee", "leo", false)]
         [InlineData("dick", "dirk", false)]
         [InlineData("harding", "hill", false)]
         public void TokensAgree_FoldsConfusableConsonantsOnLongTokensOnly(string a, string b, bool expected)

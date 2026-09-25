@@ -189,11 +189,12 @@ namespace Listenarr.Api.Features.Library
         /// Edoardo Ballerini, "Aunt Blasnick" for Anne Flosnik, "Jennifer
         /// Eketa" for Ikeda), so tokens are compared on a consonant skeleton
         /// that folds the sounds whisper confuses (b/v/p/f, d/t, k/c/g/q/j,
-        /// s/z, m/n, l/r) besides exact and edit-distance agreement. Short
-        /// tokens must match exactly — "Hill" and "Hall" share a skeleton but
-        /// are different people. A record's narrator agrees with the credit
-        /// when at least half of its tokens agree and, for multi-word names,
-        /// the surname does.
+        /// s/z, m/n, l/r) besides exact and edit-distance agreement. A
+        /// skeleton needs at least two consonant classes to count — "Hill"
+        /// and "Hall" both reduce to "l" and are different people, while
+        /// "Kane"/"Caine" share "kn". A record's narrator agrees with the
+        /// credit when at least half of its tokens agree and, for multi-word
+        /// names, the surname does.
         /// </summary>
         internal static bool NamesAgree(string recordNarrator, string heardNarrator)
         {
@@ -206,6 +207,15 @@ namespace Listenarr.Api.Features.Library
             if (recordTokens.Count == 0) return false;
             var heardTokens = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 3).ToList();
             if (heardTokens.Count == 0) return false;
+            // Whisper also splits surnames into words ("Master of Giorgio" for
+            // Mastrogiorgio): let runs of two or three consecutive heard tokens
+            // stand in for one record token. The ≥3-letter filter above already
+            // dropped the "of".
+            for (var i = 0; i < heardTokens.Count; i++)
+            {
+                if (i + 1 < heardTokens.Count) heardTokens.Add(heardTokens[i] + heardTokens[i + 1]);
+                if (i + 2 < heardTokens.Count) heardTokens.Add(heardTokens[i] + heardTokens[i + 1] + heardTokens[i + 2]);
+            }
 
             var agreeing = recordTokens.Count(rt => heardTokens.Any(ht => TokensAgree(rt, ht)));
             if (agreeing * 2 < recordTokens.Count) return false;
@@ -220,12 +230,18 @@ namespace Listenarr.Api.Features.Library
         internal static bool TokensAgree(string recordToken, string heardToken)
         {
             if (string.Equals(recordToken, heardToken, StringComparison.Ordinal)) return true;
-            if (recordToken.Length < 5 || heardToken.Length < 5) return false;
+            // Three-letter tokens carry too little to fold ("Lee"/"Leo").
+            if (recordToken.Length < 4 || heardToken.Length < 4) return false;
 
-            var distance = StringUtils.LevenshteinDistance(recordToken, heardToken);
-            var ratio = 1.0 - (double)distance / Math.Max(recordToken.Length, heardToken.Length);
-            if (ratio >= 0.8) return true;
+            if (recordToken.Length >= 5 && heardToken.Length >= 5)
+            {
+                var distance = StringUtils.LevenshteinDistance(recordToken, heardToken);
+                var ratio = 1.0 - (double)distance / Math.Max(recordToken.Length, heardToken.Length);
+                if (ratio >= 0.8) return true;
+            }
 
+            // A skeleton of one consonant class ("Hill"/"Hall" → "l") proves
+            // nothing; two or more ("Kane"/"Caine" → "kn") is a real match.
             var sa = PhoneticSkeleton(recordToken);
             var sb = PhoneticSkeleton(heardToken);
             return sa.Length >= 2 && sa == sb;
