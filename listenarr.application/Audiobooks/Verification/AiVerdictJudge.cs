@@ -52,8 +52,12 @@ namespace Listenarr.Application.Audiobooks.Verification
             "or narrator. Answer \"mismatch\" only when the credits clearly name a DIFFERENT title or a DIFFERENT author " +
             "that is not a misspelling of the expected one. " +
             "The narrator and publisher never decide: a different narrator or publisher means another edition of the SAME book, " +
-            "which is a match when the title and author agree. Answer \"unsure\" when the transcript carries no credits " +
-            "(narration only, music, a foreign language) or the evidence is too thin either way — never guess. " +
+            "which is a match when the title and author agree. " +
+            "Only spoken credits count as evidence: do not use your own knowledge of the story to recognise a book from its narration. " +
+            "An introduction, foreword, chapter heading or dedication is not the book's title — a transcript that opens with " +
+            "\"An Introduction\" or a chapter and then names the expected author is the expected book. " +
+            "Answer \"unsure\" when the transcript carries no credits (narration only, music, a foreign language) " +
+            "or the evidence is too thin either way — never guess. " +
             "Respond with ONLY a JSON object of the form " +
             "{\"decision\":\"match\"|\"mismatch\"|\"unsure\",\"confidence\":<0..1>,\"reason\":\"<one short sentence quoting the credits>\"}. " +
             "No prose, no markdown.";

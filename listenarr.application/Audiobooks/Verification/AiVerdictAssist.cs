@@ -119,7 +119,14 @@ namespace Listenarr.Application.Audiobooks.Verification
         /// </summary>
         public static VerificationVerdict Apply(VerificationVerdict verdict, VerificationAiReview review)
         {
-            var decisive = review.Confidence >= MinDecisiveConfidence;
+            // Credits-only evidence: the model must be reading an announcement,
+            // not recognising a story from its narration. Live: qwen3.5:9b
+            // called Stephen King's "Blaze" a 95% match off "George was
+            // somewhere in the dark. Blaze couldn't see..." — right book, wrong
+            // kind of proof, and the same reasoning would "verify" any file
+            // whose narration mentions the right names. A decisive answer with
+            // no credit-shaped evidence is recorded but changes nothing.
+            var decisive = review.Confidence >= MinDecisiveConfidence && HasCreditEvidence(verdict);
             if (decisive && review.Decision == AiVerdictJudge.DecisionMatch)
             {
                 return verdict with
@@ -143,6 +150,18 @@ namespace Listenarr.Application.Audiobooks.Verification
             }
 
             return verdict with { AiReview = review };
+        }
+
+        /// <summary>
+        /// Announcement-shaped phrases in the transcript, an extracted heard
+        /// credit, or a field the matcher itself half-recognised (title or
+        /// author at 0.5+). Public + pure for unit testing.
+        /// </summary>
+        public static bool HasCreditEvidence(VerificationVerdict verdict)
+        {
+            if (SpokenCreditsExtractor.ContainsCreditMarkers(verdict.Transcript)) return true;
+            if (verdict.HeardCredits is { } heard && (heard.Title != null || heard.Author != null)) return true;
+            return (verdict.TitleMatch?.Score ?? 0) >= 0.5 || (verdict.AuthorMatch?.Score ?? 0) >= 0.5;
         }
     }
 }

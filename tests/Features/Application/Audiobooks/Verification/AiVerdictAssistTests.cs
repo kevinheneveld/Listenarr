@@ -156,6 +156,37 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.Equal(VerificationOutcome.Match, reviewed.Outcome);
         }
 
+        [Fact]
+        public async Task ReviewAsync_ConfidentMatchWithoutCreditEvidence_IsRecordedButNotPromoted()
+        {
+            // Live: "Blaze" opens straight into narration; the model recognised
+            // the story and answered match 0.95. No credits heard, no field
+            // the matcher half-recognised — the outcome must not move.
+            var narrativeOnly = Uncertain("[opening] George was somewhere in the dark. Blaze couldn't see, but the voice came in loud and clear.") with
+            {
+                Confidence = 0.262,
+                TitleMatch = new VerificationFieldMatch(0, null),
+                AuthorMatch = new VerificationFieldMatch(0.425, "began cooing"),
+                HeardCredits = new SpokenCredits()
+            };
+
+            var reviewed = await Assist(ConfidentMatch).ReviewAsync(Book, narrativeOnly);
+
+            Assert.Equal(VerificationOutcome.Uncertain, reviewed.Outcome);
+            Assert.Equal(0.262, reviewed.Confidence);
+            Assert.Equal("match", reviewed.AiReview!.Decision);
+        }
+
+        [Fact]
+        public void HasCreditEvidence_AcceptsMarkersHeardCreditsOrHalfRecognisedFields()
+        {
+            var bare = Uncertain("[opening] plain narration with nothing announced") with { TitleMatch = new VerificationFieldMatch(0.1, null) };
+            Assert.False(AiVerdictAssist.HasCreditEvidence(bare));
+            Assert.True(AiVerdictAssist.HasCreditEvidence(bare with { Transcript = "[opening] Macmillan Audio presents nothing in particular" }));
+            Assert.True(AiVerdictAssist.HasCreditEvidence(bare with { HeardCredits = new SpokenCredits { Author = "Fern Michaels" } }));
+            Assert.True(AiVerdictAssist.HasCreditEvidence(bare with { AuthorMatch = new VerificationFieldMatch(0.5, "robert heinlein") }));
+        }
+
         [Theory]
         [InlineData(null)]
         [InlineData("")]
