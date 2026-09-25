@@ -71,5 +71,46 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             // Then
             Assert.Equal(Path.Join(RootPath, "Stephen King", "The Dark Tower", "The Gunslinger"), result);
         }
+
+        [Fact]
+        [Trait("Method", "ComputeAudiobookBaseDirectoryFromPattern")]
+        [Trait("Scenario", "ColonInTitleAndSeries_UsesTheNamingServiceDashForm")]
+        public void ComputeAudiobookBaseDirectoryFromPattern_ColonBecomesDash_LikeTheRenameEngine()
+        {
+            // The planner once turned ":" into "_" while the rename engine (and
+            // every import) used " - ", so the sweep kept computing a second
+            // "canonical" folder next to the one the book already lived in.
+            var audiobook = new AudiobookBuilder()
+                .WithTitle("Tom Clancy Zero Hour: A Jack Ryan Jr. Novel, Book 9")
+                .WithAuthor("Don Bentley")
+                .WithSeries("Dean Koontz: From the Vault")
+                .Build();
+
+            var fileNamingService = _provider.GetRequiredService<IFileNamingService>();
+
+            var result = LibraryPathPlanner.ComputeAudiobookBaseDirectoryFromPattern(audiobook, RootPath, FileNamingPattern, fileNamingService);
+
+            Assert.Equal(
+                Path.Join(RootPath, "Don Bentley", "Dean Koontz - From the Vault", "Tom Clancy Zero Hour - A Jack Ryan Jr. Novel, Book 9"),
+                result);
+        }
+
+        [Fact]
+        [Trait("Method", "ComputeAudiobookBaseDirectoryFromPattern")]
+        [Trait("Scenario", "EmptySeries_CollapsesTheLevelInsteadOfUnknown")]
+        public void ComputeAudiobookBaseDirectoryFromPattern_EmptySeries_CollapsesTheLevel()
+        {
+            var audiobook = new AudiobookBuilder()
+                .WithTitle("Standalone")
+                .WithAuthor("Some Author")
+                .Build();
+
+            var fileNamingService = _provider.GetRequiredService<IFileNamingService>();
+
+            var result = LibraryPathPlanner.ComputeAudiobookBaseDirectoryFromPattern(audiobook, RootPath, FileNamingPattern, fileNamingService);
+
+            Assert.Equal(Path.Join(RootPath, "Some Author", "Standalone"), result);
+            Assert.DoesNotContain("Unknown", result);
+        }
     }
 }

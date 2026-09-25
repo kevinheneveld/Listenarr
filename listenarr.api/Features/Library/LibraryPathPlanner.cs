@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Listenarr.Application.Common;
 using System.Text.RegularExpressions;
 using Listenarr.Domain.Common;
 
@@ -107,17 +108,14 @@ namespace Listenarr.Api.Features.Library
             return fileNamingService.ApplyNamingPattern(directoryPattern, variables, false);
         }
 
-        internal static string SanitizeDirectoryName(string name)
-        {
-            var invalidChars = Path.GetInvalidFileNameChars();
-            foreach (var c in invalidChars)
-            {
-                name = name.Replace(c, '_');
-            }
-
-            name = name.Replace(":", "_").Replace("*", "_").Replace("?", "_").Replace("\"", "_").Replace("<", "_").Replace(">", "_").Replace("|", "_");
-            return name.Trim();
-        }
+        /// <summary>
+        /// Same sanitizer as the import/rename naming service, so the sweep's
+        /// canonical folder is the folder the per-book organize would create.
+        /// An empty value stays empty: optional pattern levels ({Series},
+        /// {Subtitle}) collapse instead of becoming "Unknown".
+        /// </summary>
+        internal static string SanitizeDirectoryName(string name) =>
+            PathComponentSanitizer.Sanitize(name);
 
         private static string CleanDirectoryPattern(string pattern)
         {

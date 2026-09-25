@@ -13,61 +13,14 @@ namespace Listenarr.Application.Common
     public partial class FileNamingService
     {
         /// <summary>
-        /// Remove invalid characters from path components.
+        /// Remove invalid characters from path components. Shared with the
+        /// organize planner through <see cref="PathComponentSanitizer"/>; a
+        /// value with nothing printable left becomes "Unknown".
         /// </summary>
-        private string SanitizePathComponent(string pathComponent)
+        private static string SanitizePathComponent(string pathComponent)
         {
-            if (string.IsNullOrWhiteSpace(pathComponent))
-            {
-                return "Unknown";
-            }
-
-            var sanitized = new StringBuilder();
-            foreach (var c in pathComponent)
-            {
-                if (char.IsControl(c))
-                {
-                    continue;
-                }
-
-                if (c == ':' || c == '/' || c == '\\')
-                {
-                    sanitized.Append(" - ");
-                }
-                else if (PortableInvalidFileNameChars.Contains(c))
-                {
-                    sanitized.Append('_');
-                }
-                else
-                {
-                    sanitized.Append(c);
-                }
-            }
-
-            var result = sanitized.ToString();
-            result = Regex.Replace(result, @"\s+", " ");
-            result = Regex.Replace(result, @"(?:\s*-\s*){2,}", " - ");
-            result = Regex.Replace(result, @"_+", "_");
-            result = result.Trim();
-            result = result.TrimEnd('.', ' ');
-            result = Regex.Replace(result, @"^\s*[-_]+\s*", string.Empty);
-            result = Regex.Replace(result, @"\s*[-_]+\s*$", string.Empty);
-
-            if (string.IsNullOrWhiteSpace(result))
-            {
-                return "Unknown";
-            }
-
-            var extensionSeparator = result.IndexOf('.');
-            var deviceNameStem = extensionSeparator >= 0 ? result[..extensionSeparator] : result;
-            if (ReservedWindowsDeviceNames.Contains(deviceNameStem))
-            {
-                result = extensionSeparator >= 0
-                    ? deviceNameStem + "_" + result[extensionSeparator..]
-                    : result + "_";
-            }
-
-            return result;
+            var result = PathComponentSanitizer.Sanitize(pathComponent);
+            return result.Length == 0 ? "Unknown" : result;
         }
 
         private Dictionary<string, object> BuildVariables(AudioMetadata metadata)
@@ -163,23 +116,6 @@ namespace Listenarr.Application.Common
             }
 
             return trimmedCandidate;
-        }
-
-        private static HashSet<char> BuildPortableInvalidFileNameChars()
-        {
-            var invalidChars = new HashSet<char>(Path.GetInvalidFileNameChars());
-
-            foreach (var c in "<>:\"/\\|?*")
-            {
-                invalidChars.Add(c);
-            }
-
-            for (int i = 0; i < 32; i++)
-            {
-                invalidChars.Add((char)i);
-            }
-
-            return invalidChars;
         }
 
         /// <summary>
