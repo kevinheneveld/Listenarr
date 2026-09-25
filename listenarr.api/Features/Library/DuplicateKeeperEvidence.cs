@@ -17,6 +17,7 @@
  */
 using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Application.Search;
+using Listenarr.Domain.Common;
 
 namespace Listenarr.Api.Features.Library
 {
@@ -184,11 +185,15 @@ namespace Listenarr.Api.Features.Library
         }
 
         /// <summary>
-        /// Speech-to-text mangles names ("Jennifer Eketa" for Ikeda), so a
-        /// credit agrees with a record's narrator when the normalized forms
-        /// contain each other or share at least half of the record name's
-        /// tokens of three letters or more. "Dick Hill" ↔ "dick hill" agrees;
-        /// "Jeff Harding" ↔ "dick hill" does not.
+        /// Speech-to-text mangles names phonetically ("Eduardo Valarini" for
+        /// Edoardo Ballerini, "Aunt Blasnick" for Anne Flosnik, "Jennifer
+        /// Eketa" for Ikeda), so tokens are compared on a consonant skeleton
+        /// that folds the sounds whisper confuses (b/v/p/f, d/t, k/c/g/q/j,
+        /// s/z, m/n, l/r) besides exact and edit-distance agreement. Short
+        /// tokens must match exactly — "Hill" and "Hall" share a skeleton but
+        /// are different people. A record's narrator agrees with the credit
+        /// when at least half of its tokens agree and, for multi-word names,
+        /// the surname does.
         /// </summary>
         internal static bool NamesAgree(string recordNarrator, string heardNarrator)
         {
@@ -199,9 +204,55 @@ namespace Listenarr.Api.Features.Library
 
             var recordTokens = a.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 3).ToList();
             if (recordTokens.Count == 0) return false;
-            var heardTokens = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 3).ToHashSet(StringComparer.Ordinal);
-            var shared = recordTokens.Count(heardTokens.Contains);
-            return shared * 2 >= recordTokens.Count;
+            var heardTokens = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).Where(t => t.Length >= 3).ToList();
+            if (heardTokens.Count == 0) return false;
+
+            var agreeing = recordTokens.Count(rt => heardTokens.Any(ht => TokensAgree(rt, ht)));
+            if (agreeing * 2 < recordTokens.Count) return false;
+            if (recordTokens.Count >= 2)
+            {
+                var surname = recordTokens[^1];
+                return heardTokens.Any(ht => TokensAgree(surname, ht));
+            }
+            return true;
+        }
+
+        internal static bool TokensAgree(string recordToken, string heardToken)
+        {
+            if (string.Equals(recordToken, heardToken, StringComparison.Ordinal)) return true;
+            if (recordToken.Length < 5 || heardToken.Length < 5) return false;
+
+            var distance = StringUtils.LevenshteinDistance(recordToken, heardToken);
+            var ratio = 1.0 - (double)distance / Math.Max(recordToken.Length, heardToken.Length);
+            if (ratio >= 0.8) return true;
+
+            var sa = PhoneticSkeleton(recordToken);
+            var sb = PhoneticSkeleton(heardToken);
+            return sa.Length >= 2 && sa == sb;
+        }
+
+        /// <summary>Consonant skeleton with whisper's confusable sounds folded and repeats collapsed.</summary>
+        internal static string PhoneticSkeleton(string token)
+        {
+            var sb = new System.Text.StringBuilder(token.Length);
+            char last = '\0';
+            foreach (var ch in token.ToLowerInvariant())
+            {
+                var folded = ch switch
+                {
+                    'b' or 'v' or 'p' or 'f' => 'b',
+                    'd' or 't' => 'd',
+                    'k' or 'c' or 'g' or 'q' or 'j' or 'x' => 'k',
+                    's' or 'z' => 's',
+                    'm' or 'n' => 'n',
+                    'l' or 'r' => 'l',
+                    _ => '\0',
+                };
+                if (folded == '\0' || folded == last) continue;
+                sb.Append(folded);
+                last = folded;
+            }
+            return sb.ToString();
         }
 
         private static bool TitleAgrees(Audiobook book, string heardTitle)
