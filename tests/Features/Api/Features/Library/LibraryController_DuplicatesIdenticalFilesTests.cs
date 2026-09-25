@@ -101,6 +101,112 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Equal(Math.Min(original.Id, copy.Id), group.GetProperty("suggestedKeeperId").GetInt32());
         }
 
+        private const string DickHillOpening =
+            "\"Random House Audio\" presents \"Sixty-One Hours\" by Lee Child, read for you by Dick Hill. " +
+            "For my editor, the one and only Kate Missiac. Chapter 1 Five minutes to three in the afternoon.";
+
+        private async Task SetNarrationAsync(Audiobook book, string narrator, string? transcript, double? narratorScore = null)
+        {
+            book.Narrators = new List<string> { narrator };
+            book.VerificationTranscript = transcript;
+            if (transcript != null)
+            {
+                book.VerifiedBy = "agent:whisper-base.en";
+                book.VerificationConfidence = narratorScore >= 0.8 ? 0.9 : 0.75;
+                book.VerificationDetailJson =
+                    "{\"outcome\":\"match\",\"confidence\":0.9,\"method\":\"deterministic:whisper-base.en\"," +
+                    "\"titleMatch\":{\"score\":0.833,\"matchedText\":\"60 1 hours\"}," +
+                    (narratorScore is { } ns ? $"\"narratorMatch\":{{\"score\":{ns:0.###}}}," : string.Empty) +
+                    "\"heardCredits\":{\"title\":\"Sixty-One Hours\",\"author\":\"Lee Child\"}}";
+            }
+            await _audiobookRepository.UpdateAsync(book);
+        }
+
+        private static JsonElement EvidenceOf(JsonElement group) => group.GetProperty("evidence");
+
+        [Fact]
+        [Trait("Method", "GetDuplicates")]
+        [Trait("Scenario", "AudioCreditsPickTheKeeper_WhenOnlyOneRecordListsTheHeardNarrator")]
+        public async Task GetDuplicates_AudioCreditsPickTheKeeper()
+        {
+            // Same bytes, two labels. The lower id is the WRONG label (Jeff
+            // Harding); the id-based heuristic would have picked it. The audio
+            // says Dick Hill, so the Dick Hill record must be the keeper.
+            var harding = await AddBookAsync("61 Hours", "B003VZNEXQ", 120 * Mb, 118 * Mb, 121 * Mb);
+            await SetNarrationAsync(harding, "Jeff Harding", DickHillOpening, narratorScore: 0.312);
+            var hill = await AddBookAsync("61 Hours", "B003G8RX9O", 121 * Mb, 120 * Mb, 118 * Mb);
+            await SetNarrationAsync(hill, "Dick Hill", DickHillOpening, narratorScore: 1.0);
+
+            var group = Assert.Single(await GetGroupsAsync("identical-files"));
+
+            Assert.Equal(hill.Id, group.GetProperty("suggestedKeeperId").GetInt32());
+            var evidence = EvidenceOf(group);
+            Assert.Equal("clear", evidence.GetProperty("verdict").GetString());
+            Assert.Equal(hill.Id, evidence.GetProperty("recommendedKeeperId").GetInt32());
+            Assert.Equal("Dick Hill", evidence.GetProperty("heardNarrator").GetString());
+
+            var books = group.GetProperty("books").EnumerateArray().ToDictionary(b => b.GetProperty("id").GetInt32());
+            Assert.True(books[hill.Id].GetProperty("narratorFits").GetBoolean());
+            Assert.False(books[harding.Id].GetProperty("narratorFits").GetBoolean());
+            Assert.Equal("Dick Hill", books[harding.Id].GetProperty("heardNarrator").GetString());
+        }
+
+        [Fact]
+        [Trait("Method", "GetDuplicates")]
+        [Trait("Scenario", "SharedAudio_UnverifiedTwinIsJudgedBySiblingTranscript")]
+        public async Task GetDuplicates_SharedAudio_UnverifiedTwinJudgedBySiblingTranscript()
+        {
+            var hill = await AddBookAsync("61 Hours", "B003G8RX9O", 300 * Mb);
+            await SetNarrationAsync(hill, "Dick Hill", DickHillOpening, narratorScore: 1.0);
+            var neverVerified = await AddBookAsync("61 Hours", "B003VZNEXQ", 300 * Mb);
+            await SetNarrationAsync(neverVerified, "Jeff Harding", transcript: null);
+
+            var group = Assert.Single(await GetGroupsAsync("identical-files"));
+
+            Assert.Equal("clear", EvidenceOf(group).GetProperty("verdict").GetString());
+            Assert.Equal(hill.Id, group.GetProperty("suggestedKeeperId").GetInt32());
+            var books = group.GetProperty("books").EnumerateArray().ToDictionary(b => b.GetProperty("id").GetInt32());
+            Assert.False(books[neverVerified.Id].GetProperty("narratorFits").GetBoolean());
+            Assert.False(books[neverVerified.Id].GetProperty("hasTranscript").GetBoolean());
+        }
+
+        [Fact]
+        [Trait("Method", "GetDuplicates")]
+        [Trait("Scenario", "NoneFit_WhenNoRecordListsTheHeardNarrator")]
+        public async Task GetDuplicates_NoneFit_WhenNoRecordListsTheHeardNarrator()
+        {
+            var a = await AddBookAsync("61 Hours", "B003G8RX9O", 300 * Mb);
+            await SetNarrationAsync(a, "Jeff Harding", DickHillOpening, narratorScore: 0.2);
+            var b = await AddBookAsync("61 Hours", "B003VZNEXQ", 300 * Mb);
+            await SetNarrationAsync(b, "Simon Vance", transcript: null);
+
+            var group = Assert.Single(await GetGroupsAsync("identical-files"));
+
+            var evidence = EvidenceOf(group);
+            Assert.Equal("none-fit", evidence.GetProperty("verdict").GetString());
+            Assert.Equal(JsonValueKind.Null, evidence.GetProperty("recommendedKeeperId").ValueKind);
+            Assert.Contains("every label here looks wrong", evidence.GetProperty("summary").GetString());
+            // Falls back to the file-count/id heuristic for the suggestion.
+            Assert.Equal(Math.Min(a.Id, b.Id), group.GetProperty("suggestedKeeperId").GetInt32());
+        }
+
+        [Fact]
+        [Trait("Method", "GetDuplicates")]
+        [Trait("Scenario", "NoEvidence_WithoutAnyTranscript")]
+        public async Task GetDuplicates_NoEvidence_WithoutAnyTranscript()
+        {
+            var a = await AddBookAsync("61 Hours", "B003G8RX9O", 300 * Mb);
+            await SetNarrationAsync(a, "Dick Hill", transcript: null);
+            var b = await AddBookAsync("61 Hours", "B003VZNEXQ", 300 * Mb);
+            await SetNarrationAsync(b, "Jeff Harding", transcript: null);
+
+            var group = Assert.Single(await GetGroupsAsync("identical-files"));
+
+            var evidence = EvidenceOf(group);
+            Assert.Equal("no-evidence", evidence.GetProperty("verdict").GetString());
+            Assert.Contains("No transcript", evidence.GetProperty("summary").GetString());
+        }
+
         [Fact]
         [Trait("Method", "GetDuplicates")]
         [Trait("Scenario", "IgnoresSmallSetsAndUnknownSizes")]

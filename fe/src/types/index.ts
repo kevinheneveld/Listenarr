@@ -1922,6 +1922,31 @@ export interface DuplicateBookSummary {
   fileCount: number
   fileSize: number
   monitored?: boolean
+  /** The record's narrator field(s). */
+  narrators?: string[]
+  verifiedBy?: string | null
+  verificationConfidence?: number | null
+  hasTranscript?: boolean
+  /** Narrator the opening credits announce (this record's transcript, or a twin's for identical files). */
+  heardNarrator?: string | null
+  /** True/false when the record lists a narrator and a credit was heard; null when either side is missing. */
+  narratorFits?: boolean | null
+  heardTitle?: string | null
+  titleFits?: boolean | null
+}
+
+/**
+ * Which record the audio itself vouches for. `clear` names a keeper;
+ * `agree` means several records list the credited narrator; `none-fit`
+ * means the credits name someone no record lists; `no-evidence` means no
+ * usable transcript.
+ */
+export interface DuplicateGroupEvidence {
+  verdict: 'clear' | 'agree' | 'none-fit' | 'no-evidence'
+  recommendedKeeperId: number | null
+  heardNarrator: string | null
+  heardTitle: string | null
+  summary: string
 }
 
 export interface DuplicateGroup {
@@ -1929,6 +1954,7 @@ export interface DuplicateGroup {
   reason: 'asin' | 'title-author' | 'identical-files'
   books: DuplicateBookSummary[]
   suggestedKeeperId: number
+  evidence?: DuplicateGroupEvidence
 }
 
 /** A record likely holding the same audio twice (two filename schemes). */

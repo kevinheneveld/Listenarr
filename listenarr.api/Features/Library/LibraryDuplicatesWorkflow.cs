@@ -100,7 +100,7 @@ namespace Listenarr.Api.Features.Library
                 .GroupBy(f => f.AudiobookId)
                 .ToDictionary(g => g.Key, g => g.ToList());
 
-            object Summarize(Audiobook b)
+            object Summarize(Audiobook b, DuplicateKeeperEvidence.BookEvidence? e)
             {
                 filesByBook.TryGetValue(b.Id, out var bf);
                 return new
@@ -112,7 +112,15 @@ namespace Listenarr.Api.Features.Library
                     asin = b.Asin,
                     fileCount = bf?.Count ?? 0,
                     fileSize = bf?.Sum(f => f.Size ?? 0) ?? 0,
-                    monitored = b.Monitored
+                    monitored = b.Monitored,
+                    narrators = e?.Narrators ?? (IReadOnlyList<string>)[],
+                    verifiedBy = e?.VerifiedBy,
+                    verificationConfidence = e?.VerificationConfidence,
+                    hasTranscript = e?.HasTranscript ?? false,
+                    heardNarrator = e?.HeardNarrator,
+                    narratorFits = e?.NarratorFits,
+                    heardTitle = e?.HeardTitle,
+                    titleFits = e?.TitleFits,
                 };
             }
 
@@ -120,6 +128,30 @@ namespace Listenarr.Api.Features.Library
                 .OrderByDescending(b => filesByBook.TryGetValue(b.Id, out var bf) ? bf.Count : 0)
                 .ThenBy(b => b.Id)
                 .First().Id;
+
+            // One group payload shape for every reason: books with their
+            // per-record credit evidence, the group verdict, and a keeper that
+            // follows the audio when the audio is decisive.
+            object BuildGroup(string key, string reason, List<Audiobook> members)
+            {
+                var evidence = DuplicateKeeperEvidence.Evaluate(members, sharedAudio: reason == "identical-files");
+                var byId = evidence.Books.ToDictionary(e => e.Id);
+                return new
+                {
+                    key,
+                    reason,
+                    books = members.Select(b => Summarize(b, byId.GetValueOrDefault(b.Id))).ToList(),
+                    suggestedKeeperId = evidence.RecommendedKeeperId ?? SuggestKeeper(members),
+                    evidence = new
+                    {
+                        verdict = evidence.Verdict,
+                        recommendedKeeperId = evidence.RecommendedKeeperId,
+                        heardNarrator = evidence.HeardNarrator,
+                        heardTitle = evidence.HeardTitle,
+                        summary = evidence.Summary,
+                    },
+                };
+            }
 
             var duplicateGroups = new List<object>();
             var groupedIds = new HashSet<int>();
@@ -132,13 +164,7 @@ namespace Listenarr.Api.Features.Library
             {
                 var members = g.ToList();
                 foreach (var b in members) groupedIds.Add(b.Id);
-                duplicateGroups.Add(new
-                {
-                    key = $"asin:{g.Key}",
-                    reason = "asin",
-                    books = members.Select(Summarize).ToList(),
-                    suggestedKeeperId = SuggestKeeper(members)
-                });
+                duplicateGroups.Add(BuildGroup($"asin:{g.Key}", "asin", members));
             }
 
             // Pass (b): normalized title + primary author for everything not
@@ -173,13 +199,7 @@ namespace Listenarr.Api.Features.Library
                     .Count();
                 if (distinctSubtitles >= 2 && distinctYears >= 2) continue;
 
-                duplicateGroups.Add(new
-                {
-                    key = $"title-author:{g.Key}",
-                    reason = "title-author",
-                    books = members.Select(Summarize).ToList(),
-                    suggestedKeeperId = SuggestKeeper(members)
-                });
+                duplicateGroups.Add(BuildGroup($"title-author:{g.Key}", "title-author", members));
             }
 
             // Pass (c): identical tracked files. Two records whose file rows
@@ -200,13 +220,7 @@ namespace Listenarr.Api.Features.Library
             {
                 var members = g.Select(x => x.book).ToList();
                 foreach (var b in members) groupedIds.Add(b.Id);
-                duplicateGroups.Add(new
-                {
-                    key = $"identical-files:{g.Key}",
-                    reason = "identical-files",
-                    books = members.Select(Summarize).ToList(),
-                    suggestedKeeperId = SuggestKeeper(members)
-                });
+                duplicateGroups.Add(BuildGroup($"identical-files:{g.Key}", "identical-files", members));
             }
 
             // Duplicate COPIES: one record, the same book's audio twice. Flat

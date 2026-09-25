@@ -51,6 +51,16 @@
         <span class="dupes-reason" :class="`dupes-reason-${g.reason}`">{{
           reasonLabel(g.reason)
         }}</span>
+        <div
+          v-if="g.evidence"
+          class="dupes-evidence"
+          :class="`dupes-evidence-${g.evidence.verdict}`"
+          :title="
+            g.evidence.heardTitle ? `Title heard in the credits: ${g.evidence.heardTitle}` : ''
+          "
+        >
+          {{ g.evidence.summary }}
+        </div>
         <div v-for="b in g.books" :key="b.id" class="dupes-row">
           <router-link :to="`/audiobooks/${b.id}`" class="dupes-title">{{ b.title }}</router-link>
           <span v-if="b.id === keeperIdFor(g)" class="dupes-keeper">keep</span>
@@ -68,6 +78,7 @@
             {{ b.fileCount }} file{{ b.fileCount === 1 ? '' : 's' }}
             <template v-if="b.fileSize > 0"> · {{ formatSize(b.fileSize) }}</template>
             <template v-if="b.monitored"> · monitored</template>
+            <template v-if="b.asin"> · {{ b.asin }}</template>
             · id {{ b.id }}
           </small>
           <button
@@ -79,6 +90,20 @@
           >
             {{ deletingId === b.id ? 'Deleting…' : 'Delete record' }}
           </button>
+          <small class="dupes-narration">
+            <span v-if="b.narrators && b.narrators.length > 0"
+              >narrated by {{ b.narrators.join(', ') }}</span
+            >
+            <span v-else class="dupes-muted">no narrator on record</span>
+            <span v-if="b.narratorFits === true" class="dupes-fit dupes-fit-yes"
+              >✓ matches the credits</span
+            >
+            <span v-else-if="b.narratorFits === false" class="dupes-fit dupes-fit-no"
+              >✗ credits name {{ b.heardNarrator }}</span
+            >
+            <span v-if="b.verifiedBy" class="dupes-muted"> · {{ verificationLabel(b) }} </span>
+            <span v-else-if="!b.hasTranscript" class="dupes-muted">· not verified</span>
+          </small>
         </div>
         <div v-if="g.reason === 'asin'" class="dupes-group-actions">
           <button
@@ -162,6 +187,15 @@ function keeperIdFor(g: DuplicateGroup): number {
 
 function setKeeper(g: DuplicateGroup, id: number) {
   keeperOverrides[g.key] = id
+}
+
+function verificationLabel(b: DuplicateBookSummary): string {
+  const pct =
+    typeof b.verificationConfidence === 'number'
+      ? ` ${Math.round(b.verificationConfidence * 100)}%`
+      : ''
+  const by = (b.verifiedBy || '').startsWith('agent:') ? 'verified' : `verified by ${b.verifiedBy}`
+  return `${by}${pct}`
 }
 
 function reasonLabel(reason: DuplicateGroup['reason']): string {
@@ -473,6 +507,55 @@ function formatSize(bytes: number): string {
   background: rgba(46, 204, 113, 0.12);
   color: #2ecc71;
   border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.dupes-evidence {
+  font-size: 0.8rem;
+  margin: 0.25rem 0 0.4rem;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(138, 147, 160, 0.3);
+  color: #b8c0cc;
+}
+
+.dupes-evidence-clear {
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.35);
+  background: rgba(46, 204, 113, 0.06);
+}
+
+.dupes-evidence-none-fit {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.35);
+  background: rgba(255, 107, 107, 0.06);
+}
+
+.dupes-evidence-agree {
+  color: #f1c40f;
+  border-color: rgba(241, 196, 15, 0.35);
+}
+
+.dupes-narration {
+  flex-basis: 100%;
+  color: #8a93a0;
+  font-size: 0.76rem;
+  padding-left: 0.25rem;
+}
+
+.dupes-fit {
+  margin-left: 0.4rem;
+}
+
+.dupes-fit-yes {
+  color: #2ecc71;
+}
+
+.dupes-fit-no {
+  color: #ff6b6b;
+}
+
+.dupes-muted {
+  opacity: 0.75;
 }
 
 .dupes-keeper-btn {
