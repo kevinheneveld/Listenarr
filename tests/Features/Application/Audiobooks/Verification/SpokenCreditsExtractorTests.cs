@@ -59,6 +59,22 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Extract_ReadForYouBy_IsNarratorNotSecondAuthor()
+        {
+            // Random House house style (live 61 Hours opening). Before the
+            // "(for|to) you" allowance the narrator went unheard and "by Dick
+            // Hill" was in the running as an author clause.
+            var credits = SpokenCreditsExtractor.Extract(
+                "\"Random House Audio\" presents \"Sixty-One Hours\" by Lee Child, read for you by " +
+                "Dick Hill. For my editor, the one and only Kate Missiac. Chapter 1 Five minutes to three.");
+
+            Assert.NotNull(credits);
+            Assert.Equal("Dick Hill", credits!.Narrator);
+            Assert.Equal("Lee Child", credits.Author);
+            Assert.Contains("Sixty-One Hours", credits.Title ?? string.Empty);
+        }
+
+        [Fact]
         public void Extract_TitleByAuthorNarratedBy()
         {
             // ACOTAR opening (live; "present" is whisper's rendering, names mangled).

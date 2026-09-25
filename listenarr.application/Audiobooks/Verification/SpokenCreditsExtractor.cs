@@ -45,8 +45,11 @@ namespace Listenarr.Application.Audiobooks.Verification
         // the capital so a back-to-back initials run ("J.R. Ward") doesn't stop
         // at the first period: at the second period the preceding two chars are
         // ".R", which still reads as "still inside an initials run".
+        // "read for you by X" / "read to you by X" is Random House's house style;
+        // without the optional "(for|to) you" the narrator went unheard and the
+        // "by Dick Hill" clause became a second author candidate.
         private static readonly Regex NarratorRegex = new(
-            @"\b(?:narrated|read|performed)\s+by\s+(?<name>[^;:!?]+?)(?=\s+and\s+(?:directed|produced|engineered|adapted|edited)\b|\s*[;:!?]|(?<![\s.][A-Z])\s*\.(?:\s|$)|$)",
+            @"\b(?:narrated|read|performed)(?:\s+(?:for|to)\s+you)?\s+by\s+(?<name>[^;:!?]+?)(?=\s+and\s+(?:directed|produced|engineered|adapted|edited)\b|\s*[;:!?]|(?<![\s.][A-Z])\s*\.(?:\s|$)|$)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         // Author candidate: a "by X" clause. Which "by" is the author's is decided
@@ -58,7 +61,7 @@ namespace Listenarr.Application.Audiobooks.Verification
 
         // Words that, appearing just before a "by", mark it as NOT the author's.
         private static readonly Regex NonAuthorContextRegex = new(
-            @"(?:narrated|read|performed|directed|produced|engineered|adapted|edited|copyright(?:ed)?|recording|music|\d{4})\s*$",
+            @"(?:(?:narrated|read|performed)(?:\s+(?:for|to)\s+you)?|directed|produced|engineered|adapted|edited|copyright(?:ed)?|recording|music|\d{4})\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         // "<Publisher> presents" — capitalized tokens (no '.' in the token class so
@@ -96,7 +99,7 @@ namespace Listenarr.Application.Audiobooks.Verification
         // distinguish "announces a different book" (a real mismatch) from "never
         // announces anything" (NoSpokenCredits — not evidence of wrong content).
         private static readonly Regex CreditMarkerRegex = new(
-            @"\b(?:narrated\s+by|read\s+by|performed\s+by|written\s+by|presents?\b|audiobook|unabridged|abridged|production\s+of|thank\s+you\s+for\s+listening|this\s+is\s+audible|recorded\s+books|copyright(?:ed)?\s+\d{4})",
+            @"\b(?:(?:narrated|read|performed)(?:\s+(?:for|to)\s+you)?\s+by|written\s+by|presents?\b|audiobook|unabridged|abridged|production\s+of|thank\s+you\s+for\s+listening|this\s+is\s+audible|recorded\s+books|copyright(?:ed)?\s+\d{4})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>
