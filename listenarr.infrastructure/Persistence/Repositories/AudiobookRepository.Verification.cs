@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Domain.Audiobooks.Enumerations;
 using Microsoft.EntityFrameworkCore;
 
 namespace Listenarr.Infrastructure.Persistence.Repositories
@@ -37,6 +38,26 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             return await _db.Audiobooks
                 .AsNoTracking()
                 .Where(a => candidateIds.Contains(a.Id) && a.VerifiedAt != null && a.VerifiedAt >= sinceUtc)
+                .Select(a => a.Id)
+                .ToListAsync(ct);
+        }
+
+        public async Task<List<int>> GetAiReviewCandidateIdsAsync(int afterId, int limit, CancellationToken ct = default)
+        {
+            // "aiReview" is the camelCase property the detail serializer writes
+            // when a review was folded in — its absence marks a verdict the
+            // model has not seen. A LIKE on the JSON column is crude but the
+            // population is a few hundred rows and this runs on demand only.
+            return await _db.Audiobooks
+                .AsNoTracking()
+                .Where(a => a.Id > afterId
+                    && (a.VerificationStatus == VerificationStatus.AgentFlagged
+                        || a.VerificationStatus == VerificationStatus.AgentUnverifiable)
+                    && a.VerificationTranscript != null
+                    && a.VerificationDetailJson != null
+                    && !a.VerificationDetailJson.Contains("\"aiReview\""))
+                .OrderBy(a => a.Id)
+                .Take(limit)
                 .Select(a => a.Id)
                 .ToListAsync(ct);
         }

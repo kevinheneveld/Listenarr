@@ -128,6 +128,14 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
         Task<List<int>> GetIdsVerifiedSinceAsync(DateTime sinceUtc, IReadOnlyCollection<int> candidateIds, CancellationToken ct = default);
 
         /// <summary>
+        /// Ids of agent-judged books whose stored verdict the deterministic
+        /// matcher could not settle (flagged or unverifiable, with a transcript)
+        /// and that carry no AI review yet — the backfill population for the AI
+        /// verdict review. Ordered by id, cursor-paged via <paramref name="afterId"/>.
+        /// </summary>
+        Task<List<int>> GetAiReviewCandidateIdsAsync(int afterId, int limit, CancellationToken ct = default);
+
+        /// <summary>
         /// Best-effort creation of the partial unique index on Audiobooks.Asin
         /// (cross-process duplicate backstop). Skips — without failing — when
         /// the provider is non-relational or duplicate ASINs already exist.

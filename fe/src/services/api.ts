@@ -1999,6 +1999,23 @@ class ApiService {
    * the configured AI-assist endpoint. Cursor-paged (pass the previous call's
    * lastId as afterId to continue). Flag-only — nothing is changed.
    */
+  // AI second opinion over stored verdicts the matcher could not settle —
+  // one slow model call per book, so each request handles a few and the
+  // caller loops with lastId (same shape as the library sweep).
+  async runAiVerificationReview(
+    limit = 3,
+    afterId = 0,
+  ): Promise<import('@/types').AiVerificationReviewBatch> {
+    return this.request(`/verification/ai-review?limit=${limit}&afterId=${afterId}`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    })
+  }
+
+  async getAiVerificationReviewPending(): Promise<{ pending: number }> {
+    return this.request('/verification/ai-review/pending')
+  }
+
   async runAiLibrarySweep(
     limit = 25,
     afterId = 0,

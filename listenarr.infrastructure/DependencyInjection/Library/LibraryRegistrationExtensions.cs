@@ -67,6 +67,8 @@ internal static class LibraryRegistrationExtensions
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService, Listenarr.Infrastructure.Whisper.WhisperService>();
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IAudioSampleExtractor, Listenarr.Infrastructure.Ffmpeg.Sampling.AudioSampleExtractor>();
         services.AddScoped<Listenarr.Application.Audiobooks.Verification.Contracts.IIdentityVerifier, Listenarr.Application.Audiobooks.Verification.DeterministicIdentityVerifier>();
+        // AI second opinion on Uncertain/NoSpokenCredits verdicts (fails closed to the deterministic verdict).
+        services.AddScoped<Listenarr.Application.Audiobooks.Verification.AiVerdictAssist>();
         // The queue is a singleton: it owns the in-memory job map + channel.
         services.AddSingleton<Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService, Listenarr.Application.Audiobooks.Verification.LibraryVerificationQueueService>();
 

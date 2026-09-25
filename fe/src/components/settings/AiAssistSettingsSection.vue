@@ -42,8 +42,8 @@
       <label for="ai-assist-base-url">
         <strong>Base URL</strong>
         <small
-          >The server's /v1 root, e.g. <code>http://192.168.1.20:11434/v1</code> for Ollama.
-          Ollama binds localhost only by default — start it with
+          >The server's /v1 root, e.g. <code>http://192.168.1.20:11434/v1</code> for Ollama. Ollama
+          binds localhost only by default — start it with
           <code>OLLAMA_HOST=0.0.0.0 ollama serve</code> to reach it from this machine.</small
         >
       </label>
@@ -102,6 +102,24 @@
     </div>
 
     <div class="setting-row">
+      <label for="ai-assist-review-verifications">
+        <strong>Second opinion on inconclusive audio checks</strong>
+        <small
+          >When audio verification can't settle a book (uncertain, or no credits recognized), the
+          model reads the same transcript against the stored title, author and narrator. A confident
+          match marks the book verified; a confident mismatch flags it for review. It never rejects
+          or deletes anything.</small
+        >
+      </label>
+      <input
+        id="ai-assist-review-verifications"
+        type="checkbox"
+        :checked="settings.aiAssistReviewVerifications ?? true"
+        @change="patch('aiAssistReviewVerifications', ($event.target as HTMLInputElement).checked)"
+      />
+    </div>
+
+    <div class="setting-row">
       <label>
         <strong>Connection test</strong>
         <small>Tests the values as entered above — no need to save first.</small>
@@ -131,6 +149,45 @@
       </div>
     </div>
 
+    <div class="setting-row sweep-row">
+      <label>
+        <strong>Review inconclusive verdicts already on file</strong>
+        <small
+          >Re-reads the saved transcripts of books the audio check left uncertain or unverifiable
+          ({{ reviewBatchSize }} per request, looping until done) — no re-transcription. Runs the
+          same rules as the toggle above.<template v-if="reviewPending !== null">
+            {{ reviewPending }} waiting.</template
+          ></small
+        >
+      </label>
+      <div class="test-cell">
+        <button
+          type="button"
+          class="test-btn"
+          :disabled="
+            reviewStopRequested || (settings.aiAssistReviewVerifications ?? true) === false
+          "
+          @click="runReview"
+        >
+          {{ reviewing ? 'Stop' : reviewCursor > 0 ? 'Continue review' : 'Review verdicts' }}
+        </button>
+        <small v-if="reviewStatus" class="sweep-status">{{ reviewStatus }}</small>
+      </div>
+    </div>
+
+    <div v-if="reviewChanges.length > 0" class="sweep-findings">
+      <strong>Verdicts changed</strong>
+      <ul>
+        <li v-for="change in reviewChanges" :key="change.audiobookId">
+          <router-link :to="`/audiobooks/${change.audiobookId}`" target="_blank">
+            {{ change.title }}
+          </router-link>
+          <span class="sweep-reason"> — {{ change.from }} → {{ change.to }}</span>
+          <span v-if="change.reason" class="sweep-evidence"> ({{ change.reason }})</span>
+        </li>
+      </ul>
+    </div>
+
     <div v-if="sweepFindings.length > 0" class="sweep-findings">
       <strong>Flagged records</strong>
       <ul>
@@ -147,10 +204,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { PhSparkle } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
-import type { ApplicationSettings } from '@/types'
+import type { AiVerificationReviewChange, ApplicationSettings } from '@/types'
 
 const props = defineProps<{ settings: Partial<ApplicationSettings> }>()
 const emit = defineEmits<{ (e: 'update:settings', value: Partial<ApplicationSettings>): void }>()
@@ -171,6 +228,81 @@ const sweepChecked = ref(0)
 const sweepFindings = ref<
   { audiobookId: number; title: string; reason: string; evidence?: string }[]
 >([])
+
+// Same request-per-batch loop as the sweep: one book is one model call
+// (~10 s locally), so three per request stays inside proxy timeouts.
+const reviewBatchSize = 3
+const reviewing = ref(false)
+const reviewStopRequested = ref(false)
+const reviewStatus = ref<string | null>(null)
+const reviewCursor = ref(0)
+const reviewCount = ref(0)
+const reviewPromoted = ref(0)
+const reviewFlagged = ref(0)
+const reviewPending = ref<number | null>(null)
+const reviewChanges = ref<AiVerificationReviewChange[]>([])
+
+onMounted(async () => {
+  try {
+    reviewPending.value = (await apiService.getAiVerificationReviewPending()).pending
+  } catch {
+    reviewPending.value = null
+  }
+})
+
+function reviewSummary(): string {
+  return `${reviewCount.value} reviewed, ${reviewPromoted.value} verified, ${reviewFlagged.value} flagged`
+}
+
+async function runReview() {
+  if (reviewing.value) {
+    reviewStopRequested.value = true
+    reviewStatus.value = 'Stopping after the current batch…'
+    return
+  }
+
+  reviewing.value = true
+  reviewStopRequested.value = false
+  reviewStatus.value = 'Reviewing…'
+  try {
+    for (;;) {
+      const result = await apiService.runAiVerificationReview(reviewBatchSize, reviewCursor.value)
+      reviewCount.value += result.reviewedCount
+      reviewPromoted.value += result.promoted
+      reviewFlagged.value += result.flagged
+      if (reviewPending.value !== null) {
+        reviewPending.value = Math.max(0, reviewPending.value - result.reviewedCount)
+      }
+      const known = new Set(reviewChanges.value.map((c) => c.audiobookId))
+      reviewChanges.value = [
+        ...reviewChanges.value,
+        ...result.changes.filter((c) => !known.has(c.audiobookId)),
+      ]
+      if (result.exhausted) {
+        reviewCursor.value = 0
+        reviewStatus.value = `Done — ${reviewSummary()}.`
+        break
+      }
+      if (result.reviewedCount === 0 && result.lastId === null) {
+        // The model answered nothing for the first book of the batch: the
+        // endpoint is likely down. Stop rather than spin.
+        reviewStatus.value = `Paused — the model gave no answer (${reviewSummary()}). Review again to retry.`
+        break
+      }
+      reviewCursor.value = result.lastId ?? reviewCursor.value
+      reviewStatus.value = `${reviewSummary()}…`
+      if (reviewStopRequested.value) {
+        reviewStatus.value = `Paused — ${reviewSummary()}. Review again to continue.`
+        break
+      }
+    }
+  } catch (err) {
+    reviewStatus.value = err instanceof Error ? err.message : 'Review failed.'
+  } finally {
+    reviewing.value = false
+    reviewStopRequested.value = false
+  }
+}
 
 function patch(field: keyof ApplicationSettings, value: unknown) {
   emit('update:settings', {

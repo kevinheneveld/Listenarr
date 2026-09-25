@@ -153,6 +153,14 @@ namespace Listenarr.Domain.Configuration
         // AI assist stays on for interactive features.
         public bool AiAssistGateSearches { get; set; } = true;
 
+        // Sub-toggle: when audio verification cannot settle a book (Uncertain
+        // or NoSpokenCredits), hand the transcript and the stored metadata to
+        // the model for a second opinion. A confident "match" promotes the
+        // book to agent-verified; a confident "mismatch" flags it for review;
+        // anything else leaves the deterministic verdict alone. Never rejects
+        // or deletes — the AI verdict is capped below the auto-reject bar.
+        public bool AiAssistReviewVerifications { get; set; } = true;
+
         // Background "fill missing from online": for books that hold files,
         // periodically look up the catalog by the book's own ASIN/ISBN and fill
         // ONLY the fields the record lacks (description, cover, narrators,

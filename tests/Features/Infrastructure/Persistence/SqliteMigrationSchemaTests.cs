@@ -48,6 +48,8 @@ public class SqliteMigrationSchemaTests : BaseTests
         "20260904174436_AddMetadataAutoBackfill";
     private const string SeriesTriageDecisionsMigrationId =
         "20260913012044_AddSeriesTriageDecisions";
+    private const string AiAssistReviewVerificationsMigrationId =
+        "20260925001239_AddAiAssistReviewVerifications";
 
     private static (SqliteConnection Connection, ListenArrDbContext Context)
         CreateMigratedSqliteContext()
@@ -220,7 +222,8 @@ public class SqliteMigrationSchemaTests : BaseTests
                 CompatibilityFilePublicationMigrationId,
                 WeakStorageVerifiedCleanupMigrationId,
                 MetadataAutoBackfillMigrationId,
-                SeriesTriageDecisionsMigrationId
+                SeriesTriageDecisionsMigrationId,
+                AiAssistReviewVerificationsMigrationId
             ],
             postCanary);
         Assert.Contains("20251124102000_AddMoveJobSourcePath", applied);

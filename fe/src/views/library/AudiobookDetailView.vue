@@ -349,6 +349,19 @@
               <span class="label">Confidence:</span>
               <span class="value">{{ (audiobook.verificationConfidence * 100).toFixed(0) }}%</span>
             </div>
+            <div class="detail-row" v-if="verificationAiReview">
+              <span class="label">AI review:</span>
+              <span class="value">
+                {{ verificationAiReview.decision }}
+                ({{ Math.round(verificationAiReview.confidence * 100) }}%<template
+                  v-if="verificationAiReview.model"
+                  >, {{ verificationAiReview.model }}</template
+                >)
+                <span v-if="verificationAiReview.reason" class="verification-outcome-note">
+                  {{ verificationAiReview.reason }}
+                </span>
+              </span>
+            </div>
             <div class="detail-row" v-if="audiobook.verifiedAt">
               <span class="label">Checked:</span>
               <span class="value"
@@ -1354,6 +1367,7 @@ const verificationFieldScores = computed(() => {
 })
 
 const heardCredits = computed(() => verificationDetail.value?.heardCredits ?? null)
+const verificationAiReview = computed(() => verificationDetail.value?.aiReview ?? null)
 const verificationCompleteness = computed(() => verificationDetail.value?.completeness ?? null)
 const completenessIsShort = computed(() => (verificationCompleteness.value?.coverage ?? 1) < 0.7)
 const completenessIsLong = computed(() => (verificationCompleteness.value?.coverage ?? 1) > 1.5)

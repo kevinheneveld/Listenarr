@@ -56,6 +56,18 @@ namespace Listenarr.Domain.Audiobooks
     public record VerificationCompleteness(double ExpectedMinutes, double ActualMinutes, double Coverage);
 
     /// <summary>
+    /// Second opinion from the AI-assist model on a verdict the deterministic
+    /// matcher could not settle (Uncertain / NoSpokenCredits). Persisted in the
+    /// detail JSON for audit; the rules in AiVerdictAssist decide whether it
+    /// changes the outcome.
+    /// </summary>
+    /// <param name="Decision">"match", "mismatch" or "unsure" — the model's reading of the transcript against the stored metadata.</param>
+    /// <param name="Confidence">The model's self-reported confidence in [0, 1].</param>
+    /// <param name="Reason">One-line justification quoting what the credits said.</param>
+    /// <param name="Model">The model that answered, e.g. "qwen3.5:9b".</param>
+    public record VerificationAiReview(string Decision, double Confidence, string? Reason, string? Model);
+
+    /// <summary>
     /// Result of an identity-verification pass over one audiobook (ADR-0001).
     /// Per-field results are kept separate (not folded into one confidence blob)
     /// so the triage UI can show which field diverged and thresholds can be
@@ -91,5 +103,12 @@ namespace Listenarr.Domain.Audiobooks
         /// has no catalog runtime or no usable per-file duration data.
         /// </summary>
         public VerificationCompleteness? Completeness { get; init; }
+
+        /// <summary>
+        /// The AI-assist second opinion, when one was sought. Null when the
+        /// deterministic verdict was confident, AI assist is off, or the model
+        /// was unreachable.
+        /// </summary>
+        public VerificationAiReview? AiReview { get; init; }
     }
 }

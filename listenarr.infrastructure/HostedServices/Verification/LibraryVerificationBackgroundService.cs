@@ -15,8 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-using System.Text.Json;
-using System.Text.Json.Serialization;
+using Listenarr.Application.Audiobooks.Verification;
 using Listenarr.Application.Realtime.Contracts;
 using Listenarr.Domain.Audiobooks.Enumerations;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,15 +32,6 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
     /// </summary>
     public class LibraryVerificationBackgroundService : BackgroundService
     {
-        // Verdict detail is persisted as camelCase JSON with string enums so the
-        // FE can consume it without a second mapping layer.
-        private static readonly JsonSerializerOptions DetailJsonOptions = new()
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            Converters = { new JsonStringEnumConverter() }
-        };
-
         private readonly ILibraryVerificationQueueService _queue;
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<LibraryVerificationBackgroundService> _logger;
@@ -238,16 +228,7 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
         }
 
         /// <summary>Maps the verifier's aggregate outcome onto the persisted status.</summary>
-        public static VerificationStatus StatusFor(VerificationOutcome outcome) => outcome switch
-        {
-            VerificationOutcome.Match => VerificationStatus.AgentVerified,
-            // No credit-shaped claims at all: neutral, NOT a flag — absence of
-            // credits is not evidence of wrong content.
-            VerificationOutcome.NoSpokenCredits => VerificationStatus.AgentUnverifiable,
-            // Mismatch AND Uncertain both need a human eye; the persisted detail
-            // JSON distinguishes them in the triage UI.
-            _ => VerificationStatus.AgentFlagged
-        };
+        public static VerificationStatus StatusFor(VerificationOutcome outcome) => VerificationOutcomeStatus.For(outcome);
 
         private async Task RunJobAsync(VerificationJob job, CancellationToken ct)
         {
@@ -297,6 +278,14 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
                 try
                 {
                     var verdict = await verifier.VerifyAsync(audiobook, firstFile, ct);
+                    // Second opinion on what the matcher could not settle: the
+                    // model reads the same transcript (see AiVerdictAssist).
+                    // Off, unconfigured or unreachable leaves the verdict as is.
+                    var aiReview = scope.ServiceProvider.GetService<AiVerdictAssist>();
+                    if (aiReview != null)
+                    {
+                        verdict = await aiReview.ReviewAsync(audiobook, verdict, ct);
+                    }
                     ApplyVerdict(audiobook, verdict, whisper.ModelName);
                     await audiobookRepository.UpdateAsync(audiobook);
 
@@ -394,7 +383,7 @@ namespace Listenarr.Infrastructure.HostedServices.Verification
             audiobook.VerificationMethod = verdict.Method;
             audiobook.VerificationTranscript = verdict.Transcript;
             // Transcript lives in its own column; don't store it twice.
-            audiobook.VerificationDetailJson = JsonSerializer.Serialize(verdict with { Transcript = null }, DetailJsonOptions);
+            audiobook.VerificationDetailJson = VerificationDetailSerializer.Serialize(verdict);
         }
 
         private static async Task<List<int>> ResolveCandidateIdsAsync(VerificationJob job, IAudiobookRepository repository)

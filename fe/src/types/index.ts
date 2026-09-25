@@ -514,6 +514,7 @@ export interface ApplicationSettings {
   aiAssistModel?: string
   aiAssistApiKey?: string
   aiAssistGateSearches?: boolean
+  aiAssistReviewVerifications?: boolean
   outputPath: string
   folderNamingPattern: string
   fileNamingPattern: string
@@ -900,6 +901,14 @@ export interface VerificationCompleteness {
   coverage: number
 }
 
+// The AI-assist second opinion on a verdict the matcher could not settle.
+export interface VerificationAiReview {
+  decision: 'match' | 'mismatch' | 'unsure'
+  confidence: number
+  reason?: string | null
+  model?: string | null
+}
+
 export interface VerificationDetail {
   outcome: VerificationOutcome
   confidence: number
@@ -910,6 +919,25 @@ export interface VerificationDetail {
   publisherMatch?: VerificationFieldMatch | null
   heardCredits?: SpokenCredits | null
   completeness?: VerificationCompleteness | null
+  aiReview?: VerificationAiReview | null
+}
+
+export interface AiVerificationReviewChange {
+  audiobookId: number
+  title: string
+  from: string
+  to: string
+  reason?: string | null
+}
+
+export interface AiVerificationReviewBatch {
+  reviewedCount: number
+  lastId: number | null
+  exhausted: boolean
+  promoted: number
+  flagged: number
+  unchanged: number
+  changes: AiVerificationReviewChange[]
 }
 
 export interface Audiobook {
