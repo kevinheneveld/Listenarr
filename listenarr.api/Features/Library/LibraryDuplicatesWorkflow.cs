@@ -23,13 +23,20 @@ namespace Listenarr.Api.Features.Library
 {
     /// <summary>
     /// Read-only sweep for the two flavors of duplication a library accretes:
-    /// duplicate RECORDS (the same book tracked twice — same ASIN, or same
-    /// normalized title+author when neither carries a conflicting ASIN) and
+    /// duplicate RECORDS (the same book tracked twice — same ASIN, same
+    /// normalized title+author when neither carries a conflicting ASIN, or
+    /// two records whose tracked files are byte-for-byte the same set) and
     /// duplicate COPIES (one record holding the same audio twice under two
     /// filename schemes, detected via <see cref="FileClustering"/> signatures).
     /// Conservative by design: same title with different subtitles AND
     /// different years, or two distinct ASINs, are treated as different
     /// editions, not duplicates — false positives erode trust in the list.
+    /// The identical-files pass is the exception to the ASIN rule: a
+    /// catalog can list one narration under several ASINs (regional
+    /// re-releases, series-bundle listings, relabels), and a library that
+    /// copied the same rip into two records is a duplicate no matter what
+    /// the metadata says. It groups strictly on the size multiset of every
+    /// tracked file, which at whole-book scale is not a coincidence.
     /// </summary>
     public sealed class LibraryDuplicatesWorkflow
     {
@@ -52,6 +59,37 @@ namespace Listenarr.Api.Features.Library
             // Deliberately NOT cached: this runs behind an explicit "Scan"
             // click, and a re-scan must reflect books added since the last one.
             return new OkObjectResult(await ComputeDuplicatesPayloadAsync(ct));
+        }
+
+        /// <summary>
+        /// Every tracked file's size must be known, and the set must be at
+        /// least this large before byte-identity across records counts as
+        /// evidence. Whole-book rips are hundreds of MB; a 5 MB stub matching
+        /// another stub proves nothing.
+        /// </summary>
+        internal const long IdenticalFilesMinTotalBytes = 50L * 1024 * 1024;
+
+        /// <summary>
+        /// The grouping key for pass (c): file count plus the ascending list
+        /// of sizes, or null when the record has no files, any size is
+        /// unknown, or the set is below <see cref="IdenticalFilesMinTotalBytes"/>.
+        /// </summary>
+        internal static string? IdenticalFilesSignature(
+            Audiobook book,
+            IReadOnlyDictionary<int, List<AudiobookFile>> filesByBook)
+        {
+            if (!filesByBook.TryGetValue(book.Id, out var files) || files.Count == 0) return null;
+            var sizes = new List<long>(files.Count);
+            long total = 0;
+            foreach (var f in files)
+            {
+                if (f.Size is not > 0) return null;
+                sizes.Add(f.Size.Value);
+                total += f.Size.Value;
+            }
+            if (total < IdenticalFilesMinTotalBytes) return null;
+            sizes.Sort();
+            return $"{sizes.Count}:{string.Join(',', sizes)}";
         }
 
         private async Task<object> ComputeDuplicatesPayloadAsync(CancellationToken ct)
@@ -139,6 +177,33 @@ namespace Listenarr.Api.Features.Library
                 {
                     key = $"title-author:{g.Key}",
                     reason = "title-author",
+                    books = members.Select(Summarize).ToList(),
+                    suggestedKeeperId = SuggestKeeper(members)
+                });
+            }
+
+            // Pass (c): identical tracked files. Two records whose file rows
+            // carry the same multiset of sizes hold the same audio, whatever
+            // their titles/ASINs say — the copy got there by a transfer, a
+            // relabel, or an organize move that copied instead of moving.
+            // The ASIN-strict passes above cannot see these (two distinct
+            // ASINs = "different editions"), which is exactly how a library
+            // ends up with four records over one set of files. Sizes must be
+            // known for every file and the set must be book-sized: a lone
+            // small file matching another to the byte is a dice roll.
+            foreach (var g in books
+                .Where(b => !groupedIds.Contains(b.Id))
+                .Select(b => (book: b, signature: IdenticalFilesSignature(b, filesByBook)))
+                .Where(x => x.signature != null)
+                .GroupBy(x => x.signature!, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1))
+            {
+                var members = g.Select(x => x.book).ToList();
+                foreach (var b in members) groupedIds.Add(b.Id);
+                duplicateGroups.Add(new
+                {
+                    key = $"identical-files:{g.Key}",
+                    reason = "identical-files",
                     books = members.Select(Summarize).ToList(),
                     suggestedKeeperId = SuggestKeeper(members)
                 });

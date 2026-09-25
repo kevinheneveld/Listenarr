@@ -1914,7 +1914,7 @@ export interface DuplicateBookSummary {
 
 export interface DuplicateGroup {
   key: string
-  reason: 'asin' | 'title-author'
+  reason: 'asin' | 'title-author' | 'identical-files'
   books: DuplicateBookSummary[]
   suggestedKeeperId: number
 }

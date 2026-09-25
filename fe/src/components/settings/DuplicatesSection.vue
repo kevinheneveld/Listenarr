@@ -29,7 +29,8 @@
       </button>
     </div>
     <p class="dupes-help">
-      Finds books tracked twice (same ASIN, or same title and author without an edition signal) and
+      Finds books tracked twice (same ASIN, same title and author without an edition signal, or two
+      records whose files are the same set byte for byte — whatever their titles or ASINs say) and
       records holding two copies of their own audio.
     </p>
 
@@ -46,7 +47,7 @@
       <div v-if="groups.length === 0" class="dupes-empty">No duplicate records found.</div>
       <div v-for="g in groups" :key="g.key" class="dupes-group">
         <span class="dupes-reason" :class="`dupes-reason-${g.reason}`">{{
-          g.reason === 'asin' ? 'same ASIN' : 'same title + author'
+          reasonLabel(g.reason)
         }}</span>
         <div v-for="b in g.books" :key="b.id" class="dupes-row">
           <router-link :to="`/audiobooks/${b.id}`" class="dupes-title">{{ b.title }}</router-link>
@@ -135,6 +136,17 @@ const copies = ref<DuplicateCopyBook[]>([])
 const deletingId = ref<number | null>(null)
 const mergingKey = ref<string | null>(null)
 
+function reasonLabel(reason: DuplicateGroup['reason']): string {
+  switch (reason) {
+    case 'asin':
+      return 'same ASIN'
+    case 'identical-files':
+      return 'identical files'
+    default:
+      return 'same title + author'
+  }
+}
+
 /**
  * Merge a same-ASIN group into its keeper (kevin/live semantics): the losers'
  * files and folders are DELETED from disk (the keeper already owns the good
@@ -190,10 +202,16 @@ async function mergeTitleAuthorGroup(g: DuplicateGroup) {
   if (losers.length === 0) return
 
   const loserFiles = losers.reduce((n, b) => n + b.fileCount, 0)
+  const why =
+    g.reason === 'identical-files'
+      ? `These records track byte-identical file sets under different titles or ASINs — ` +
+        `the keeper's label is the one that survives, so check it is the right book. `
+      : `These records share a title and author but not an ASIN — make sure they really are ` +
+        `the same book. `
   const ok = await showConfirm(
     `Merge ${losers.length} record(s) into "${keeper.title}" (id ${keeper.id})?\n\n` +
-      `These records share a title and author but not an ASIN — make sure they really are ` +
-      `the same book. The merged-away ${loserFiles} file(s) and folders are DELETED from ` +
+      why +
+      `The merged-away ${loserFiles} file(s) and folders are DELETED from ` +
       `disk. Their download and history entries move to the keeper. This cannot be undone.`,
     'Merge duplicates',
     { danger: true, confirmText: 'Merge & delete duplicates', cancelText: 'Cancel' },
