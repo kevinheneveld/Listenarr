@@ -41,7 +41,9 @@
         Duplicate records
         <small
           >{{ groups.length }} group{{ groups.length === 1 ? '' : 's' }} — the suggested keeper is
-          marked; deleting removes the record only (files stay on disk).</small
+          marked (click "make keeper" on another row to change it). Merge keeps the keeper and
+          deletes the others' records and files; "Delete record" removes a record only and leaves
+          its files on disk untracked.</small
         >
       </div>
       <div v-if="groups.length === 0" class="dupes-empty">No duplicate records found.</div>
@@ -51,7 +53,17 @@
         }}</span>
         <div v-for="b in g.books" :key="b.id" class="dupes-row">
           <router-link :to="`/audiobooks/${b.id}`" class="dupes-title">{{ b.title }}</router-link>
-          <span v-if="b.id === g.suggestedKeeperId" class="dupes-keeper">keep</span>
+          <span v-if="b.id === keeperIdFor(g)" class="dupes-keeper">keep</span>
+          <button
+            v-else
+            type="button"
+            class="dupes-keeper-btn"
+            :disabled="mergingKey !== null"
+            title="Merge into this record instead — its title, ASIN and metadata are what survive"
+            @click="setKeeper(g, b.id)"
+          >
+            make keeper
+          </button>
           <small class="dupes-meta">
             {{ b.fileCount }} file{{ b.fileCount === 1 ? '' : 's' }}
             <template v-if="b.fileSize > 0"> · {{ formatSize(b.fileSize) }}</template>
@@ -59,7 +71,7 @@
             · id {{ b.id }}
           </small>
           <button
-            v-if="b.id !== g.suggestedKeeperId"
+            v-if="b.id !== keeperIdFor(g) && g.reason !== 'identical-files'"
             type="button"
             class="dupes-delete-btn"
             :disabled="deletingId === b.id"
@@ -119,7 +131,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
 import { showConfirm } from '@/composables/useConfirm'
@@ -135,6 +147,22 @@ const groups = ref<DuplicateGroup[]>([])
 const copies = ref<DuplicateCopyBook[]>([])
 const deletingId = ref<number | null>(null)
 const mergingKey = ref<string | null>(null)
+
+// Operator-chosen keeper per group key. The sweep's suggestion is a
+// heuristic (most files, then lowest id) and for byte-identical sets it is
+// just the lowest id — it knows nothing about which row carries the right
+// label, and the keeper's metadata is what survives a merge.
+const keeperOverrides = reactive<Record<string, number>>({})
+
+function keeperIdFor(g: DuplicateGroup): number {
+  const chosen = keeperOverrides[g.key]
+  if (chosen !== undefined && g.books.some((b) => b.id === chosen)) return chosen
+  return g.suggestedKeeperId
+}
+
+function setKeeper(g: DuplicateGroup, id: number) {
+  keeperOverrides[g.key] = id
+}
 
 function reasonLabel(reason: DuplicateGroup['reason']): string {
   switch (reason) {
@@ -154,7 +182,8 @@ function reasonLabel(reason: DuplicateGroup['reason']): string {
  * records are removed.
  */
 async function mergeGroup(g: DuplicateGroup) {
-  const keeper = g.books.find((b) => b.id === g.suggestedKeeperId) ?? g.books[0]
+  const keeperId = keeperIdFor(g)
+  const keeper = g.books.find((b) => b.id === keeperId) ?? g.books[0]
   const losers = g.books.filter((b) => b.id !== keeper.id)
   if (losers.length === 0) return
 
@@ -197,7 +226,8 @@ async function mergeGroup(g: DuplicateGroup) {
  * without their ASIN.
  */
 async function mergeTitleAuthorGroup(g: DuplicateGroup) {
-  const keeper = g.books.find((b) => b.id === g.suggestedKeeperId) ?? g.books[0]
+  const keeperId = keeperIdFor(g)
+  const keeper = g.books.find((b) => b.id === keeperId) ?? g.books[0]
   const losers = g.books.filter((b) => b.id !== keeper.id)
   if (losers.length === 0) return
 
@@ -247,7 +277,8 @@ async function mergeTitleAuthorGroup(g: DuplicateGroup) {
  * duplicate scan stops flagging the group.
  */
 async function markDifferentBooks(g: DuplicateGroup) {
-  const keeper = g.books.find((b) => b.id === g.suggestedKeeperId) ?? g.books[0]
+  const keeperId = keeperIdFor(g)
+  const keeper = g.books.find((b) => b.id === keeperId) ?? g.books[0]
   const others = g.books.filter((b) => b.id !== keeper.id)
   if (others.length === 0) return
 
@@ -279,6 +310,7 @@ async function load() {
   error.value = null
   try {
     const resp = await apiService.getLibraryDuplicates()
+    for (const k of Object.keys(keeperOverrides)) delete keeperOverrides[k]
     groups.value = resp.duplicateGroups
     copies.value = resp.duplicateCopyBooks
     hasLoaded.value = true
@@ -441,6 +473,26 @@ function formatSize(bytes: number): string {
   background: rgba(46, 204, 113, 0.12);
   color: #2ecc71;
   border: 1px solid rgba(46, 204, 113, 0.3);
+}
+
+.dupes-keeper-btn {
+  font-size: 0.7rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: #8a93a0;
+  border: 1px dashed rgba(138, 147, 160, 0.5);
+  cursor: pointer;
+}
+
+.dupes-keeper-btn:hover:not(:disabled) {
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.5);
+}
+
+.dupes-keeper-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .dupes-meta {
