@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System.Text.RegularExpressions;
 using Listenarr.Application.Audiobooks.Organizing;
 using Listenarr.Domain.Common;
 using Microsoft.AspNetCore.Mvc;
@@ -264,12 +265,27 @@ namespace Listenarr.Api.Features.Library
             return true;
         }
 
+        /// <summary>
+        /// Comparison key for "is this folder the canonical one": case-folded,
+        /// trailing separators dropped, and the two historical spellings of an
+        /// illegal character collapsed. The sweep's planner once wrote ":" as
+        /// "_" while the rename engine and imports wrote " - ", so a library
+        /// organized by both holds "Title_ A Novel" next to "Title - A Novel".
+        /// Those are the same folder for organize's purposes — proposing a
+        /// rename for spelling alone would churn hundreds of books (live: 352)
+        /// for nothing. New folders follow the shared sanitizer; existing ones
+        /// are left as they are.
+        /// </summary>
         private static string NormalizeOrganizeKey(string path)
         {
             if (string.IsNullOrEmpty(path)) return string.Empty;
             var trimmed = path.TrimEnd('/', '\\');
-            return trimmed.ToUpperInvariant();
+            var folded = SpellingVariantRegex.Replace(trimmed, "-");
+            return folded.ToUpperInvariant();
         }
+
+        // "_ " / " - " / "_" / "-" with any surrounding spaces → one token.
+        private static readonly Regex SpellingVariantRegex = new(@"\s*[-_]\s*", RegexOptions.Compiled);
 
         /// <summary>
         /// Returns true if the audiobook's current path matches a configured

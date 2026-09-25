@@ -874,6 +874,44 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             Assert.Empty(jobs);
         }
 
+        [Fact(DisplayName = "Preview: a folder that differs from the target only by the ':' spelling ('_' vs ' - ') is already canonical")]
+        public async Task Preview_UnderscoreSpellingOfColon_IsAlreadyCanonical()
+        {
+            // The sweep's old planner wrote ":" as "_"; the rename engine and
+            // imports wrote " - ". A library organized by both holds each
+            // spelling, and neither deserves a move for spelling alone.
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Going Home: A Novel",
+                Authors = new List<string> { "A. American" },
+                BasePath = $"{Root}/A. American/Going Home_ A Novel",
+            });
+            await AttachFileAsync(ab);
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.AlreadyCanonical, row.Status);
+            Assert.Equal(1, preview.AlreadyCanonicalCount);
+            Assert.Equal(0, preview.WillMoveCount);
+        }
+
+        [Fact(DisplayName = "Preview: a genuinely different folder still moves, and the target uses the dash form")]
+        public async Task Preview_ColonTitleElsewhere_TargetsTheDashForm()
+        {
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Going Home: A Novel",
+                Authors = new List<string> { "A. American" },
+                BasePath = $"{Root}/Misplaced/Going Home",
+            });
+            await AttachFileAsync(ab);
+
+            var preview = await GetPreviewAsync();
+            var row = Assert.Single(preview.Rows);
+            Assert.Equal(OrganizePreviewStatus.WillMove, row.Status);
+            Assert.Equal($"{Root}/A. American/Going Home - A Novel", row.TargetPath);
+        }
+
         private async Task<OrganizeLibraryPreviewDto> GetPreviewAsync()
         {
             var controller = _provider.GetRequiredService<LibraryController>();
