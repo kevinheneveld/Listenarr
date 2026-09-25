@@ -141,8 +141,25 @@ namespace Listenarr.Application.Audiobooks.Verification
 
         private static string? ExtractNarrator(string text)
         {
-            var match = NarratorRegex.Match(text);
-            return match.Success ? CleanSpan(match.Groups["name"].Value) : null;
+            // Take the first credit whose span looks like a person's name. The
+            // head-probe can stitch a re-announced ident onto the credit
+            // ("…read to you by "Fool Moon" By Jim Butcher… read to you by
+            // James Marsters"), so the first match may be a title, not a name.
+            foreach (Match match in NarratorRegex.Matches(text))
+            {
+                var name = CleanSpan(match.Groups["name"].Value);
+                if (name != null && LooksLikePersonName(name)) return name;
+            }
+            return null;
+        }
+
+        private static bool LooksLikePersonName(string name)
+        {
+            if (name.IndexOfAny(['"', '\u201c', '\u201d']) >= 0) return false;
+            if (name.Any(char.IsDigit)) return false;
+            if (Regex.IsMatch(name, @"\bby\b", RegexOptions.IgnoreCase)) return false;
+            var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return words.Length is >= 1 and <= 6;
         }
 
         private static (string? Author, int ByIndex) ExtractAuthor(string text)

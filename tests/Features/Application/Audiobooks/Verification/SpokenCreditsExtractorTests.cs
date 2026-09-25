@@ -75,6 +75,22 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
         }
 
         [Fact]
+        public void Extract_DoubledIdentFromHeadProbe_SkipsTitleShapedNarratorSpan()
+        {
+            // Live Fool Moon opening: the head probe stitched the ident twice, so
+            // the first "read to you by" is followed by the re-announced title.
+            var credits = SpokenCreditsExtractor.Extract(
+                "\"Fool Moon\" by Jim Butcher print publication by ROC a division of penguin Putnam this " +
+                "production is brought to you by buzzy multimedia audio books and is read to you by " +
+                "\"Fool Moon\" By Jim Butcher Print publication by ROC, a division of Penguin Putnam. This " +
+                "production is brought to you by Buzzy Multimedia Audio Books, and is read to you by " +
+                "James Marsters. Chapter 1. I never used to keep close track of the phases of the moon.");
+
+            Assert.NotNull(credits);
+            Assert.Equal("James Marsters", credits!.Narrator);
+        }
+
+        [Fact]
         public void Extract_TitleByAuthorNarratedBy()
         {
             // ACOTAR opening (live; "present" is whisper's rendering, names mangled).
