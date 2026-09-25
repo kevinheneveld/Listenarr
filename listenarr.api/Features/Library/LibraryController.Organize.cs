@@ -47,9 +47,11 @@ namespace Listenarr.Api.Features.Library
         }
 
         /// <summary>
-        /// Queue a background move for each confirmed preview row. Every id is
-        /// re-validated against live state before queuing; rows that no longer
-        /// qualify are skipped with a reason instead of aborting the rest.
+        /// Hand every confirmed preview row to the background organize batch,
+        /// which queues one move per row. Every id is re-validated against live
+        /// state first; rows that no longer qualify are skipped with a reason
+        /// instead of aborting the rest. Returns 202 with the batch id, 409 while
+        /// a previous batch is still queuing.
         /// </summary>
         /// <param name="request">Audiobook ids confirmed in the preview UI.</param>
         /// <param name="ct">Cancellation token bound to the request.</param>
@@ -57,6 +59,33 @@ namespace Listenarr.Api.Features.Library
         public async Task<IActionResult> ApplyOrganize([FromBody] OrganizeLibraryApplyRequest request, CancellationToken ct)
         {
             return await _organizeSweepWorkflow.ApplyAsync(request, ct);
+        }
+
+        /// <summary>
+        /// Progress of the background organize batch started by organize/apply:
+        /// how many rows have been handed to the move queue, the jobs queued so
+        /// far, and the rows the move queue would not accept.
+        /// </summary>
+        [HttpGet("organize/apply/status")]
+        public IActionResult GetOrganizeApplyStatus([FromServices] Listenarr.Application.Audiobooks.Organizing.IOrganizeApplyBatch? batch)
+        {
+            return Ok(batch?.Snapshot() ?? Listenarr.Application.Audiobooks.Organizing.OrganizeApplyBatchSnapshot.Idle);
+        }
+
+        /// <summary>
+        /// Stop the background organize batch. Rows not yet handed over are
+        /// dropped; moves already in the move queue proceed.
+        /// </summary>
+        [HttpDelete("organize/apply")]
+        public IActionResult CancelOrganizeApply([FromServices] Listenarr.Application.Audiobooks.Organizing.IOrganizeApplyBatch? batch)
+        {
+            if (batch == null)
+            {
+                return Ok(Listenarr.Application.Audiobooks.Organizing.OrganizeApplyBatchSnapshot.Idle);
+            }
+
+            batch.Cancel();
+            return Ok(batch.Snapshot());
         }
 
         /// <summary>

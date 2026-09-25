@@ -1866,13 +1866,38 @@ export interface OrganizeQueuedJob {
   targetPath: string | null
 }
 
+/** 202 body of POST /library/organize/apply: rows accepted into the background batch. */
 export interface OrganizeLibraryApplyResult {
-  queued: number
+  /** Null when nothing was accepted (no batch started). */
+  batchId: string | null
+  accepted: number
   skipped: number
-  failedToQueue: number
-  queuedJobs: OrganizeQueuedJob[]
   skippedDetails: OrganizeApplySkipped[]
   warnings: string[]
+}
+
+export interface OrganizeApplyProblem {
+  audiobookId: number
+  title: string | null
+  reason: string
+}
+
+/** GET /library/organize/apply/status — the background batch handing rows to the move queue. */
+export interface OrganizeApplyBatchSnapshot {
+  batchId: string | null
+  isRunning: boolean
+  total: number
+  processed: number
+  queued: number
+  notAccepted: number
+  failed: number
+  currentAudiobookId: number | null
+  currentTitle: string | null
+  startedAt: string | null
+  completedAt: string | null
+  cancelled: boolean
+  queuedJobs: OrganizeQueuedJob[]
+  problems: OrganizeApplyProblem[]
 }
 
 /** One book inside a duplicate-record group from GET /library/duplicates. */

@@ -138,21 +138,6 @@ namespace Listenarr.Api.Features.Library
     }
 
     /// <summary>
-    /// One queued background move surfaced in the apply response. The
-    /// frontend uses <see cref="JobId"/> to correlate SignalR
-    /// <c>MoveJobUpdate</c> events back to the specific audiobook so a
-    /// failure's <c>error</c> string lands next to the right book in the
-    /// results UI.
-    /// </summary>
-    public class OrganizeQueuedJobDto
-    {
-        public string JobId { get; set; } = string.Empty;
-        public int AudiobookId { get; set; }
-        public string? AudiobookTitle { get; set; }
-        public string? TargetPath { get; set; }
-    }
-
-    /// <summary>
     /// Body for the organize "flatten" action — collapse a single
     /// nested-one-level-too-deep row into its canonical parent folder.
     /// </summary>
@@ -169,12 +154,17 @@ namespace Listenarr.Api.Features.Library
         public string? Error { get; set; }
     }
 
+    /// <summary>
+    /// 202 body of POST organize/apply: the rows accepted into the background
+    /// batch plus everything the validation pass skipped. Moves are queued by
+    /// the batch worker afterwards — poll GET organize/apply/status.
+    /// </summary>
     public class OrganizeLibraryApplyResultDto
     {
-        public int Queued { get; set; }
+        /// <summary>Null when nothing was accepted (no batch started).</summary>
+        public string? BatchId { get; set; }
+        public int Accepted { get; set; }
         public int Skipped { get; set; }
-        public int FailedToQueue { get; set; }
-        public List<OrganizeQueuedJobDto> QueuedJobs { get; set; } = new();
         public List<OrganizeApplySkippedDto> SkippedDetails { get; set; } = new();
         public List<string> Warnings { get; set; } = new();
     }

@@ -49,6 +49,9 @@ internal static class WorkerRegistrationExtensions
         // On-demand wanted-list batches (Wanted page "Search All / Search Filtered").
         services.AddSingleton<IWantedSearchQueue, Listenarr.Application.Search.WantedSearch.WantedSearchQueueService>();
         services.AddHostedService<WantedSearchBackgroundService>();
+        // "Organize library" apply: rows are validated in the request and handed to the move queue here.
+        services.AddSingleton<Listenarr.Application.Audiobooks.Organizing.IOrganizeApplyBatch, Listenarr.Application.Audiobooks.Organizing.OrganizeApplyBatchService>();
+        services.AddHostedService<Listenarr.Infrastructure.HostedServices.Library.OrganizeApplyBackgroundService>();
         AddHostedProcessor<AuthorMonitoringProcessor, IAuthorMonitoringProcessor, AuthorMonitoringBackgroundService>(services);
         AddHostedProcessor<SeriesMonitoringProcessor, ISeriesMonitoringProcessor, SeriesMonitoringBackgroundService>(services);
         AddHostedProcessor<FfmpegInstallProcessor, IFfmpegInstallProcessor, FfmpegInstallBackgroundService>(services);

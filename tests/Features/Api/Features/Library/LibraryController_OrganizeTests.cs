@@ -19,7 +19,10 @@ using Microsoft.AspNetCore.Mvc;
 using Moq;
 using Xunit;
 using Listenarr.Api.Features.Library;
+using Listenarr.Application.Audiobooks.Organizing;
+using Listenarr.Infrastructure.HostedServices.Library;
 using Listenarr.Tests.Common;
+using Microsoft.Extensions.Logging.Abstractions;
 using Listenarr.Tests.Builders;
 
 namespace Listenarr.Tests.Features.Api.Features.Library
@@ -307,18 +310,23 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             var actionResult = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
             {
                 AudiobookIds = new List<int> { ab1.Id, ab2.Id },
-            }, CancellationToken.None) as OkObjectResult;
+            }, CancellationToken.None) as AcceptedResult;
 
             Assert.NotNull(actionResult);
             var result = Assert.IsType<OrganizeLibraryApplyResultDto>(actionResult!.Value);
-            Assert.Equal(2, result.Queued);
+            Assert.Equal(2, result.Accepted);
             Assert.Equal(0, result.Skipped);
-            Assert.Equal(0, result.FailedToQueue);
-            Assert.Equal(2, result.QueuedJobs.Count);
+            Assert.NotNull(result.BatchId);
+
+            // The request only hands rows to the batch; the worker queues the moves.
+            var snapshot = await DrainOrganizeBatchAsync();
+            Assert.Equal(2, snapshot.Queued);
+            Assert.Equal(0, snapshot.NotAccepted);
+            Assert.Equal(0, snapshot.Failed);
             var target1 = Path.Combine(root, "Author X", "Move Me");
             var target2 = Path.Combine(root, "Author Y", "Move Me Too");
-            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab1.Id && j.TargetPath == target1);
-            Assert.Contains(result.QueuedJobs, j => j.AudiobookId == ab2.Id && j.TargetPath == target2);
+            Assert.Contains(snapshot.QueuedJobs, j => j.AudiobookId == ab1.Id && j.TargetPath == target1);
+            Assert.Contains(snapshot.QueuedJobs, j => j.AudiobookId == ab2.Id && j.TargetPath == target2);
 
             var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             Assert.Equal(2, jobs.Count);
@@ -343,13 +351,15 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             var actionResult = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
             {
                 AudiobookIds = new List<int> { ab.Id },
-            }, CancellationToken.None) as OkObjectResult;
+            }, CancellationToken.None) as AcceptedResult;
 
             Assert.NotNull(actionResult);
             var result = Assert.IsType<OrganizeLibraryApplyResultDto>(actionResult!.Value);
-            Assert.Equal(0, result.Queued);
+            Assert.Equal(0, result.Accepted);
+            Assert.Null(result.BatchId);
             Assert.Equal(1, result.Skipped);
             Assert.Single(result.SkippedDetails, s => s.AudiobookId == ab.Id);
+            Assert.False(_provider.GetRequiredService<IOrganizeApplyBatch>().Snapshot().IsRunning);
 
             var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             Assert.Empty(jobs);
@@ -375,11 +385,11 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             var actionResult = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
             {
                 AudiobookIds = new List<int> { ab1.Id, ab2.Id },
-            }, CancellationToken.None) as OkObjectResult;
+            }, CancellationToken.None) as AcceptedResult;
 
             Assert.NotNull(actionResult);
             var result = Assert.IsType<OrganizeLibraryApplyResultDto>(actionResult!.Value);
-            Assert.Equal(0, result.Queued);
+            Assert.Equal(0, result.Accepted);
             Assert.Equal(2, result.Skipped);
             Assert.NotEmpty(result.Warnings);
 
@@ -535,9 +545,11 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             await AttachRealFileAsync(ab, currentPath, "dummy.m4b");
 
             var result = await ApplyAsync(new[] { ab.Id });
-            Assert.Equal(1, result.Queued);
+            Assert.Equal(1, result.Accepted);
             Assert.Equal(0, result.Skipped);
 
+            var snapshot = await DrainOrganizeBatchAsync();
+            Assert.Equal(1, snapshot.Queued);
             var jobs = await _moveJobRepository.GetByStatusAsync(new[] { MoveJobStatus.Queued, MoveJobStatus.Running });
             var job = Assert.Single(jobs, j => j.AudiobookId == ab.Id);
             Assert.True(job.ReplaceStubTarget);
@@ -565,7 +577,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             await AttachFileAsync(ab, $"{currentPath}/dummy.m4b");
 
             var result = await ApplyAsync(new[] { ab.Id });
-            Assert.Equal(0, result.Queued);
+            Assert.Equal(0, result.Accepted);
             Assert.Equal(1, result.Skipped);
             Assert.Contains(result.SkippedDetails, d => d.AudiobookId == ab.Id
                 && (d.Reason ?? string.Empty).Contains("already exists", StringComparison.OrdinalIgnoreCase));
@@ -781,9 +793,68 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             var actionResult = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
             {
                 AudiobookIds = ids.ToList(),
-            }, CancellationToken.None) as OkObjectResult;
+            }, CancellationToken.None) as AcceptedResult;
             Assert.NotNull(actionResult);
             return Assert.IsType<OrganizeLibraryApplyResultDto>(actionResult!.Value);
+        }
+
+        /// <summary>
+        /// Run the organize batch worker over the test host until the batch the
+        /// apply call started has been fully handed to the move queue.
+        /// </summary>
+        private async Task<OrganizeApplyBatchSnapshot> DrainOrganizeBatchAsync()
+        {
+            var batch = _provider.GetRequiredService<IOrganizeApplyBatch>();
+            var worker = new OrganizeApplyBackgroundService(
+                batch,
+                _provider.GetRequiredService<IServiceScopeFactory>(),
+                NullLogger<OrganizeApplyBackgroundService>.Instance);
+            await worker.StartAsync(CancellationToken.None);
+            try
+            {
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+                while (batch.Snapshot().IsRunning && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(20);
+                }
+            }
+            finally
+            {
+                await worker.StopAsync(CancellationToken.None);
+            }
+
+            var snapshot = batch.Snapshot();
+            Assert.False(snapshot.IsRunning, "organize batch did not finish within the wait budget");
+            return snapshot;
+        }
+
+        [Fact]
+        public async Task Apply_WhileBatchStillQueuing_ReturnsConflict()
+        {
+            var ab = await _audiobookRepository.AddAsync(new Audiobook
+            {
+                Title = "Waiting",
+                Authors = new List<string> { "Author W" },
+                BasePath = $"{Root}/Somewhere Else",
+            });
+            await AttachFileAsync(ab);
+
+            var batch = _provider.GetRequiredService<IOrganizeApplyBatch>();
+            Assert.True(batch.TryStart(new[] { new OrganizeApplyItem(99, "Busy", "/a", "/b", false) }, out _));
+            try
+            {
+                var controller = _provider.GetRequiredService<LibraryController>();
+                var result = await controller.ApplyOrganize(new OrganizeLibraryApplyRequest
+                {
+                    AudiobookIds = new List<int> { ab.Id },
+                }, CancellationToken.None);
+
+                Assert.IsType<ConflictObjectResult>(result);
+            }
+            finally
+            {
+                batch.Cancel();
+            }
         }
 
         private sealed class TempDirectory : IDisposable

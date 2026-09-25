@@ -108,6 +108,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibraryDuplicatesMergeWorkflow>();
         services.AddScoped<LibraryMusicCandidatesWorkflow>();
         services.AddScoped<LibraryOrganizeSweepWorkflow>();
+        services.AddScoped<Listenarr.Application.Audiobooks.Organizing.IOrganizeMoveEnqueuer, OrganizeMoveEnqueuer>();
         services.AddScoped<LibraryMoveSummaryWorkflow>();
         services.AddScoped<LibraryDuplicatesWorkflow>();
         services.AddScoped<LibraryDuplicateCopyAnalysisWorkflow>();

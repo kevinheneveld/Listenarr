@@ -276,6 +276,28 @@
           <template v-else-if="results">
             <div class="results-panel">
               <div class="results-title">Move queue status</div>
+              <div v-if="batchRunning && batch" class="batch-progress">
+                <span
+                  >Queuing {{ batch.processed }} of {{ batch.total
+                  }}<template v-if="batch.currentTitle"> · {{ batch.currentTitle }}</template
+                  ><template v-if="skippedCount > 0"> · {{ skippedCount }} skipped</template
+                  ><template v-if="failedToQueueCount > 0">
+                    · {{ failedToQueueCount }} not accepted</template
+                  ></span
+                >
+                <button
+                  type="button"
+                  class="btn btn-small"
+                  :disabled="cancellingBatch"
+                  @click="cancelBatch"
+                >
+                  {{ cancellingBatch ? 'Cancelling…' : 'Cancel' }}
+                </button>
+              </div>
+              <div v-else-if="batch?.cancelled" class="batch-progress batch-cancelled">
+                Cancelled after {{ batch.processed }} of {{ batch.total }} — moves already queued
+                will still run.
+              </div>
               <div class="results-tally">
                 <span class="pill pill-action">{{ runningCount }} in flight</span>
                 <span class="pill pill-ok">{{ completedCount }} completed</span>
@@ -322,7 +344,8 @@
                 </li>
                 <li>
                   Each move runs through the existing background queue with the same safety checks
-                  as the per-book Organize button.
+                  as the per-book Organize button. Queuing itself happens on the server, so you can
+                  close this dialog or the tab while it works.
                 </li>
               </ul>
               <div class="confirm-warning">
@@ -358,7 +381,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, reactive } from 'vue'
+import { ref, computed, watch, reactive, onBeforeUnmount } from 'vue'
 import { PhX } from '@phosphor-icons/vue'
 import { apiService } from '@/services/api'
 import { useToast } from '@/services/toastService'
@@ -368,6 +391,7 @@ import MoveQueueStatusBanner from '@/components/domain/organize/MoveQueueStatusB
 import type {
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
+  OrganizeApplyBatchSnapshot,
   OrganizePreviewRow,
 } from '@/types'
 
@@ -395,27 +419,36 @@ const applying = ref(false)
 const applyError = ref<string | null>(null)
 const pendingConfirm = ref(false)
 const results = ref<OrganizeLibraryApplyResult | null>(null)
+// The server-side batch that hands accepted rows to the move queue. Polled
+// every 2 s while it runs; survives closing the modal or the tab.
+const batch = ref<OrganizeApplyBatchSnapshot | null>(null)
+const cancellingBatch = ref(false)
+let pollTimer: ReturnType<typeof setTimeout> | null = null
 const jobs = reactive<Record<string, JobState>>({})
 let unsubMoveJob: (() => void) | null = null
 
-const queuedCount = computed(() => results.value?.queued ?? 0)
+const batchRunning = computed(() => batch.value?.isRunning === true)
+const queuedJobs = computed(() => batch.value?.queuedJobs ?? [])
+const queuedCount = computed(() => batch.value?.queued ?? 0)
 const skippedCount = computed(() => results.value?.skipped ?? 0)
-const failedToQueueCount = computed(() => results.value?.failedToQueue ?? 0)
-const skippedDetails = computed(() => results.value?.skippedDetails ?? [])
+const failedToQueueCount = computed(
+  () => (batch.value?.notAccepted ?? 0) + (batch.value?.failed ?? 0),
+)
+const skippedDetails = computed(() => [
+  ...(results.value?.skippedDetails ?? []),
+  ...(batch.value?.problems ?? []).map((p) => ({ audiobookId: p.audiobookId, reason: p.reason })),
+])
 
-const failedJobs = computed(() => {
-  if (!results.value) return []
-  return results.value.queuedJobs.filter((j) => jobs[j.jobId]?.status === 'Failed')
-})
-const completedCount = computed(() => {
-  if (!results.value) return 0
-  return results.value.queuedJobs.filter((j) => jobs[j.jobId]?.status === 'Completed').length
-})
+const failedJobs = computed(() =>
+  queuedJobs.value.filter((j) => jobs[j.jobId]?.status === 'Failed'),
+)
+const completedCount = computed(
+  () => queuedJobs.value.filter((j) => jobs[j.jobId]?.status === 'Completed').length,
+)
 const failedCount = computed(() => failedJobs.value.length)
-const runningCount = computed(() => {
-  if (!results.value) return 0
-  return results.value.queuedJobs.length - completedCount.value - failedCount.value
-})
+const runningCount = computed(
+  () => queuedJobs.value.length - completedCount.value - failedCount.value,
+)
 
 function jobTitleFor(jobId: string): string | null {
   return jobs[jobId]?.audiobookTitle || null
@@ -585,9 +618,18 @@ async function load() {
   for (const k of Object.keys(selected)) delete selected[Number(k)]
   for (const k of Object.keys(jobs)) delete jobs[k]
   results.value = null
+  batch.value = null
+  stopPolling()
   unsubscribeMoveJobs()
   pendingConfirm.value = false
   try {
+    // A batch started earlier (this tab or another) is still queuing moves:
+    // show its progress instead of the preview it is busy invalidating.
+    const running = await apiService.getOrganizeApplyStatus().catch(() => null)
+    if (running?.isRunning) {
+      attachToBatch(running)
+      return
+    }
     const resp = await apiService.getOrganizeLibraryPreview()
     preview.value = resp
     // Default every will_move row to selected so the user starts from "move everything".
@@ -616,29 +658,18 @@ async function executeApply() {
   try {
     const result = await apiService.applyOrganizeLibrary(ids)
     emit('organized', result)
-    // Seed jobs state from the apply response so the results panel can
-    // render immediately; SignalR MoveJobUpdate then fills in error text
-    // as each background move finishes (Completed or Failed).
-    for (const k of Object.keys(jobs)) delete jobs[k]
-    for (const j of result.queuedJobs) {
-      jobs[j.jobId] = {
-        audiobookId: j.audiobookId,
-        audiobookTitle: j.audiobookTitle,
-        targetPath: j.targetPath,
-        status: 'Queued',
-        error: null,
-      }
-    }
-    subscribeMoveJobs()
     results.value = result
-    const parts: string[] = [`Queued ${result.queued} move${result.queued === 1 ? '' : 's'}`]
-    if (result.skipped > 0) parts.push(`${result.skipped} skipped`)
-    if (result.failedToQueue > 0) parts.push(`${result.failedToQueue} failed to queue`)
-    const summary = parts.join(', ')
-    if (result.failedToQueue > 0 || result.warnings.length > 0) {
-      toast.warning('Organize library', summary)
+    for (const k of Object.keys(jobs)) delete jobs[k]
+    if (result.batchId) {
+      // The server hands rows to the move queue in the background; poll its
+      // progress. Queued jobs arrive in the snapshot and SignalR MoveJobUpdate
+      // then fills in each move's outcome.
+      subscribeMoveJobs()
+      await pollBatch()
     } else {
-      toast.success('Organize library', summary)
+      batch.value = null
+      const summary = `Nothing queued — ${result.skipped} skipped`
+      toast.warning('Organize library', summary)
     }
   } catch (err) {
     applyError.value = err instanceof Error ? err.message : 'Unknown error'
@@ -648,6 +679,100 @@ async function executeApply() {
     })
   } finally {
     applying.value = false
+  }
+}
+
+function attachToBatch(snapshot: OrganizeApplyBatchSnapshot) {
+  results.value = {
+    batchId: snapshot.batchId,
+    accepted: snapshot.total,
+    skipped: 0,
+    skippedDetails: [],
+    warnings: [],
+  }
+  pendingConfirm.value = true
+  subscribeMoveJobs()
+  applySnapshot(snapshot)
+  schedulePoll()
+}
+
+function applySnapshot(snapshot: OrganizeApplyBatchSnapshot) {
+  const wasRunning = batch.value?.isRunning === true
+  batch.value = snapshot
+  for (const j of snapshot.queuedJobs) {
+    if (!jobs[j.jobId]) {
+      jobs[j.jobId] = {
+        audiobookId: j.audiobookId,
+        audiobookTitle: j.audiobookTitle,
+        targetPath: j.targetPath,
+        status: 'Queued',
+        error: null,
+      }
+    }
+  }
+  if (wasRunning && !snapshot.isRunning) {
+    announceBatchFinished(snapshot)
+  }
+}
+
+function announceBatchFinished(snapshot: OrganizeApplyBatchSnapshot) {
+  const failedToQueue = snapshot.notAccepted + snapshot.failed
+  const parts: string[] = [`Queued ${snapshot.queued} move${snapshot.queued === 1 ? '' : 's'}`]
+  if (skippedCount.value > 0) parts.push(`${skippedCount.value} skipped`)
+  if (failedToQueue > 0) parts.push(`${failedToQueue} failed to queue`)
+  if (snapshot.cancelled) parts.push('cancelled')
+  const summary = parts.join(', ')
+  if (failedToQueue > 0 || snapshot.cancelled || (results.value?.warnings.length ?? 0) > 0) {
+    toast.warning('Organize library', summary)
+  } else {
+    toast.success('Organize library', summary)
+  }
+}
+
+async function pollBatch() {
+  try {
+    const snapshot = await apiService.getOrganizeApplyStatus()
+    if (batch.value === null) {
+      // First poll after Apply: treat the server as running so the finish
+      // toast fires even if the batch completed between the two requests.
+      batch.value = { ...snapshot, isRunning: true }
+    }
+    applySnapshot(snapshot)
+  } catch (err) {
+    errorTracking.captureException(err as Error, {
+      component: 'OrganizeLibraryModal',
+      operation: 'pollBatch',
+    })
+  }
+  if (batch.value?.isRunning) {
+    schedulePoll()
+  } else {
+    stopPolling()
+  }
+}
+
+function schedulePoll() {
+  stopPolling()
+  pollTimer = setTimeout(() => void pollBatch(), 2000)
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function cancelBatch() {
+  cancellingBatch.value = true
+  try {
+    const snapshot = await apiService.cancelOrganizeApply()
+    applySnapshot(snapshot)
+    stopPolling()
+  } catch (err) {
+    toast.error('Organize library', err instanceof Error ? err.message : 'Cancel failed')
+  } finally {
+    cancellingBatch.value = false
   }
 }
 
@@ -675,9 +800,16 @@ function unsubscribeMoveJobs() {
 
 function onClose() {
   if (applying.value) return
+  // A running batch keeps queuing on the server; reopening re-attaches to it.
+  stopPolling()
   unsubscribeMoveJobs()
   emit('close')
 }
+
+onBeforeUnmount(() => {
+  stopPolling()
+  unsubscribeMoveJobs()
+})
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -830,6 +962,25 @@ watch(
   color: #fff;
   font-weight: 600;
 }
+.batch-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.25rem 0 0.6rem;
+  font-size: 13px;
+  color: #d8dee6;
+}
+
+.batch-cancelled {
+  color: #f39c12;
+}
+
+.btn-small {
+  padding: 0.25rem 0.6rem;
+  font-size: 12px;
+}
+
 .results-tally {
   display: flex;
   gap: 8px;

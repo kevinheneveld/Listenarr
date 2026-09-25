@@ -213,6 +213,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<ISearchActivityTracker, SearchActivityTracker>();
             services.AddSingleton<SearchProgressReporter>();
             services.AddSingleton<IWantedSearchQueue, Listenarr.Application.Search.WantedSearch.WantedSearchQueueService>();
+            services.AddSingleton<Listenarr.Application.Audiobooks.Organizing.IOrganizeApplyBatch, Listenarr.Application.Audiobooks.Organizing.OrganizeApplyBatchService>();
             services.AddSingleton<IndexerAdditionalSettingsParser>();
             services.AddSingleton<IndexerSearchWorkflow>();
             services.AddSingleton<MetadataSourceCatalog>();
@@ -237,6 +238,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibraryUploadWorkflow>();
             services.AddSingleton<LibraryBulkEditWorkflow>();
             services.AddSingleton<LibraryMoveWorkflow>();
+            services.AddSingleton<Listenarr.Application.Audiobooks.Organizing.IOrganizeMoveEnqueuer, OrganizeMoveEnqueuer>();
             services.AddSingleton<LibraryDeleteWorkflow>();
             services.AddSingleton<LibraryUpdateWorkflow>();
             services.AddSingleton<LibraryIdentifierWorkflow>();

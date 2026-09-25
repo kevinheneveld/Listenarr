@@ -37,7 +37,7 @@ namespace Listenarr.Api.Features.Library
         private readonly IConfigurationService _configurationService;
         private readonly IFileNamingService _fileNamingService;
         private readonly IMoveQueueService? _moveQueueService;
-        private readonly LibraryMoveWorkflow? _moveWorkflow;
+        private readonly IOrganizeApplyBatch? _organizeBatch;
         private readonly IOrganizeFilesystem _organizeFilesystem;
         private readonly ILogger<LibraryOrganizeSweepWorkflow> _logger;
 
@@ -51,7 +51,7 @@ namespace Listenarr.Api.Features.Library
             IOrganizeFilesystem organizeFilesystem,
             ILogger<LibraryOrganizeSweepWorkflow> logger,
             IMoveQueueService? moveQueueService = null,
-            LibraryMoveWorkflow? moveWorkflow = null)
+            IOrganizeApplyBatch? organizeBatch = null)
         {
             _repo = repo;
             _audioFileRepository = audioFileRepository;
@@ -60,7 +60,7 @@ namespace Listenarr.Api.Features.Library
             _configurationService = configurationService;
             _fileNamingService = fileNamingService;
             _moveQueueService = moveQueueService;
-            _moveWorkflow = moveWorkflow;
+            _organizeBatch = organizeBatch;
             _organizeFilesystem = organizeFilesystem;
             _logger = logger;
         }
@@ -381,70 +381,48 @@ namespace Listenarr.Api.Features.Library
                 result.Warnings.Add($"Skipped {ids.Count} audiobooks that compute to the same target path '{key}'");
             }
 
-            foreach (var audiobook in audiobooks)
-            {
-                if (!targets.TryGetValue(audiobook.Id, out var target)) continue;
-                try
-                {
-                    // Physical moves must go through the durable move workflow so the
-                    // target-boundary generation authorization and source manifest are
-                    // resolved; enqueuing by bare path is no longer possible.
-                    if (_moveWorkflow == null)
-                    {
-                        throw new InvalidOperationException("Move workflow not available");
-                    }
+            // Hand the validated rows to the batch worker and return at once.
+            // Queuing inline took 3–11 s per row once the move worker held the
+            // filesystem-mutation lock (live: 17 of 726 queued before the
+            // reverse proxy cut the request at 60 s and the request token
+            // stopped the loop) — the worker runs on the host's token instead.
+            var items = audiobooks
+                .Where(a => targets.ContainsKey(a.Id))
+                .Select(a => new OrganizeApplyItem(
+                    a.Id,
+                    a.Title,
+                    NormalizeOrganizePath(a.BasePath),
+                    targets[a.Id],
+                    replaceStubIds.Contains(a.Id)))
+                .ToList();
 
-                    var sourcePath = NormalizeOrganizePath(audiobook.BasePath);
-                    var enqueueResult = await _moveWorkflow.EnqueueAsync(
-                        audiobook.Id,
-                        new LibraryController.MoveRequest
-                        {
-                            DestinationPath = target,
-                            SourcePath = sourcePath,
-                            MoveFiles = true,
-                            ReplaceStubTarget = replaceStubIds.Contains(audiobook.Id),
-                        },
-                        ct);
-                    if (enqueueResult is AcceptedResult { Value: MoveEnqueuedResponse enqueued })
-                    {
-                        result.Queued++;
-                        result.QueuedJobs.Add(new OrganizeQueuedJobDto
-                        {
-                            JobId = enqueued.JobId.ToString(),
-                            AudiobookId = audiobook.Id,
-                            AudiobookTitle = audiobook.Title,
-                            TargetPath = target,
-                        });
-                    }
-                    else
-                    {
-                        var reason = enqueueResult is ObjectResult { Value: not null } obj
-                            ? obj.Value!.ToString()
-                            : enqueueResult.GetType().Name;
-                        _logger.LogWarning(
-                            "Organize move for audiobook {AudiobookId} was not accepted: {Reason}",
-                            audiobook.Id, reason);
-                        result.FailedToQueue++;
-                        result.SkippedDetails.Add(new OrganizeApplySkippedDto
-                        {
-                            AudiobookId = audiobook.Id,
-                            Reason = $"Move not accepted: {reason}",
-                        });
-                    }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            if (items.Count > 0)
+            {
+                if (_organizeBatch == null)
                 {
-                    _logger.LogError(ex, "Failed to enqueue organize move for audiobook {AudiobookId}", audiobook.Id);
-                    result.FailedToQueue++;
-                    result.SkippedDetails.Add(new OrganizeApplySkippedDto
+                    return new ObjectResult(new { message = "Organize batch worker not available" })
                     {
-                        AudiobookId = audiobook.Id,
-                        Reason = $"Failed to enqueue: {ex.Message}",
+                        StatusCode = StatusCodes.Status503ServiceUnavailable,
+                    };
+                }
+
+                if (!_organizeBatch.TryStart(items, out var batchId))
+                {
+                    return new ConflictObjectResult(new
+                    {
+                        message = "An organize batch is still queuing moves; wait for it to finish or cancel it first.",
+                        snapshot = _organizeBatch.Snapshot(),
                     });
                 }
+
+                result.BatchId = batchId.ToString();
             }
 
-            return new OkObjectResult(result);
+            result.Accepted = items.Count;
+            _logger.LogInformation(
+                "Organize apply: {Accepted} move(s) handed to the batch worker, {Skipped} skipped",
+                result.Accepted, result.Skipped);
+            return new AcceptedResult((string?)null, result);
         }
     }
 }

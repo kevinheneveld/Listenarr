@@ -83,6 +83,7 @@ import type {
   ExtractFileResult,
   OrganizeLibraryPreview,
   OrganizeLibraryApplyResult,
+  OrganizeApplyBatchSnapshot,
   OrganizeFlattenResult,
   MoveQueueSummary,
   SeriesEditionsResponse,
@@ -1863,10 +1864,22 @@ class ApiService {
     })
   }
 
+  // Hands the confirmed rows to a server-side batch (202) — the moves are
+  // queued by a background worker; poll getOrganizeApplyStatus for progress.
   async applyOrganizeLibrary(audiobookIds: number[]): Promise<OrganizeLibraryApplyResult> {
     return this.request<OrganizeLibraryApplyResult>(`/library/organize/apply`, {
       method: 'POST',
       body: JSON.stringify({ audiobookIds }),
+    })
+  }
+
+  async getOrganizeApplyStatus(): Promise<OrganizeApplyBatchSnapshot> {
+    return this.request<OrganizeApplyBatchSnapshot>(`/library/organize/apply/status`)
+  }
+
+  async cancelOrganizeApply(): Promise<OrganizeApplyBatchSnapshot> {
+    return this.request<OrganizeApplyBatchSnapshot>(`/library/organize/apply`, {
+      method: 'DELETE',
     })
   }
 
