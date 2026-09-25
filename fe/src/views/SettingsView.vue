@@ -93,6 +93,14 @@
             Audiobookshelf
           </button>
           <button
+            @click="router.push({ hash: '#maintenance' })"
+            :class="{ active: activeTab === 'maintenance' }"
+            class="tab-button"
+          >
+            <PhWrench />
+            Maintenance
+          </button>
+          <button
             @click="router.push({ hash: '#general' })"
             :class="{ active: activeTab === 'general' }"
             class="tab-button"
@@ -258,6 +266,9 @@
 
       <!-- Root Folders Tab -->
       <RootFoldersTab v-if="activeTab === 'rootfolders'" ref="rootFoldersRef" />
+
+      <!-- Maintenance Tab: organize, recovery tools, duplicates -->
+      <MaintenanceTab v-if="activeTab === 'maintenance'" />
 
       <!-- Discord Bot Tab -->
       <DiscordBotTab
@@ -429,6 +440,7 @@ import IndexersTab from '@/views/settings/IndexersTab.vue'
 import { Modal, ModalHeader, ModalFooter } from '@/components/feedback'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import GeneralSettingsTab from '@/views/settings/GeneralSettingsTab.vue'
+import MaintenanceTab from '@/views/settings/MaintenanceTab.vue'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import PasswordInput from '@/components/form/PasswordInput.vue'
 import {
@@ -440,6 +452,7 @@ import {
   PhGlobe,
   PhBooks,
   PhSliders,
+  PhWrench,
   PhPlus,
   PhSpinner,
   PhFloppyDisk,
@@ -474,6 +487,7 @@ const activeTab = ref<
   | 'notifications'
   | 'bot'
   | 'audiobookshelf'
+  | 'maintenance'
   | 'general'
 >('rootfolders')
 
@@ -485,6 +499,7 @@ const mobileTabOptions = computed(() => [
   { value: 'notifications', label: 'Notifications', icon: PhBell },
   { value: 'bot', label: 'Discord Bot', icon: PhGlobe },
   { value: 'audiobookshelf', label: 'Audiobookshelf', icon: PhBooks },
+  { value: 'maintenance', label: 'Maintenance', icon: PhWrench },
   { value: 'general', label: 'General Settings', icon: PhSliders },
   // Integrations removed
 ])
@@ -517,10 +532,13 @@ function scrollTabs(direction = 1) {
 let tabsResizeObserver: ResizeObserver | null = null
 onMounted(async () => {
   // Dashboard deep-links: /settings?section=duplicates|maintenance activates
-  // the General tab and scrolls to the section once it renders.
+  // the Maintenance tab and scrolls to the section once it renders.
   const section = typeof route.query.section === 'string' ? route.query.section : null
   if (section) {
-    activeTab.value = 'general'
+    activeTab.value = 'maintenance'
+    if (route.hash !== '#maintenance') {
+      void router.replace({ hash: '#maintenance', query: route.query })
+    }
     void nextTick(() => {
       setTimeout(() => {
         document
@@ -1160,6 +1178,7 @@ const syncTabFromHash = () => {
     | 'notifications'
     | 'bot'
     | 'audiobookshelf'
+    | 'maintenance'
     | 'general'
   if (
     hash &&
@@ -1171,6 +1190,7 @@ const syncTabFromHash = () => {
       'notifications',
       'bot',
       'audiobookshelf',
+      'maintenance',
       'general',
     ].includes(hash)
   ) {

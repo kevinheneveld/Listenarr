@@ -102,7 +102,7 @@
           <RouterLink
             class="health-chip moves"
             :class="{ zero: (moveSummary?.queued ?? 0) + (moveSummary?.processing ?? 0) === 0 }"
-            to="/settings?section=maintenance"
+            to="/settings?section=maintenance#maintenance"
           >
             <PhTruck />
             <strong>{{ (moveSummary?.queued ?? 0) + (moveSummary?.processing ?? 0) }}</strong>
@@ -111,7 +111,7 @@
           <RouterLink
             v-if="(moveSummary?.failed ?? 0) > 0"
             class="health-chip failed"
-            to="/settings?section=maintenance"
+            to="/settings?section=maintenance#maintenance"
           >
             <PhXCircle />
             <strong>{{ moveSummary?.failed }}</strong> moves failed
@@ -142,7 +142,7 @@
             <RouterLink
               class="health-chip duplicates"
               :class="{ zero: duplicates.duplicateGroups.length === 0 }"
-              to="/settings?section=duplicates"
+              to="/settings?section=duplicates#maintenance"
             >
               <PhCopySimple />
               <strong>{{ duplicates.duplicateGroups.length }}</strong> duplicate records

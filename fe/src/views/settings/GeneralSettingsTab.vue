@@ -59,8 +59,6 @@
 
         <AuthorMonitoringExclusionsSection />
 
-        <div id="settings-section-maintenance"><LibraryMaintenanceSection /></div>
-
         <VerificationSettingsSection
           :settings="localSettings"
           @update:settings="(val) => Object.assign(localSettings, val)"
@@ -70,8 +68,6 @@
           :settings="localSettings"
           @update:settings="(val) => Object.assign(localSettings, val)"
         ></AiAssistSettingsSection>
-
-        <div id="settings-section-duplicates"><DuplicatesSection /></div>
       </div>
       <!-- settings-form -->
     </div>
@@ -91,10 +87,8 @@ import FeaturesSection from '@/components/settings/FeaturesSection.vue'
 import SearchSettingsSection from '@/components/settings/SearchSettingsSection.vue'
 import AuthenticationSection from '@/components/settings/AuthenticationSection.vue'
 import AuthorMonitoringExclusionsSection from '@/components/settings/AuthorMonitoringExclusionsSection.vue'
-import LibraryMaintenanceSection from '@/components/settings/LibraryMaintenanceSection.vue'
 import VerificationSettingsSection from '@/components/settings/VerificationSettingsSection.vue'
 import AiAssistSettingsSection from '@/components/settings/AiAssistSettingsSection.vue'
-import DuplicatesSection from '@/components/settings/DuplicatesSection.vue'
 
 interface Props {
   settings: ApplicationSettings | null
