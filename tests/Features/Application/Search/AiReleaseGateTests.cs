@@ -41,11 +41,114 @@ namespace Listenarr.Tests.Features.Application.Search
                 TotalScore = 100 - i
             }).ToList();
 
-        private static IConfigurationService Settings(bool gate)
+        private static IConfigurationService Settings(bool gate, bool rank = false)
         {
             var config = new Mock<IConfigurationService>();
-            config.Setup(c => c.GetApplicationSettingsAsync()).ReturnsAsync(new ApplicationSettings { AiAssistGateSearches = gate });
+            config.Setup(c => c.GetApplicationSettingsAsync()).ReturnsAsync(new ApplicationSettings { AiAssistGateSearches = gate, AiAssistRankSearches = rank });
             return config.Object;
+        }
+
+        private static readonly Audiobook NarratedBook = new()
+        {
+            Id = 2,
+            Title = "61 Hours",
+            Authors = new List<string> { "Lee Child" },
+            Narrators = new List<string> { "Dick Hill" },
+            Runtime = 793,
+        };
+
+        private static List<QualityScore> Torrents(params (string Title, int Seeders)[] items) =>
+            items.Select((t, i) => new QualityScore
+            {
+                SearchResult = new SearchResult { Title = t.Title, Size = 600L * 1024 * 1024, Seeders = t.Seeders, DownloadType = "torrent" },
+                TotalScore = 100 - i
+            }).ToList();
+
+        [Fact]
+        public async Task PickAsync_RankOn_ValidatedNarratorPreferenceBeatsScoreLeader()
+        {
+            var ai = new AiAssistServiceMock
+            {
+                Configured = true,
+                Response = "{\"reject\":[],\"ranking\":[{\"index\":1,\"reason\":\"names the target narrator Dick Hill\"},{\"index\":0,\"reason\":\"no narrator named\"}]}"
+            };
+            var gate = new AiReleaseGate(ai, Settings(true, rank: true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(NarratedBook, Torrents(("61 Hours - Lee Child [M4B]", 10), ("Lee Child - 61 Hours (Dick Hill)", 10)));
+
+            Assert.Equal("Lee Child - 61 Hours (Dick Hill)", pick!.SearchResult.Title);
+        }
+
+        [Fact]
+        public async Task PickAsync_RankOn_UnverifiablePreferenceKeepsScoreOrder()
+        {
+            var ai = new AiAssistServiceMock
+            {
+                Configured = true,
+                Response = "{\"reject\":[],\"ranking\":[{\"index\":1,\"reason\":\"this one just looks better\"},{\"index\":0,\"reason\":\"fine\"}]}"
+            };
+            var gate = new AiReleaseGate(ai, Settings(true, rank: true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(NarratedBook, Torrents(("61 Hours - Lee Child [M4B]", 10), ("Lee Child - 61 Hours [MP3]", 10)));
+
+            Assert.Equal("61 Hours - Lee Child [M4B]", pick!.SearchResult.Title);
+        }
+
+        [Fact]
+        public async Task PickAsync_RankOn_ClaimedFactThatIsFalseKeepsScoreOrder()
+        {
+            // The model claims more seeders; the numbers say otherwise.
+            var ai = new AiAssistServiceMock
+            {
+                Configured = true,
+                Response = "{\"reject\":[],\"ranking\":[{\"index\":1,\"reason\":\"far more seeders\"},{\"index\":0,\"reason\":\"fewer seeders\"}]}"
+            };
+            var gate = new AiReleaseGate(ai, Settings(true, rank: true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(NarratedBook, Torrents(("61 Hours - Lee Child [M4B]", 50), ("Lee Child - 61 Hours [MP3]", 4)));
+
+            Assert.Equal("61 Hours - Lee Child [M4B]", pick!.SearchResult.Title);
+        }
+
+        [Fact]
+        public async Task PickAsync_RankOn_RejectsStillApplyAndRankedRejectIsIgnored()
+        {
+            var ai = new AiAssistServiceMock
+            {
+                Configured = true,
+                Response = "{\"reject\":[{\"index\":0,\"reason\":\"different book\"}],\"ranking\":[{\"index\":0,\"reason\":\"seeders\"},{\"index\":1,\"reason\":\"the target\"}]}"
+            };
+            var gate = new AiReleaseGate(ai, Settings(true, rank: true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(NarratedBook, Torrents(("Sixty-One Minutes - Someone Else", 500), ("Lee Child - 61 Hours [MP3]", 4)));
+
+            Assert.Equal("Lee Child - 61 Hours [MP3]", pick!.SearchResult.Title);
+        }
+
+        [Fact]
+        public async Task PickAsync_RankOn_GateOff_ReturnsTopPickWithoutAskingTheModel()
+        {
+            var ai = new AiAssistServiceMock
+            {
+                Configured = true,
+                Response = "{\"reject\":[],\"ranking\":[{\"index\":1,\"reason\":\"names the target narrator Dick Hill\"}]}"
+            };
+            var gate = new AiReleaseGate(ai, Settings(false, rank: true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(NarratedBook, Torrents(("61 Hours - Lee Child [M4B]", 10), ("Lee Child - 61 Hours (Dick Hill)", 10)));
+
+            Assert.Equal("61 Hours - Lee Child [M4B]", pick!.SearchResult.Title);
+        }
+
+        [Fact]
+        public async Task PickAsync_RankOn_GarbageAnswer_ReturnsTopPick()
+        {
+            var ai = new AiAssistServiceMock { Configured = true, Response = "I would pick the second one." };
+            var gate = new AiReleaseGate(ai, Settings(true, rank: true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(NarratedBook, Torrents(("61 Hours - Lee Child [M4B]", 10), ("Lee Child - 61 Hours (Dick Hill)", 10)));
+
+            Assert.Equal("61 Hours - Lee Child [M4B]", pick!.SearchResult.Title);
         }
 
         [Fact]

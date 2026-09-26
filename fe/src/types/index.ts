@@ -514,6 +514,7 @@ export interface ApplicationSettings {
   aiAssistModel?: string
   aiAssistApiKey?: string
   aiAssistGateSearches?: boolean
+  aiAssistRankSearches?: boolean
   aiAssistReviewVerifications?: boolean
   outputPath: string
   folderNamingPattern: string

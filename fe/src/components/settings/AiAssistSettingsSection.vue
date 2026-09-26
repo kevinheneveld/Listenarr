@@ -102,6 +102,27 @@
     </div>
 
     <div class="setting-row">
+      <label for="ai-assist-rank-searches">
+        <strong>Rank the shortlist by meaning</strong>
+        <small
+          >On top of screening, the model orders the top candidates using the record's narrator, the
+          runtime's expected size band, seeders and format, and states a reason for each. Its
+          preference over the score leader is honoured only when that reason checks out against the
+          facts (the release really names the narrator, really sits in the size band, really is
+          better seeded); otherwise the deterministic order stands. Every ranking is logged, so
+          leave this off until you have audited a few. Requires screening to be on.</small
+        >
+      </label>
+      <input
+        id="ai-assist-rank-searches"
+        type="checkbox"
+        :checked="settings.aiAssistRankSearches ?? false"
+        :disabled="!(settings.aiAssistGateSearches ?? true)"
+        @change="patch('aiAssistRankSearches', ($event.target as HTMLInputElement).checked)"
+      />
+    </div>
+
+    <div class="setting-row">
       <label for="ai-assist-review-verifications">
         <strong>Second opinion on inconclusive audio checks</strong>
         <small

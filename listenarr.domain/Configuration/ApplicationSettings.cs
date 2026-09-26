@@ -153,6 +153,15 @@ namespace Listenarr.Domain.Configuration
         // AI assist stays on for interactive features.
         public bool AiAssistGateSearches { get; set; } = true;
 
+        // Rank the gate's shortlist by meaning, on top of the deterministic
+        // score: the model sees narrator, runtime-vs-size, seeders and format
+        // and states a preference with a reason. A preference over the score
+        // leader is honoured only when its reason checks out against the
+        // metadata (the release really names the narrator, really sits in the
+        // runtime's size band, really is well seeded); otherwise score order
+        // stands. Off by default — audit the logged rankings before trusting it.
+        public bool AiAssistRankSearches { get; set; } = false;
+
         // Sub-toggle: when audio verification cannot settle a book (Uncertain
         // or NoSpokenCredits), hand the transcript and the stored metadata to
         // the model for a second opinion. A confident "match" promotes the
