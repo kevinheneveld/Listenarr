@@ -48,6 +48,31 @@ namespace Listenarr.Application.Audiobooks
             $@"^\s*{MarkerWords}\.?\s*\d+(\s*(of|/)\s*\d+)?\s*$",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        // Tagger placeholders written when the real value was never filled in
+        // ("<Unknown>", "Unknown Album", "Untitled"). Compared after dropping
+        // everything but letters, so bracket/case/spacing variants all match.
+        private static readonly HashSet<string> PlaceholderTags = new(StringComparer.Ordinal)
+        {
+            "unknown", "unknownalbum", "unknowntitle", "unknownartist", "unknowndisc",
+            "untitled", "notitle", "noalbum", "none", "null", "na",
+        };
+
+        /// <summary>
+        /// True for a tag that is a tagging tool's placeholder rather than a
+        /// title (live case: a chunked series pack whose seam files were
+        /// tagged album "&lt;Unknown&gt;" clustered as a six-file "book").
+        /// </summary>
+        public static bool IsPlaceholder(string? embeddedTitle)
+        {
+            if (string.IsNullOrWhiteSpace(embeddedTitle))
+            {
+                return false;
+            }
+
+            var letters = new string(embeddedTitle.Where(char.IsLetter).Select(char.ToLowerInvariant).ToArray());
+            return PlaceholderTags.Contains(letters);
+        }
+
         public static string? StripChapterMarkers(string? embeddedTitle)
         {
             if (string.IsNullOrWhiteSpace(embeddedTitle))
@@ -56,7 +81,7 @@ namespace Listenarr.Application.Audiobooks
             }
 
             var title = embeddedTitle.Trim();
-            if (OnlyMarker.IsMatch(title))
+            if (OnlyMarker.IsMatch(title) || IsPlaceholder(title))
             {
                 return null;
             }

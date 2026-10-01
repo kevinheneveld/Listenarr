@@ -182,6 +182,41 @@ namespace Listenarr.Tests.Features.Api.Features.Library
 
         [Fact]
         [Trait("Method", "PlanSplitFromProbes")]
+        [Trait("Scenario", "GroupAnnouncingTheRecordsOwnBook_StaysPut")]
+        public async Task Plan_GroupAnnouncingTheSourceRecordsTitle_IsNotSentToASameTitledDuplicate()
+        {
+            // Live case: the pack sat on an "A Storm of Swords" record, and a
+            // second record with the same title existed. The group that
+            // announces the record's own book belongs where it is.
+            var controller = _provider.GetRequiredService<LibraryController>();
+            var (book, files) = await CreateCollectionAsync();
+
+            var duplicate = await _audiobookRepository.AddAsync(new AudiobookBuilder()
+                .WithTitle("Big Collection")
+                .WithBasePath(FileService.GetTempDirectory("probe-duplicate"))
+                .Build());
+            duplicate.Authors = book.Authors;
+            await _audiobookRepository.UpdateAsync(duplicate);
+
+            var request = new LibrarySplitProbeWorkflow.ProbePlanRequest
+            {
+                Probes = new List<LibrarySplitProbeWorkflow.ProbePlanEntry>
+                {
+                    new() { FileId = files[0].Id, Transcript = "Penguin Audio presents Big Collection by A. American, read by Duke Fontaine." },
+                }
+            };
+
+            var result = await controller.PlanSplitFromProbes(book.Id, request, Workflow, CancellationToken.None);
+
+            var json = ToJson(Assert.IsType<OkObjectResult>(result).Value!);
+            var group = Assert.Single(json.GetProperty("clusters").EnumerateArray());
+            Assert.True(group.GetProperty("matchesSource").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, group.GetProperty("suggestedTargetId").ValueKind);
+            Assert.Equal(5, group.GetProperty("stats").GetProperty("fileCount").GetInt32());
+        }
+
+        [Fact]
+        [Trait("Method", "PlanSplitFromProbes")]
         [Trait("Scenario", "NoProbes_BadRequest")]
         public async Task Plan_WithoutProbes_BadRequest()
         {

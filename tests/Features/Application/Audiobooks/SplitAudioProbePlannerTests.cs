@@ -148,9 +148,11 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
 
             Assert.Equal("Escaping Home", groups[2].Label);
             Assert.Equal("Charlie's Requiem", groups[4].Label);
-            // "This is Audible" names nothing — the label falls back to the
-            // opening file's stem so the destination suggester has something.
-            Assert.Equal("Collection-001", groups[0].Label);
+            // "This is Audible" names nothing, and neither do file names that
+            // are one bulk-renamed stem: the opening file's name is shown, but
+            // it is not a label a destination may be suggested from.
+            Assert.Null(groups[0].Label);
+            Assert.Equal("Collection-001", groups[0].DisplayName);
             Assert.All(groups, g => Assert.False(string.IsNullOrWhiteSpace(g.DisplayName)));
         }
 
@@ -251,11 +253,144 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.Equal("Charlie's Requiem", single.Label);
         }
 
+        // ── Chunked series pack (live case: record 4676) ────────────────────
+        // Four books imported onto one record as 1,408 uniformly named files:
+        // each original part was chopped into equal chunks (~5 min) with one
+        // short tail. Scaled down here; ids are 1-based positions.
+
+        private static SplitAudioProbePlanner.FileShape ChunkAt(int id, double seconds, int kbps)
+            => new(id, $"A Storm of Swords-{id:D4}.mp3", (long)(seconds * kbps * 1000 / 8), seconds);
+
+        private static List<SplitAudioProbePlanner.FileShape> ChunkedPack()
+        {
+            var shapes = new List<SplitAudioProbePlanner.FileShape>();
+            void Part(int chunks, double chunkSeconds, int kbps, double tailSeconds)
+            {
+                for (var i = 0; i < chunks; i++) shapes.Add(ChunkAt(shapes.Count + 1, chunkSeconds, kbps));
+                shapes.Add(ChunkAt(shapes.Count + 1, tailSeconds, kbps));
+            }
+
+            // Book 1 at 128 kbps: two parts → files 1-11, 12-22. Chunks sit
+            // right at the old absolute 300s "small file" limit.
+            Part(10, 299.98, 128, 162);
+            Part(10, 299.98, 128, 123);
+            // Book 2 at 16 kbps: two parts with different chunk lengths →
+            // files 23-33, 34-44. The second part's last chunk is nearly
+            // full length — no short tail to give the seam away.
+            Part(10, 307.2, 16, 143);
+            Part(10, 368.6, 16, 365.8);
+            // Book 3 at 16 kbps, one part → files 45-65.
+            Part(20, 307.2, 16, 197);
+            // Book 4 at 64 kbps: long chapter files → files 66-70.
+            foreach (var seconds in new[] { 2343.0, 2350, 2401, 379, 1711 })
+            {
+                shapes.Add(ChunkAt(shapes.Count + 1, seconds, 64));
+            }
+            return shapes;
+        }
+
+        [Fact]
+        public void PickProbeCandidates_ChunkedPack_ProbesSourceSeamsNotOrdinaryChunks()
+        {
+            var candidates = SplitAudioProbePlanner.PickProbeCandidates(ChunkedPack());
+            var ids = candidates.Select(c => c.FileId).ToList();
+
+            // The opening of every original source file — and nothing else.
+            Assert.Equal(new[] { 1, 12, 23, 34, 45, 66 }, ids);
+            // File 45 has no short tail before it and no encode change: only
+            // the chunk length gives it away.
+            Assert.Equal("chunk length change (new source file)", candidates.Single(c => c.FileId == 45).Reason);
+        }
+
+        [Fact]
+        public void PickProbeCandidates_CapKeepsStructuralSeamsOverStubs()
+        {
+            // 40 stub-shaped files up front, one encode change at the very
+            // end: the cap must not spend itself on the stubs and drop the
+            // one boundary the shape actually proves.
+            var shapes = new List<SplitAudioProbePlanner.FileShape>();
+            for (var i = 0; i < 40; i++)
+            {
+                shapes.Add(File(shapes.Count + 1, 40, 18));
+                shapes.Add(File(shapes.Count + 1, 2 + i * 0.01, 1));
+            }
+            shapes.Add(File(shapes.Count + 1, 40, 60)); // encode shift
+            shapes.Add(File(shapes.Count + 1, 40, 60));
+
+            var ids = SplitAudioProbePlanner.PickProbeCandidates(shapes).Select(c => c.FileId).ToList();
+
+            Assert.Equal(SplitAudioProbePlanner.MaxProbeCandidates, ids.Count);
+            Assert.Contains(81, ids);
+        }
+
+        [Fact]
+        public void BuildGroups_PartsReannouncingTheSameTitle_StayOneBook()
+        {
+            // The real transcripts: every Audible part of book 1 re-announces
+            // the title (in whisper's shifting spelling and punctuation), the
+            // 16 kbps book-2 parts open on plain prose, and each new book is
+            // announced once.
+            var probes = new List<SplitAudioProbePlanner.ProbeResult>
+            {
+                new(1, "this is audible looks on tape presents a game of thrones book one of a song of ice and fire by george r r martin read by roy de tress prologue we should start back"),
+                new(12, "This is Audible. Booksante presents \"The Game of Thrones\" Book 1 of \"A Song of Ice and Fire\" by George R. R. Martin, read by Roy de Tries. Arya."),
+                new(23, "This is audible. Books on tape presents A Clash of Kings. Book tool of a song of ice and fire by George R. R. Martin, read by Roy Dottreece. Prologue."),
+                new(34, "Sir Roderick commanded the man to set aside a fifth, and questioned the steward closely."),
+                new(45, "This is Audible. Books on tape presents a storm of swords, book free of a song of ice and fire, by George R. R. Martin, read by Roy DeTrice. Prolog"),
+                new(66, "Random House Audio presents A Feast for Crows, Book 4 of A Song of Ice and Fire, by George R. R. Martin, read for you by John Lee."),
+            };
+
+            var groups = SplitAudioProbePlanner.BuildGroups(ChunkedPack(), probes);
+
+            Assert.Equal(4, groups.Count);
+            Assert.Equal(Enumerable.Range(1, 22), groups[0].FileIds);
+            Assert.Equal(Enumerable.Range(23, 22), groups[1].FileIds);
+            Assert.Equal(Enumerable.Range(45, 21), groups[2].FileIds);
+            Assert.Equal(Enumerable.Range(66, 5), groups[3].FileIds);
+
+            Assert.Equal("a game of thrones book one of a song of ice and fire", groups[0].Label);
+            Assert.Equal("A Clash of Kings", groups[1].Label);
+            Assert.Equal("a storm of swords", groups[2].Label);
+            Assert.Equal("A Feast for Crows", groups[3].Label);
+        }
+
+        [Fact]
+        public void BuildGroups_UniformNames_UnannouncedGroupGetsNoLabel()
+        {
+            // Bulk-renamed to one stem, a file name is the SOURCE record's
+            // title: labeling an unannounced group with it would suggest a
+            // same-titled duplicate record as its destination.
+            var shapes = ChunkedPack();
+            var probes = new List<SplitAudioProbePlanner.ProbeResult>
+            {
+                new(1, "This is Audible. Chapter one, in ordinary prose."),
+                new(23, "This is Audible. More prose, still no title."),
+            };
+
+            var groups = SplitAudioProbePlanner.BuildGroups(shapes, probes);
+
+            Assert.Equal(2, groups.Count);
+            Assert.All(groups, g => Assert.Null(g.Label));
+            Assert.Equal("A Storm of Swords-0023", groups[1].DisplayName);
+        }
+
+        [Theory]
+        [InlineData("a game of thrones book one of a song of ice and fire", "The Game of Thrones", true)]
+        [InlineData("A Game of Thrones", "The Game of Thrones", true)]
+        [InlineData("A Clash of Kings", "a storm of swords", false)]
+        [InlineData("Dune", "Dune Messiah", false)]
+        [InlineData("The Book Thief", "The Book of Lost Things", false)]
+        public void SameWork_IgnoresArticlesAndSeriesPlacement(string a, string b, bool expected)
+        {
+            Assert.Equal(expected, SplitAudioProbePlanner.SameWork(a, b));
+        }
+
         [Theory]
         [InlineData("Penguin Audio presents Escaping Home by A. American Red by Duke Fontaine", "Escaping Home")]
         [InlineData("Penguin Audio presents \"For Saking Home\" by A. American, read for you by Duke Fontaine.", "For Saking Home")]
         [InlineData("Podium Publishing Presents, Charlie's Requiem, A Going Home Novella, written by A. American", "Charlie's Requiem")]
         [InlineData("Recording Books Romance presents an unabridged recording of Dark Lover by J.R. Ward", "Dark Lover")]
+        [InlineData("Booksante presents \"The Game of Thrones\" Book 1 of \"A Song of Ice and Fire\" by George R. R. Martin", "The Game of Thrones")]
         [InlineData("This is Audible. This had been a good week.", null)]
         [InlineData("Chapter one. It was a bright cold day.", null)]
         public void TryExtractTitle_ParsesAnnouncements(string transcript, string? expected)

@@ -99,6 +99,7 @@ public static class ListenarrWorkflowRegistration
         services.AddScoped<LibrarySplitPreviewWorkflow>();
         services.AddScoped<LibraryAiSweepWorkflow>();
         services.AddScoped<LibrarySplitProbeWorkflow>();
+        services.AddScoped<LibrarySplitCompareWorkflow>();
         services.AddScoped<LibrarySeriesEditionsWorkflow>();
         services.AddScoped<LibraryDashboardStatsWorkflow>();
         services.AddScoped<LibraryMaintenanceWorkflow>();

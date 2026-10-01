@@ -139,6 +139,7 @@ public sealed class BackendArchitectureTests : BaseTests
             "Listenarr.Tests.Features.Application.Audiobooks.AudiobookAddLockManagerTests",
             "Listenarr.Tests.Features.Application.Audiobooks.AudiobookFileService_VerdictClearTests",
             "Listenarr.Tests.Features.Application.Audiobooks.AudiobookTitleFoldingTests",
+            "Listenarr.Tests.Features.Application.Audiobooks.CopyQualityComparerTests",
             "Listenarr.Tests.Features.Application.Audiobooks.DuplicateCopyAnalyzerTests",
             "Listenarr.Tests.Features.Application.Audiobooks.EmbeddedTitleNormalizerTests",
             "Listenarr.Tests.Features.Application.Audiobooks.FileClusteringTests",

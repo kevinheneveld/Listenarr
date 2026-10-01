@@ -27,9 +27,18 @@ namespace Listenarr.Application.Audiobooks
     /// numbering and noise stripped, so "friday-01_77.mp3" … "friday-44_77.mp3"
     /// form one "friday" cluster. Pure and deterministic for unit testing.
     /// </summary>
-    public static class FileClustering
+    public static partial class FileClustering
     {
-        public sealed record FileCluster(string Key, string DisplayName, List<AudiobookFile> Files);
+        /// <param name="Key">Stable cluster identity.</param>
+        /// <param name="DisplayName">Best available name for the group.</param>
+        /// <param name="Files">The group's files.</param>
+        /// <param name="Anonymous">
+        /// True when the group was cut out of a bulk-renamed sequence by its
+        /// SHAPE and nothing names it — its display name is just the shared
+        /// filename stem, which several sibling groups carry too. Callers must
+        /// not suggest a destination from such a name.
+        /// </param>
+        public sealed record FileCluster(string Key, string DisplayName, List<AudiobookFile> Files, bool Anonymous = false);
 
         // Trailing track/part markers: "-01_77", " Part 03 of 26", "_42",
         // " - 7 - 7", "(2 of 3)", and bare parenthesized/bracketed track
@@ -108,6 +117,7 @@ namespace Listenarr.Application.Audiobooks
             IReadOnlyDictionary<int, string>? embeddedTitles)
         {
             var groups = new Dictionary<string, FileCluster>(StringComparer.OrdinalIgnoreCase);
+            var flatFiles = new List<FlatFile>();
 
             foreach (var file in files)
             {
@@ -116,6 +126,21 @@ namespace Listenarr.Application.Audiobooks
 
                 string key;
                 string display;
+                if (slash <= 0)
+                {
+                    var (flatStem, flatSignature) = CleanStemWithSignature(Path.GetFileNameWithoutExtension(relative));
+                    var hasEmbed = TryEmbeddedTitleKey(
+                        embeddedTitles != null && embeddedTitles.TryGetValue(file.Id, out var tag) ? tag : null,
+                        out var flatEmbedKey,
+                        out var flatEmbedDisplay);
+                    flatFiles.Add(new FlatFile(
+                        file,
+                        "stem:" + flatStem.ToLowerInvariant() + "|" + flatSignature,
+                        flatStem,
+                        hasEmbed ? flatEmbedKey : null,
+                        hasEmbed ? flatEmbedDisplay : null));
+                }
+
                 if (slash > 0)
                 {
                     // Subdirectory wins — even over the embedded tag. A per-book subfolder is the
@@ -159,6 +184,7 @@ namespace Listenarr.Application.Audiobooks
                 cluster.Files.Add(file);
             }
 
+            SplitFlatSequencesByShape(groups, flatFiles);
             MergeUnnumberedSiblings(groups);
 
             return groups.Values

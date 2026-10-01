@@ -251,6 +251,7 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<LibrarySplitPreviewWorkflow>();
             services.AddSingleton<LibraryAiSweepWorkflow>();
             services.AddSingleton<LibrarySplitProbeWorkflow>();
+            services.AddSingleton<LibrarySplitCompareWorkflow>();
             services.AddSingleton<LibrarySeriesEditionsWorkflow>();
             services.AddSingleton<LibraryDashboardStatsWorkflow>();
             services.AddSingleton<LibraryMaintenanceWorkflow>();

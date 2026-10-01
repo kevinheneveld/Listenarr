@@ -55,6 +55,25 @@ namespace Listenarr.Application.Audiobooks
         /// <summary>Files at or under this duration smell like intro/epilogue stubs.</summary>
         public const double SmallFileMaxSeconds = 300;
 
+        /// <summary>
+        /// …but only when also well short of the collection's typical file:
+        /// in a pack chopped into uniform five-minute chunks every file sits
+        /// at the absolute limit, and "small" has to mean small for THIS
+        /// collection (live case: 1,408 ~300s chunks — the absolute test
+        /// flagged files 34-55 and spent the whole probe budget before
+        /// reaching the first real boundary).
+        /// </summary>
+        public const double SmallFileTypicalRatio = 0.75;
+
+        /// <summary>Durations within this fraction of each other are the same chunk length.</summary>
+        public const double UniformChunkTolerance = 0.01;
+
+        /// <summary>Chunk lengths differing by more than this are different source files.</summary>
+        public const double ChunkLengthShiftRatio = 0.03;
+
+        /// <summary>Neighbors that must agree before a stretch counts as uniformly chunked.</summary>
+        private const int UniformRunLength = 3;
+
         /// <summary>Fallback small-file test when duration is unknown.</summary>
         public const long SmallFileMaxBytes = (long)(2.5 * 1024 * 1024);
 
@@ -99,6 +118,21 @@ namespace Listenarr.Application.Audiobooks
         // recording/production of"). Title capture stops at the first comma or
         // sentence break so subtitles ("Charlie's Requiem, A Going Home
         // Novella, written by...") don't bloat the label.
+        // Quoted form first: whisper sometimes quotes the title and then keeps
+        // going without punctuation ('presents "The Game of Thrones" Book 1 of
+        // "A Song of Ice and Fire" by…'), which the delimiter-based pattern
+        // below cannot close.
+        private static readonly Regex QuotedPresentsTitleRegex = new(
+            @"presents,?\s+(?:an?\s+unabridged\s+\w+\s+of\s+)?[""“](?<title>[^""”]{2,80})[""”]",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // Where an announced title stops being the work's own name and starts
+        // placing it in a series ("A Game of Thrones | book one of A Song of
+        // Ice and Fire").
+        private static readonly Regex SeriesMarkerRegex = new(
+            @"\b(?:book|volume|vol|part)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private static readonly Regex PresentsTitleRegex = new(
             @"presents,?\s+(?:an?\s+unabridged\s+\w+\s+of\s+)?[""“]?(?<title>[^,.!?""”]{2,80}?)[""”]?\s*(?:,|\.|\bby\b|\bwritten by\b)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -110,32 +144,77 @@ namespace Listenarr.Application.Audiobooks
         /// </summary>
         public static List<ProbeCandidate> PickProbeCandidates(IReadOnlyList<FileShape> orderedFiles)
         {
-            var reasons = new Dictionary<int, string>(); // index -> reason (first wins)
-            void Add(int index, string reason)
+            // index -> (reason, structural). First reason wins, except that a
+            // structural one replaces a stub-shaped one: structural suspects
+            // (encode/chunk seams, whole books) mark source-file boundaries,
+            // where a stub is only a guess from size — so they outrank stubs
+            // when the cap bites.
+            var reasons = new Dictionary<int, (string Reason, bool Structural)>();
+            void Add(int index, string reason, bool structural)
             {
                 if (index < 0 || index >= orderedFiles.Count) return;
-                reasons.TryAdd(index, reason);
+                if (!reasons.TryGetValue(index, out var existing) || (structural && !existing.Structural))
+                {
+                    reasons[index] = (reason, structural);
+                }
             }
 
-            Add(0, "first file");
+            var smallMaxSeconds = SmallMaxSeconds(orderedFiles);
+
+            Add(0, "first file", true);
 
             for (var i = 0; i < orderedFiles.Count; i++)
             {
                 var f = orderedFiles[i];
-                var isSmall = f.DurationSeconds is > 0 and <= SmallFileMaxSeconds
+                var isSmall = f.DurationSeconds is > 0 && f.DurationSeconds <= smallMaxSeconds
                     || (f.DurationSeconds is null or <= 0 && f.SizeBytes is > 0 and <= SmallFileMaxBytes);
-                if (isSmall)
+                var isChunkTail = f.DurationSeconds is > 0
+                    && IsUniform(orderedFiles, i - UniformRunLength, i - 1)
+                    && f.DurationSeconds < orderedFiles[i - 1].DurationSeconds * (1 - ChunkLengthShiftRatio)
+                    && !IsUniform(orderedFiles, i, i + UniformRunLength - 1);
+                if (isChunkTail)
+                {
+                    // The short last chunk of a source file that was chopped
+                    // into equal pieces: it is the END of that file, so only
+                    // what follows can open a book.
+                    Add(i + 1, "follows the short tail of a chunked source file", true);
+                }
+                else if (isSmall)
                 {
                     // The stub itself (an intro announces the NEW book, an
                     // epilogue closes the OLD one) and whatever follows it.
-                    Add(i, "small file (intro/epilogue stub)");
-                    Add(i + 1, "follows a small file");
+                    Add(i, "small file (intro/epilogue stub)", false);
+                    Add(i + 1, "follows a small file", false);
                 }
 
                 if (f.DurationSeconds is >= WholeBookMinSeconds)
                 {
-                    Add(i, "whole-book-length file");
-                    Add(i + 1, "follows a whole-book-length file");
+                    Add(i, "whole-book-length file", true);
+                    Add(i + 1, "follows a whole-book-length file", true);
+                }
+
+                // Chunk-length change: a new run of equal-length chunks whose
+                // length differs from the run before it is a different source
+                // file — the one seam a full-length last chunk leaves behind
+                // (no short tail, same encode).
+                if (IsUniform(orderedFiles, i, i + UniformRunLength - 1))
+                {
+                    // The run before either ends right here, or one file
+                    // back with a short tail in between — but a predecessor
+                    // already at the new length is this run's own first file,
+                    // not a tail to look past.
+                    var before = IsUniform(orderedFiles, i - UniformRunLength, i - 1)
+                        ? i - UniformRunLength
+                        : !IsUniform(orderedFiles, i - 1, i)
+                          && IsUniform(orderedFiles, i - UniformRunLength - 1, i - 2) ? i - UniformRunLength - 1 : -1;
+                    if (before >= 0)
+                    {
+                        var ratio = f.DurationSeconds!.Value / orderedFiles[before].DurationSeconds!.Value;
+                        if (Math.Abs(ratio - 1) > ChunkLengthShiftRatio)
+                        {
+                            Add(i, "chunk length change (new source file)", true);
+                        }
+                    }
                 }
 
                 // Encode shift: compare this file's bytes/sec against the
@@ -148,7 +227,7 @@ namespace Listenarr.Application.Audiobooks
                     for (var j = i - 1; j >= 0 && previous == null; j--)
                     {
                         var candidate = orderedFiles[j];
-                        var candidateSmall = candidate.DurationSeconds is > 0 and <= SmallFileMaxSeconds;
+                        var candidateSmall = candidate.DurationSeconds is > 0 && candidate.DurationSeconds <= smallMaxSeconds;
                         if (!candidateSmall) previous = BytesPerSecond(candidate);
                     }
                     if (current is > 0 && previous is > 0)
@@ -156,18 +235,50 @@ namespace Listenarr.Application.Audiobooks
                         var ratio = current.Value / previous.Value;
                         if (ratio >= EncodeShiftRatio || ratio <= 1.0 / EncodeShiftRatio)
                         {
-                            Add(i, "encoding change (different source rip)");
+                            Add(i, "encoding change (different source rip)", true);
                         }
                     }
                 }
             }
 
             return reasons
-                .OrderBy(kv => kv.Key)
+                .OrderBy(kv => kv.Value.Structural ? 0 : 1)
+                .ThenBy(kv => kv.Key)
                 .Take(MaxProbeCandidates)
+                .OrderBy(kv => kv.Key)
                 .Select(kv => new ProbeCandidate(
-                    orderedFiles[kv.Key].Id, orderedFiles[kv.Key].Name, kv.Value))
+                    orderedFiles[kv.Key].Id, orderedFiles[kv.Key].Name, kv.Value.Reason))
                 .ToList();
+        }
+
+        /// <summary>
+        /// The duration at or under which a file counts as a stub: the
+        /// absolute limit, lowered for collections whose typical file is
+        /// itself that short.
+        /// </summary>
+        private static double SmallMaxSeconds(IReadOnlyList<FileShape> files)
+        {
+            var durations = files
+                .Select(f => f.DurationSeconds ?? 0)
+                .Where(d => d > 0)
+                .OrderBy(d => d)
+                .ToList();
+            if (durations.Count == 0) return SmallFileMaxSeconds;
+            return Math.Min(SmallFileMaxSeconds, durations[durations.Count / 2] * SmallFileTypicalRatio);
+        }
+
+        /// <summary>True when files [from..to] all have known durations within the chunk tolerance of the first.</summary>
+        private static bool IsUniform(IReadOnlyList<FileShape> files, int from, int to)
+        {
+            if (from < 0 || to >= files.Count || to <= from) return false;
+            var reference = files[from].DurationSeconds;
+            if (reference is null or <= 0) return false;
+            for (var i = from + 1; i <= to; i++)
+            {
+                var d = files[i].DurationSeconds;
+                if (d is null or <= 0 || Math.Abs(d.Value / reference.Value - 1) > UniformChunkTolerance) return false;
+            }
+            return true;
         }
 
         private static double? BytesPerSecond(FileShape f)
@@ -224,7 +335,36 @@ namespace Listenarr.Application.Audiobooks
             }
             boundaries.TryAdd(0, transcriptById.GetValueOrDefault(orderedFiles.Count > 0 ? orderedFiles[0].Id : -1) ?? string.Empty);
 
-            var starts = boundaries.Keys.OrderBy(i => i).ToList();
+            // A multi-part retail book re-announces its title at the top of
+            // every part ("…presents A Game of Thrones, Book One…" four times
+            // over). A boundary that only repeats the running group's title
+            // is the same book continuing, not a new one.
+            var starts = new List<int>();
+            string? runningTitle = null;
+            foreach (var index in boundaries.Keys.OrderBy(i => i))
+            {
+                var announced = transcriptById.TryGetValue(orderedFiles[index].Id, out var heard)
+                    ? TryExtractTitle(heard)
+                    : null;
+                if (starts.Count > 0 && announced != null && runningTitle != null && SameWork(announced, runningTitle))
+                {
+                    continue;
+                }
+                starts.Add(index);
+                runningTitle = announced;
+            }
+
+            // File names only label a group when they differ across the
+            // collection. Bulk-renamed to one stem ("Title-001…NNN"), every
+            // name is the SOURCE record's title — suggesting a destination
+            // from it would send each unannounced group to whichever other
+            // record shares that title.
+            var namesCarrySignal = orderedFiles
+                .Select(f => FileClustering.CleanStem(FileNameStem(f.Name) ?? string.Empty))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Skip(1)
+                .Any();
+
             var groups = new List<ProbeGroup>();
             for (var g = 0; g < starts.Count; g++)
             {
@@ -244,12 +384,13 @@ namespace Listenarr.Application.Audiobooks
                 // No announced title: the opening file's own name is a far
                 // better label than "Part N" — it usually names the book, so
                 // the destination suggester can work with it.
-                label ??= FileNameStem(orderedFiles[start].Name);
+                var openingName = FileNameStem(orderedFiles[start].Name);
+                if (namesCarrySignal) label ??= openingName;
                 var boundaryTranscript = openingTranscript ?? boundaries[start];
 
                 groups.Add(new ProbeGroup(
                     fileIds,
-                    label ?? $"Part {groups.Count + 1}",
+                    label ?? openingName ?? $"Part {groups.Count + 1}",
                     label,
                     string.IsNullOrWhiteSpace(boundaryTranscript) ? null : Head(boundaryTranscript, 240)));
             }
@@ -272,10 +413,36 @@ namespace Listenarr.Application.Audiobooks
         /// </summary>
         public static string? TryExtractTitle(string transcript)
         {
-            var match = PresentsTitleRegex.Match(transcript);
+            var match = QuotedPresentsTitleRegex.Match(transcript);
+            if (!match.Success) match = PresentsTitleRegex.Match(transcript);
             if (!match.Success) return null;
             var title = match.Groups["title"].Value.Trim().Trim('"', '“', '”');
             return title.Length is >= 2 and <= 80 ? title : null;
+        }
+
+        /// <summary>
+        /// True when two announced titles name the same work: equal once
+        /// leading articles and any series placement ("…book one of A Song of
+        /// Ice and Fire") are set aside — whisper hears "A Game of Thrones"
+        /// and "The Game of Thrones" for the same book, and only sometimes
+        /// punctuates before "Book One". Sibling titles that merely share a
+        /// prefix ("Dune" / "Dune Messiah") stay distinct.
+        /// </summary>
+        public static bool SameWork(string announcedA, string announcedB)
+        {
+            var a = WorkName(announcedA);
+            var b = WorkName(announcedB);
+            return a.Length > 0 && string.Equals(a, b, StringComparison.Ordinal);
+        }
+
+        private static string WorkName(string announced)
+        {
+            var marker = SeriesMarkerRegex.Match(announced);
+            var own = marker.Success && marker.Index > 0 ? announced[..marker.Index] : announced;
+            var tokens = TitleMatcher.Normalize(own)
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .SkipWhile(t => t is "a" or "an" or "the");
+            return string.Join(' ', tokens);
         }
 
         private static string Head(string text, int chars = 160)

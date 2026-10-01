@@ -324,6 +324,153 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
             Assert.Equal(3, clusters[0].Files.Count);
         }
 
+        // ── Shape-aware splitting of bulk-renamed sequences ─────────────────
+        // Live case (record 4676): a four-book series pack imported onto one
+        // record and renamed "A Storm of Swords-0001…1408". Three rips back
+        // to back (128 / 16 / 64 kbps), chopped into five-minute chunks; only
+        // the first and last chunk of each original part kept its tags.
+
+        private const string PackBase = "/audiobooks/George R. R. Martin/A Song of Ice and Fire/A Storm of Swords";
+
+        private static AudiobookFile Chunk(int number, int kbps, int sampleRate, double seconds = 300) => new()
+        {
+            Id = number,
+            Path = $"{PackBase}/A Storm of Swords-{number:D3}.mp3",
+            Bitrate = kbps * 1000,
+            SampleRate = sampleRate,
+            DurationSeconds = seconds,
+            Size = (long)(kbps * 1000 / 8 * seconds),
+        };
+
+        /// <summary>
+        /// 1-12: book one at 128 kbps in three "parts" (tags on each part's
+        /// first/last chunk only); 13-22: an untagged 16 kbps rip; 23-27: a
+        /// fully tagged 64 kbps book.
+        /// </summary>
+        private static (List<AudiobookFile> Files, Dictionary<int, string> Tags) SeriesPack()
+        {
+            var files = new List<AudiobookFile>();
+            for (var n = 1; n <= 12; n++) files.Add(Chunk(n, 128, 44100));
+            for (var n = 13; n <= 22; n++) files.Add(Chunk(n, 16, 16000, 307));
+            for (var n = 23; n <= 27; n++) files.Add(Chunk(n, 64, 44100, 2340));
+
+            var tags = new Dictionary<int, string>
+            {
+                [1] = "Book1", [4] = "Book1",
+                [5] = "AGameofThrones", [8] = "AGameofThrones",
+                [9] = "AGameofThrones", [12] = "AGameofThrones",
+            };
+            for (var n = 23; n <= 27; n++) tags[n] = "A Feist of Crows";
+            return (files, tags);
+        }
+
+        [Fact]
+        public void Cluster_BulkRenamedSeriesPack_SplitsAtEncodeChangesIntoConsecutiveGroups()
+        {
+            var (files, tags) = SeriesPack();
+
+            var clusters = FileClustering.Cluster(files, PackBase, tags);
+
+            Assert.Equal(3, clusters.Count);
+            Assert.All(clusters, c =>
+            {
+                // Every group is one unbroken run of the sequence.
+                var ids = c.Files.Select(f => f.Id).OrderBy(i => i).ToList();
+                Assert.Equal(Enumerable.Range(ids[0], ids.Count), ids);
+            });
+
+            var first = Assert.Single(clusters, c => c.Files.Any(f => f.Id == 1));
+            Assert.Equal(Enumerable.Range(1, 12), first.Files.Select(f => f.Id));
+            var second = Assert.Single(clusters, c => c.Files.Any(f => f.Id == 13));
+            Assert.Equal(Enumerable.Range(13, 10), second.Files.Select(f => f.Id));
+            var third = Assert.Single(clusters, c => c.Files.Any(f => f.Id == 23));
+            Assert.Equal(Enumerable.Range(23, 5), third.Files.Select(f => f.Id).OrderBy(i => i));
+        }
+
+        [Fact]
+        public void Cluster_TagResidueOnChunkSeams_NamesTheGroupInsteadOfFormingOne()
+        {
+            // The handful of tagged seam files must not become their own
+            // non-consecutive "books" ("Book1": files 1 and 4) — they are
+            // absorbed, and the commonest tag names the group.
+            var (files, tags) = SeriesPack();
+
+            var clusters = FileClustering.Cluster(files, PackBase, tags);
+
+            Assert.DoesNotContain(clusters, c => c.DisplayName == "Book1");
+            var first = Assert.Single(clusters, c => c.Files.Any(f => f.Id == 1));
+            Assert.Equal("AGameofThrones", first.DisplayName);
+            Assert.False(first.Anonymous);
+        }
+
+        [Fact]
+        public void Cluster_UntaggedEncodeRun_IsAnonymous_AndTaggedBookKeepsItsName()
+        {
+            // The 16 kbps run has nothing but the bulk-rename's name, which
+            // its sibling groups share — it must be flagged so no destination
+            // is suggested from "A Storm of Swords". The densely tagged book
+            // clusters by its tag exactly as before.
+            var (files, tags) = SeriesPack();
+
+            var clusters = FileClustering.Cluster(files, PackBase, tags);
+
+            var untagged = Assert.Single(clusters, c => c.Files.Any(f => f.Id == 13));
+            Assert.True(untagged.Anonymous);
+            Assert.Equal("A Storm of Swords", untagged.DisplayName);
+
+            var tagged = Assert.Single(clusters, c => c.Files.Any(f => f.Id == 23));
+            Assert.False(tagged.Anonymous);
+            Assert.Equal("A Feist of Crows", tagged.DisplayName);
+            Assert.StartsWith("embed:", tagged.Key);
+        }
+
+        [Fact]
+        public void Cluster_UniformUntaggedSequence_IsLeftExactlyAsBefore()
+        {
+            // One encode, no tags: nothing learned, so the plain stem cluster
+            // (and its key) survives untouched.
+            var files = Enumerable.Range(1, 8).Select(n => Chunk(n, 64, 44100)).ToList();
+
+            var cluster = Assert.Single(FileClustering.Cluster(files, PackBase));
+
+            Assert.Equal("stem:a storm of swords|-#", cluster.Key);
+            Assert.False(cluster.Anonymous);
+            Assert.Equal(8, cluster.Files.Count);
+        }
+
+        [Fact]
+        public void Cluster_OneOddEncodeFile_DoesNotSplitABook()
+        {
+            // A re-encoded intro or a single odd chapter is not a book
+            // boundary: runs shorter than three files fold into a neighbor.
+            var files = new List<AudiobookFile> { Chunk(1, 32, 22050, 40) };
+            for (var n = 2; n <= 6; n++) files.Add(Chunk(n, 64, 44100));
+            files.Add(Chunk(7, 128, 44100));
+            for (var n = 8; n <= 12; n++) files.Add(Chunk(n, 64, 44100));
+
+            var cluster = Assert.Single(FileClustering.Cluster(files, PackBase));
+
+            Assert.Equal(12, cluster.Files.Count);
+        }
+
+        [Fact]
+        public void Cluster_MostlyTaggedSingles_WithOneUntaggedFile_StayClusteredByTag()
+        {
+            // A story collection where each file carries its own title and
+            // one file lost its tag: the tags ARE the identities there, not
+            // chunking residue — the untagged file must not swallow them.
+            var files = Enumerable.Range(1, 5).Select(n => Chunk(n, 64, 44100, 1500)).ToList();
+            var tags = new Dictionary<int, string>
+            {
+                [1] = "The Star", [2] = "The Sentinel", [4] = "Rescue Party", [5] = "The Nine Billion Names of God",
+            };
+
+            var clusters = FileClustering.Cluster(files, PackBase, tags);
+
+            Assert.Equal(5, clusters.Count);
+            Assert.Contains(clusters, c => c.DisplayName == "The Sentinel" && c.Files.Count == 1);
+        }
+
         [Theory]
         [InlineData("The Rolling Stones (10)", "The Rolling Stones")]
         [InlineData("Track [07]", "Track")]

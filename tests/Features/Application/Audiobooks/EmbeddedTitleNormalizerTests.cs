@@ -47,6 +47,27 @@ namespace Listenarr.Tests.Features.Application.Audiobooks
         }
 
         [Theory]
+        [InlineData("<Unknown>")]                                      // the live seam-file album tag
+        [InlineData("Unknown Album")]
+        [InlineData("[untitled]")]
+        [InlineData("N/A")]
+        public void TaggerPlaceholders_CarryNoBookIdentity(string tagged)
+        {
+            Assert.True(EmbeddedTitleNormalizer.IsPlaceholder(tagged));
+            Assert.Null(EmbeddedTitleNormalizer.StripChapterMarkers(tagged));
+        }
+
+        [Theory]
+        [InlineData("The Unknown")]
+        [InlineData("Unknown Soldier")]
+        [InlineData("None of the Above")]
+        public void TitlesThatMerelyContainAPlaceholderWord_AreKept(string title)
+        {
+            Assert.False(EmbeddedTitleNormalizer.IsPlaceholder(title));
+            Assert.Equal(title, EmbeddedTitleNormalizer.StripChapterMarkers(title));
+        }
+
+        [Theory]
         [InlineData("The Hard Way")]                                   // untouched
         [InlineData("Catch-22")]                                       // hyphen-number is the TITLE
         [InlineData("Fahrenheit 451")]                                 // trailing number without marker word

@@ -176,7 +176,9 @@ namespace Listenarr.Api.Features.Library
                 return new BadRequestObjectResult(new { message = "At least one probe transcript is required" });
             }
 
-            var shapes = await OrderedShapesAsync(id, ct);
+            var files = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
+            var fileById = files.ToDictionary(f => f.Id);
+            var shapes = OrderedShapes(files);
             var nameById = shapes.ToDictionary(s => s.Id, s => s.Name);
             var groups = SplitAudioProbePlanner.BuildGroups(shapes, probes);
 
@@ -196,12 +198,21 @@ namespace Listenarr.Api.Features.Library
             var titleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Title ?? string.Empty);
             var subtitleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Subtitle ?? string.Empty);
 
+            // The record being split competes too, first so it wins a tie: a
+            // group announcing the record's own book stays where it is rather
+            // than moving to a same-titled duplicate record.
+            var sameAuthorWithSource = new List<(int, string)>();
+            if (!string.IsNullOrWhiteSpace(audiobook.Title)) sameAuthorWithSource.Add((id, audiobook.Title!));
+            sameAuthorWithSource.AddRange(sameAuthor);
+
             var response = groups.Select((g, index) =>
             {
                 var suggested = g.Label == null
                     ? null
-                    : SplitDestinationSuggester.Suggest(g.Label, sameAuthor)
+                    : SplitDestinationSuggester.Suggest(g.Label, sameAuthorWithSource)
                         ?? SplitDestinationSuggester.Suggest(g.Label, others);
+                var matchesSource = suggested == id;
+                if (matchesSource) suggested = null;
                 // Digit guard: a spoken label "… Volume 1" must never be
                 // suggested onto a record whose title/subtitle says another
                 // number (see the same guard in the preview workflow).
@@ -224,6 +235,9 @@ namespace Listenarr.Api.Features.Library
                         .Where(n => n.Length > 0)
                         .ToList(),
                     boundaryTranscript = g.BoundaryTranscript,
+                    stats = SplitGroupStats.Describe(
+                        g.FileIds.Where(fileById.ContainsKey).Select(fid => fileById[fid]).ToList()),
+                    matchesSource,
                     suggestedTargetId = suggested,
                     suggestedTargetTitle = suggested.HasValue && titleById.TryGetValue(suggested.Value, out var t) ? t : null,
                     suggestionSource = suggested == null ? null : "audio-probe"
@@ -238,8 +252,10 @@ namespace Listenarr.Api.Features.Library
         }
 
         private async Task<List<SplitAudioProbePlanner.FileShape>> OrderedShapesAsync(int id, CancellationToken ct)
+            => OrderedShapes(await _audioFileRepository.GetByAudiobookIdAsync(id, ct));
+
+        private static List<SplitAudioProbePlanner.FileShape> OrderedShapes(IEnumerable<AudiobookFile> files)
         {
-            var files = await _audioFileRepository.GetByAudiobookIdAsync(id, ct);
             return AudiobookFileOrdering.InNaturalOrder(files)
                 .Select(f => new SplitAudioProbePlanner.FileShape(
                     f.Id,

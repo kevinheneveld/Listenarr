@@ -78,5 +78,25 @@ namespace Listenarr.Api.Features.Library
         {
             return await workflow.PlanAsync(id, request, ct);
         }
+
+        /// <summary>
+        /// Weigh a split group against the files already on its chosen
+        /// destination: is the incoming copy better quality, worse, the same
+        /// download again, or not the same audio at all? Read-only — the
+        /// answer backs the "Replace existing" action.
+        /// </summary>
+        /// <param name="id">Audiobook being split (owner of the group's files).</param>
+        /// <param name="request">Destination record and the group's file ids.</param>
+        /// <param name="workflow">Injected compare workflow.</param>
+        /// <param name="ct">Cancellation token bound to the request.</param>
+        [HttpPost("{id}/split/compare")]
+        public async Task<IActionResult> CompareSplitGroup(
+            int id,
+            [FromBody] LibrarySplitCompareWorkflow.CompareRequest request,
+            [FromServices] LibrarySplitCompareWorkflow workflow,
+            CancellationToken ct)
+        {
+            return await workflow.CompareAsync(id, request, ct);
+        }
     }
 }

@@ -102,7 +102,7 @@ namespace Listenarr.Api.Features.Library
                             // case: a 131-file collection 504'd). Reopening the
                             // modal must not pay that again. Empty result is cached
                             // too — tagless files stay tagless.
-                            var cacheKey = $"split_tag2_{target.path}_{_fileSystem.GetFileLength(target.path)}";
+                            var cacheKey = $"split_tag3_{target.path}_{_fileSystem.GetFileLength(target.path)}";
                             if (!_cache.TryGetValue(cacheKey, out (string Album, string Title)? tags))
                             {
                                 var meta = await _ffmpegService.RunFfprobeAsync(target.path);
@@ -112,9 +112,21 @@ namespace Listenarr.Api.Features.Library
                                 // groups, one per chapter). Strip the chapter
                                 // marker; a tag that is ONLY a chapter marker
                                 // ("Chapter 12") carries no book identity at all.
+                                //
+                                // The probe substitutes the FILE NAME for a
+                                // missing Title tag; that is not a tag, and in
+                                // a bulk-renamed collection it made every
+                                // tagless file look tagged with the parent
+                                // record's name.
+                                var title = string.Equals(
+                                    meta?.Title,
+                                    Path.GetFileNameWithoutExtension(target.path),
+                                    StringComparison.OrdinalIgnoreCase)
+                                    ? null
+                                    : meta?.Title;
                                 tags = (
                                     EmbeddedTitleNormalizer.StripChapterMarkers(meta?.Album) ?? string.Empty,
-                                    EmbeddedTitleNormalizer.StripChapterMarkers(meta?.Title) ?? string.Empty);
+                                    EmbeddedTitleNormalizer.StripChapterMarkers(title) ?? string.Empty);
                                 _cache.Set(cacheKey, tags, TimeSpan.FromHours(6));
                             }
                             if (tags is { } t && (t.Album.Length > 0 || t.Title.Length > 0))
@@ -181,13 +193,31 @@ namespace Listenarr.Api.Features.Library
             var titleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Title ?? string.Empty);
             var subtitleById = all.Where(a => a.Id != id).ToDictionary(a => a.Id, a => a.Subtitle ?? string.Empty);
 
-            var deterministic = clusters.Select(cluster => new
+            // The record being split competes as a candidate too, listed
+            // first so it wins a tie: a group named for the record's own book
+            // belongs where it is, not on a same-titled duplicate record.
+            var sameAuthorWithSource = new List<(int, string)>();
+            if (!string.IsNullOrWhiteSpace(audiobook.Title)) sameAuthorWithSource.Add((id, audiobook.Title!));
+            sameAuthorWithSource.AddRange(sameAuthor);
+
+            var deterministic = clusters.Select(cluster =>
             {
-                cluster.Key,
-                cluster.DisplayName,
-                cluster.Files,
-                Suggested = SplitDestinationSuggester.Suggest(cluster.DisplayName, sameAuthor)
-                            ?? SplitDestinationSuggester.Suggest(cluster.DisplayName, others)
+                // A shape-cut group carries only the bulk-rename's name — no
+                // suggestion beats one drawn from a name its siblings share.
+                var suggested = cluster.Anonymous
+                    ? null
+                    : SplitDestinationSuggester.Suggest(cluster.DisplayName, sameAuthorWithSource)
+                      ?? SplitDestinationSuggester.Suggest(cluster.DisplayName, others);
+                var matchesSource = suggested == id;
+                return new
+                {
+                    cluster.Key,
+                    cluster.DisplayName,
+                    cluster.Files,
+                    cluster.Anonymous,
+                    MatchesSource = matchesSource,
+                    Suggested = matchesSource ? null : suggested
+                };
             }).ToList();
 
             // Optional AI pass: a language model reviews every group against
@@ -217,6 +247,8 @@ namespace Listenarr.Api.Features.Library
                         d.DisplayName, titleById.GetValueOrDefault(d.Suggested.Value));
 
                 var fromAi = !deterministicStrong
+                    && !d.Anonymous
+                    && !d.MatchesSource
                     && aiSuggestions != null && aiSuggestions.TryGetValue(d.Key, out var aiTarget);
                 var suggested = fromAi && aiSuggestions != null ? aiSuggestions[d.Key] : d.Suggested;
 
@@ -255,10 +287,12 @@ namespace Listenarr.Api.Features.Library
                     key = d.Key,
                     displayName = d.DisplayName,
                     fileIds = d.Files.Select(f => f.Id).ToList(),
-                    fileNames = d.Files
+                    fileNames = AudiobookFileOrdering.InNaturalOrder(d.Files)
                         .Select(f => Path.GetFileName(f.Path ?? string.Empty))
-                        .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
                         .ToList(),
+                    stats = SplitGroupStats.Describe(d.Files),
+                    anonymous = d.Anonymous,
+                    matchesSource = d.MatchesSource,
                     suggestedTargetId = suggested,
                     suggestedTargetTitle = suggested.HasValue && titleById.TryGetValue(suggested.Value, out var t) ? t : null,
                     suggestionSource = suggested == null ? null : (fromAi ? "ai" : "title-match")

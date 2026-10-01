@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+import type { SplitGroupStats, SplitComparison } from '@/utils/splitGroups'
 import type {
   SearchResult,
   Download,
@@ -1768,6 +1769,9 @@ class ApiService {
       displayName: string
       fileIds: number[]
       fileNames: string[]
+      stats?: SplitGroupStats | null
+      anonymous?: boolean
+      matchesSource?: boolean
       suggestedTargetId?: number | null
       suggestedTargetTitle?: string | null
     }>
@@ -1810,6 +1814,8 @@ class ApiService {
       fileIds: number[]
       fileNames: string[]
       boundaryTranscript?: string | null
+      stats?: SplitGroupStats | null
+      matchesSource?: boolean
       suggestedTargetId?: number | null
       suggestedTargetTitle?: string | null
     }>
@@ -1817,6 +1823,19 @@ class ApiService {
     return this.request(`/library/${id}/split/probe/plan`, {
       method: 'POST',
       body: JSON.stringify({ probes }),
+    })
+  }
+
+  // Weigh a split group against what its destination already holds: better,
+  // worse, the same download again, or not the same audio. Read-only.
+  async compareSplitGroup(
+    id: number,
+    targetAudiobookId: number,
+    fileIds: number[],
+  ): Promise<SplitComparison> {
+    return this.request(`/library/${id}/split/compare`, {
+      method: 'POST',
+      body: JSON.stringify({ targetAudiobookId, fileIds }),
     })
   }
 
