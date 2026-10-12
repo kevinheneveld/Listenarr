@@ -895,7 +895,10 @@
             </label>
           </div>
           <p v-if="deleteCapabilities?.reason" class="warning-text">
-            {{ deleteCapabilities.reason }} The audiobook can still be removed from the library.
+            {{ deleteCapabilities.reason }}
+            <span v-if="deleteCapabilities.canRemoveFromLibrary">
+              The audiobook can still be removed from the library.
+            </span>
           </p>
         </div>
       </template>
@@ -974,7 +977,6 @@ import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { showConfirm } from '@/composables/useConfirm'
-import { preparePhysicalDeleteRetry } from '@/composables/useMutationSemanticsConfirmation'
 import { getPlaceholderUrl } from '@/utils/placeholder'
 import { buildWorkKey } from '@/utils/seriesDisplay'
 import CustomSelect from '@/components/form/CustomSelect.vue'
@@ -2632,7 +2634,7 @@ function unavailableDeleteCapabilities(): AudiobookDeleteCapabilities {
     canRemoveFromLibrary: true,
     canDeleteTrackedFiles: false,
     canDeleteFolder: false,
-    reason: 'Physical-delete safety could not be checked.',
+    reason: 'Filesystem delete capability could not be checked.',
     fallbackAction: 'RemoveFromLibraryOnly',
   }
 }
@@ -2654,10 +2656,6 @@ async function executeDelete() {
     await libraryStore.removeFromLibrary(deleteTarget.value.id, {
       deleteFiles: shouldDeleteFiles,
       deleteFolder: shouldDeleteFolder,
-      retryAfterBlockedMutation: shouldDeleteFiles
-        ? (error) =>
-            preparePhysicalDeleteRetry(error, deleteTarget.value!.id, deleteTarget.value?.basePath)
-        : undefined,
     })
   } catch (err) {
     errorTracking.captureException(err as Error, {

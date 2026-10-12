@@ -251,7 +251,7 @@ vi.mock('@/services/api', () => {
         verifiedSourceDeletionEnabled: false,
         sourceIsManagedRoot: false,
         sourceCleanupMessage:
-          'Source files will be retained because verified source deletion is not enabled.',
+          'Source files will be retained because safe source cleanup is unavailable.',
       }
     }),
   }

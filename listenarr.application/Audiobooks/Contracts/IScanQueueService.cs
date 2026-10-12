@@ -38,7 +38,6 @@ namespace Listenarr.Application.Audiobooks.Contracts
         Audiobook Audiobook,
         string? Path = null,
         PathIdentitySnapshot? PathIdentity = null,
-        ScanPathPhysicalIdentity? PhysicalIdentity = null,
         string? CorrelationId = null,
         string? DownloadId = null,
         bool IsAuthoritativeScope = true,
@@ -57,8 +56,7 @@ namespace Listenarr.Application.Audiobooks.Contracts
             bool skipMissingBasePathCleanup = false);
         Task<Guid?> EnqueueMoveHandoffScanAsync(
             Audiobook audiobook,
-            MoveScanHandoffClaim claim,
-            ScanPathPhysicalIdentity physicalIdentity);
+            MoveScanHandoffClaim claim);
         Task<Guid?> RequeueScanAsync(Guid jobId);
         Task CommitTerminalJobStatusAsync(
             Guid jobId,

@@ -26,7 +26,6 @@ internal sealed record AudiobookContentMoveRequest(
     MoveLeaseToken LeaseToken,
     string? SourceCleanupBoundary = null,
     LibraryDirectoryOwnership? TargetDirectoryOwnership = null,
-    IReadOnlyDictionary<string, string>? SourcePhysicalObjectIdentities = null,
     Func<double, string, CancellationToken, Task>? ProgressReporter = null,
     MarkerlessMoveBoundaryAuthorizationState? BoundaryAuthorization = null,
     MoveSourceCleanupMode SourceCleanupMode = MoveSourceCleanupMode.RetainSource,
@@ -37,6 +36,7 @@ internal sealed record AudiobookContentMoveRequest(
     int? SourceStorageContractRevision = null,
     int? TargetStorageContractRevision = null,
     bool ForceCopyAndRetainSource = false,
+    Func<AudiobookContentMoveResult, CancellationToken, Task>? CommitOwnerMetadataAsync = null,
     bool ReplaceStubTarget = false)
 {
     public string LeaseOwner => LeaseToken.Owner;
@@ -51,7 +51,8 @@ internal sealed record AudiobookContentMoveResult(
     bool SourceCleanupCompleted,
     bool SourceRetained,
     IReadOnlyDictionary<string, string> TargetPhysicalObjectIdentities,
-    MarkerlessTargetVerificationLease? TargetVerificationLease = null);
+    MarkerlessTargetVerificationLease? TargetVerificationLease = null,
+    MarkerlessSourceRetirementLease? SourceAncestorRetirementLease = null);
 
 internal sealed class MoveNeedsAttentionException(string message) : IOException(message);
 
@@ -88,7 +89,10 @@ internal sealed partial class AudiobookContentMoveService(
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
         await EnsureLeaseOwnedAsync(request.JobId, request.LeaseToken, cancellationToken);
-        await EnsureCurrentExecutionProtocolAsync(request.JobId, cancellationToken);
+        await EnsureCurrentExecutionProtocolAsync(
+            request.JobId,
+            request.LeaseToken,
+            cancellationToken);
 
         var source = NormalizeMoveDirectoryEndpoint(request.Source);
         var target = NormalizeMoveDirectoryEndpoint(request.Target);

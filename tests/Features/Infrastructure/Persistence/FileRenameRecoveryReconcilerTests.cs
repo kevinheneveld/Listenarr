@@ -11,7 +11,7 @@ namespace Listenarr.Tests.Features.Infrastructure.Persistence;
 public sealed class FileRenameRecoveryReconcilerTests : BaseTests
 {
     [Fact]
-    public async Task ReconcileAsync_CommittedCompanionPublication_RetiresExactSource()
+    public async Task ReconcileAsync_CommittedCompanionPublication_RetainsSourceAfterRestart()
     {
         var root = FileService.GetTempDirectory("companion-registration-recovery");
         await AddAuthorizedRootAsync(root);
@@ -56,14 +56,17 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         await _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
             .ReconcileAsync();
 
-        Assert.False(File.Exists(source));
+        Assert.True(File.Exists(source));
+        Assert.Equal("cover", await File.ReadAllTextAsync(source));
         Assert.Equal("cover", await File.ReadAllTextAsync(destination));
         var factory = _provider.GetRequiredService<
             IDbContextFactory<ListenArrDbContext>>();
         await using var db = await factory.CreateDbContextAsync();
         var journal = await db.FileMutationJournals.SingleAsync(candidate =>
             candidate.OperationId == operationId);
-        Assert.Equal(FileMutationJournalState.Completed, journal.State);
+        Assert.Equal(
+            FileMutationJournalState.CompletedSourceRetained,
+            journal.State);
         Assert.Equal(audiobook.Id, journal.AudiobookId);
         Assert.Equal(
             FileMutationOwner.RegistrationCompanionFile,
@@ -125,6 +128,148 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         await AssertRecoveredAsync(scenario);
     }
 
+    [Theory]
+    [InlineData(FileMutationProtocol.MarkerlessDatabaseState)]
+    [InlineData(FileMutationProtocol.ParentGenerationMarkerlessDatabaseState)]
+    public async Task ReconcileAsync_LegacyPrecommitMove_AdoptsTargetAndRetainsSource(
+        int protocolVersion)
+    {
+        var scenario = await CreateScenarioAsync(
+            $"legacy-precommit-retain-{protocolVersion}");
+        await File.WriteAllTextAsync(scenario.Destination, "audio");
+
+        var factory = _provider
+            .GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.FileMutationJournals.Add(new FileMutationJournal
+            {
+                OperationId = scenario.OperationId,
+                ProtocolVersion = protocolVersion,
+                Action = FileAction.Move,
+                SourcePath = scenario.Source,
+                DestinationPath = scenario.Destination,
+                SourceParentDirectoryObjectIdentity = "legacy-source-parent",
+                DestinationParentDirectoryObjectIdentity =
+                    "legacy-destination-parent",
+                SourcePhysicalObjectIdentity = scenario.SourceIdentity,
+                TargetPhysicalObjectIdentity = "legacy-target",
+                SourceLength = 5,
+                SourceSha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes("audio"))),
+                State = FileMutationJournalState.SourceDeletionAuthorized,
+                AudiobookId = scenario.AudiobookId,
+                AudiobookFileId = scenario.FileId
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
+            .ReconcileAsync();
+
+        Assert.True(File.Exists(scenario.Source));
+        Assert.Equal("audio", await File.ReadAllTextAsync(scenario.Source));
+        Assert.Equal("audio", await File.ReadAllTextAsync(scenario.Destination));
+        await AssertStoredPathAsync(scenario.FileId, scenario.Destination);
+        await AssertJournalStateAsync(
+            scenario.OperationId,
+            FileMutationJournalState.OwnerMetadataReconciled);
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_MissingAudiobookOwner_IsScopedNeedsAttention()
+    {
+        var root = FileService.GetTempDirectory("rename-recovery-missing-owner");
+        var source = Path.Join(root, "source.m4b");
+        var destination = Path.Join(root, "destination.m4b");
+        await File.WriteAllTextAsync(source, "audio");
+        await File.WriteAllTextAsync(destination, "audio");
+        var operationId = Guid.NewGuid();
+        var factory = _provider.GetRequiredService<
+            IDbContextFactory<ListenArrDbContext>>();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.FileMutationJournals.Add(new FileMutationJournal
+            {
+                OperationId = operationId,
+                ProtocolVersion = FileMutationProtocol.Current,
+                Action = FileAction.Move,
+                SourcePath = source,
+                DestinationPath = destination,
+                SourceParentDirectoryObjectIdentity = string.Empty,
+                DestinationParentDirectoryObjectIdentity = string.Empty,
+                SourcePhysicalObjectIdentity = string.Empty,
+                SourceLength = 5,
+                SourceSha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes("audio"))),
+                State = FileMutationJournalState.RegistrationCommitted,
+                AudiobookId = int.MaxValue - 10,
+                AudiobookFileId = int.MaxValue - 11
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
+            .ReconcileAsync();
+
+        await AssertJournalStateAsync(
+            operationId,
+            FileMutationJournalState.NeedsAttention);
+        Assert.True(File.Exists(source));
+        Assert.True(File.Exists(destination));
+    }
+
+    [Fact]
+    public async Task ReconcileAsync_MissingAudiobookFileOwner_IsScopedNeedsAttention()
+    {
+        var root = FileService.GetTempDirectory("rename-recovery-missing-file-owner");
+        var source = Path.Join(root, "source.m4b");
+        var destination = Path.Join(root, "destination.m4b");
+        await File.WriteAllTextAsync(source, "audio");
+        await File.WriteAllTextAsync(destination, "audio");
+        var audiobook = await _audiobookRepository.AddAsync(
+            new AudiobookBuilder()
+                .WithTitle("Missing File Owner")
+                .WithBasePath(root)
+                .Build());
+        var operationId = Guid.NewGuid();
+        var factory = _provider.GetRequiredService<
+            IDbContextFactory<ListenArrDbContext>>();
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.FileMutationJournals.Add(new FileMutationJournal
+            {
+                OperationId = operationId,
+                ProtocolVersion = FileMutationProtocol.Current,
+                Action = FileAction.Move,
+                SourcePath = source,
+                DestinationPath = destination,
+                SourceParentDirectoryObjectIdentity = string.Empty,
+                DestinationParentDirectoryObjectIdentity = string.Empty,
+                SourcePhysicalObjectIdentity = string.Empty,
+                SourceLength = 5,
+                SourceSha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes("audio"))),
+                State = FileMutationJournalState.RegistrationCommitted,
+                AudiobookId = audiobook.Id,
+                AudiobookFileId = int.MaxValue - 12
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
+            .ReconcileAsync();
+
+        await AssertJournalStateAsync(
+            operationId,
+            FileMutationJournalState.NeedsAttention);
+        Assert.True(File.Exists(source));
+        Assert.True(File.Exists(destination));
+    }
+
     [LinuxFact]
     public async Task ReconcileAsync_TargetReplacedAfterRecoveryProbe_DoesNotCommitOwnerMetadata()
     {
@@ -145,7 +290,6 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
         var reconciler = new FileRenameRecoveryReconciler(
             factory,
-            mover,
             _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
             _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
             TimeProvider.System,
@@ -220,6 +364,9 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
                 DestinationPath = destination,
                 SourcePhysicalObjectIdentity = sourceIdentity,
                 SourceLength = new FileInfo(destination).Length,
+                SourceSha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes("audio"))),
                 TargetPhysicalObjectIdentity = sourceIdentity,
                 AudiobookId = audiobook.Id,
                 AudiobookFileId = file.Id,
@@ -231,7 +378,6 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         var factory = new TestDbContextFactory(options);
         var reconciler = new FileRenameRecoveryReconciler(
             factory,
-            _provider.GetRequiredService<FileMover>(),
             identityResolver,
             _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
             TimeProvider.System,
@@ -302,135 +448,6 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
     }
 
     [Fact]
-    public async Task ReconcileAsync_CompletedJournalWhoseFileMovedToAnotherAudiobook_IsRetiredNotFatal()
-    {
-        // Live case (2026-09-24): a transfer reassigned the file row to another record
-        // after its organize move completed; the next restart threw and disabled every
-        // filesystem operation on the instance.
-        var root = FileService.GetTempDirectory("rename-recovery-orphaned-owner");
-        var path = Path.Join(root, "Book.m4b");
-        await File.WriteAllTextAsync(path, "audio");
-        var owner = await _audiobookRepository.AddAsync(new AudiobookBuilder()
-            .WithTitle("Original Owner")
-            .WithBasePath(root)
-            .WithFilePath(path)
-            .Build());
-        var newOwner = await _audiobookRepository.AddAsync(new AudiobookBuilder()
-            .WithTitle("New Owner")
-            .WithBasePath(root)
-            .Build());
-        var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
-        var operationId = Guid.NewGuid();
-        int fileId;
-        await using (var db = await factory.CreateDbContextAsync())
-        {
-            var file = AudiobookFile.CreateUnresolved(path);
-            file.AudiobookId = owner.Id;
-            db.AudiobookFiles.Add(file);
-            await db.SaveChangesAsync();
-            fileId = file.Id;
-            db.FileMutationJournals.Add(new FileMutationJournal
-            {
-                OperationId = operationId,
-                Action = FileAction.Move,
-                SourcePath = Path.Join(root, "Old.m4b"),
-                DestinationPath = path,
-                SourcePhysicalObjectIdentity = "test-identity",
-                TargetPhysicalObjectIdentity = "test-identity",
-                SourceLength = 5,
-                AudiobookId = owner.Id,
-                AudiobookFileId = fileId,
-                State = FileMutationJournalState.Completed
-            });
-            await db.SaveChangesAsync();
-            // The transfer: the file now belongs to another record.
-            file.AudiobookId = newOwner.Id;
-            await db.SaveChangesAsync();
-        }
-
-        var reconciler = new FileRenameRecoveryReconciler(
-            factory,
-            _provider.GetRequiredService<FileMover>(),
-            _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
-            _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
-            TimeProvider.System,
-            NullLogger<FileRenameRecoveryReconciler>.Instance);
-
-        await reconciler.ReconcileAsync();
-
-        await AssertJournalStateAsync(operationId, FileMutationJournalState.OwnerMetadataReconciled);
-        await using var verify = await factory.CreateDbContextAsync();
-        var reassigned = await verify.AudiobookFiles.AsNoTracking().SingleAsync(candidate => candidate.Id == fileId);
-        Assert.Equal(newOwner.Id, reassigned.AudiobookId);
-    }
-
-    [Fact]
-    public async Task ReconcileAsync_InterruptedCompanionJournalOfDeletedAudiobook_IsRetiredNotFatal()
-    {
-        var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
-        var operationId = Guid.NewGuid();
-        await using (var db = await factory.CreateDbContextAsync())
-        {
-            db.FileMutationJournals.Add(new FileMutationJournal
-            {
-                OperationId = operationId,
-                Action = FileAction.Move,
-                SourcePath = "/library/gone/cover.png",
-                DestinationPath = "/library/gone/renamed/cover.png",
-                AudiobookId = 987654,
-                AudiobookFileId = -2,
-                State = FileMutationJournalState.TargetVerified
-            });
-            await db.SaveChangesAsync();
-        }
-
-        var reconciler = new FileRenameRecoveryReconciler(
-            factory,
-            _provider.GetRequiredService<FileMover>(),
-            _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
-            _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
-            TimeProvider.System,
-            NullLogger<FileRenameRecoveryReconciler>.Instance);
-
-        await reconciler.ReconcileAsync();
-
-        await AssertJournalStateAsync(operationId, FileMutationJournalState.OwnerMetadataReconciled);
-    }
-
-    [Fact]
-    public async Task ReconcileAsync_InterruptedJournalOfDeletedAudiobook_IsRetiredWithWarning()
-    {
-        var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
-        var operationId = Guid.NewGuid();
-        await using (var db = await factory.CreateDbContextAsync())
-        {
-            db.FileMutationJournals.Add(new FileMutationJournal
-            {
-                OperationId = operationId,
-                Action = FileAction.Move,
-                SourcePath = "/library/gone/Old.m4b",
-                DestinationPath = "/library/gone/New.m4b",
-                AudiobookId = 987655,
-                AudiobookFileId = 424242,
-                State = FileMutationJournalState.Planned
-            });
-            await db.SaveChangesAsync();
-        }
-
-        var reconciler = new FileRenameRecoveryReconciler(
-            factory,
-            _provider.GetRequiredService<FileMover>(),
-            _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
-            _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
-            TimeProvider.System,
-            NullLogger<FileRenameRecoveryReconciler>.Instance);
-
-        await reconciler.ReconcileAsync();
-
-        await AssertJournalStateAsync(operationId, FileMutationJournalState.OwnerMetadataReconciled);
-    }
-
-    [Fact]
     public async Task ReconcileAsync_OwnerBindingChangesAfterInitialRead_MarksJournalNeedsAttention()
     {
         var scenario = await CreateScenarioAsync("owner-binding-changed");
@@ -446,7 +463,6 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
         var reconciler = new FileRenameRecoveryReconciler(
             factory,
-            mover,
             _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
             _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
             TimeProvider.System,
@@ -536,7 +552,6 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
         var reconciler = new FileRenameRecoveryReconciler(
             factory,
-            mover,
             _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
             _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
             TimeProvider.System,
@@ -622,7 +637,7 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
     }
 
     [WindowsFact]
-    public async Task ReconcileAsync_SourceSharingViolation_LeavesJournalPendingInsteadOfFailingStartup()
+    public async Task ReconcileAsync_SourceOnlyPrecommitJournal_RollsBackWithoutMutation()
     {
         var scenario = await CreateScenarioAsync("sharing-violation-pending");
         var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
@@ -659,21 +674,26 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
 
             await AssertJournalStateAsync(
                 scenario.OperationId,
-                FileMutationJournalState.Planned);
+                FileMutationJournalState.RolledBack);
             Assert.True(File.Exists(scenario.Source));
             Assert.False(File.Exists(scenario.Destination));
-            Assert.True(await _provider.GetRequiredService<IFileRenameRecoveryProbe>()
+            Assert.False(await _provider.GetRequiredService<IFileRenameRecoveryProbe>()
                 .HasBlockingAsync(scenario.AudiobookId));
         }
 
         await _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
             .ReconcileAsync();
 
-        await AssertRecoveredAsync(scenario);
+        await AssertJournalStateAsync(
+            scenario.OperationId,
+            FileMutationJournalState.RolledBack);
+        await AssertStoredPathAsync(scenario.FileId, scenario.Source);
+        Assert.True(File.Exists(scenario.Source));
+        Assert.False(File.Exists(scenario.Destination));
     }
 
     [Fact]
-    public async Task ReconcileAsync_ReadOnlyRemountDuringOwnedMove_LeavesJournalPending()
+    public async Task ReconcileAsync_SourceOnlyPrecommitJournal_OnReadOnlyStorage_RollsBackWithoutMutation()
     {
         var scenario = await CreateScenarioAsync("erofs-pending");
         var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
@@ -699,20 +719,8 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
             scenario.OperationId,
             FileMutationJournalState.Planned);
 
-        var mover = new Mock<IFileMover>(MockBehavior.Strict);
-        mover.Setup(service => service.MoveFilePreservingPhysicalIdentityAsync(
-                scenario.Source,
-                scenario.Destination,
-                scenario.SourceIdentity,
-                scenario.OperationId,
-                scenario.AudiobookId,
-                scenario.FileId))
-            .ThrowsAsync(new InvalidOperationException(
-                "Injected wrapped read-only filesystem failure.",
-                new System.ComponentModel.Win32Exception(30)));
         var reconciler = new FileRenameRecoveryReconciler(
             factory,
-            mover.Object,
             _provider.GetRequiredService<IAudiobookFilePathIdentityResolver>(),
             _provider.GetRequiredService<IFileSystemSemanticsResolver>(),
             TimeProvider.System,
@@ -722,15 +730,14 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
 
         await AssertJournalStateAsync(
             scenario.OperationId,
-            FileMutationJournalState.Planned);
+            FileMutationJournalState.RolledBack);
         await AssertStoredPathAsync(scenario.FileId, scenario.Source);
         Assert.True(File.Exists(scenario.Source));
         Assert.False(File.Exists(scenario.Destination));
-        mover.VerifyAll();
     }
 
     [Fact]
-    public async Task ReconcileAsync_OwnerBoundNeedsAttentionJournal_FailsStartupRecovery()
+    public async Task ReconcileAsync_OwnerBoundNeedsAttentionJournal_DoesNotBlockStartupRecovery()
     {
         var scenario = await CreateScenarioAsync("needs-attention");
         var factory = _provider.GetRequiredService<IDbContextFactory<ListenArrDbContext>>();
@@ -752,12 +759,13 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
             await db.SaveChangesAsync();
         }
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
-                .ReconcileAsync());
+        await _provider.GetRequiredService<IFileRenameRecoveryReconciler>()
+            .ReconcileAsync();
 
-        Assert.Contains("requires operator repair", exception.Message, StringComparison.OrdinalIgnoreCase);
         await AssertStoredPathAsync(scenario.FileId, scenario.Source);
+        await AssertJournalStateAsync(
+            scenario.OperationId,
+            FileMutationJournalState.NeedsAttention);
         Assert.True(File.Exists(scenario.Source));
         Assert.False(File.Exists(scenario.Destination));
     }
@@ -908,7 +916,7 @@ public sealed class FileRenameRecoveryReconcilerTests : BaseTests
         Assert.Equal(Path.GetFullPath(scenario.Destination), file.Path);
         Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(scenario.Destination)), audiobook.BasePath);
         Assert.Equal(Path.GetFullPath(scenario.Destination), audiobook.FilePath);
-        Assert.Equal(scenario.SourceIdentity, file.PhysicalObjectIdentity);
+        Assert.Null(file.PhysicalObjectIdentity);
         Assert.Equal(
             FileMutationJournalState.OwnerMetadataReconciled,
             (await db.FileMutationJournals

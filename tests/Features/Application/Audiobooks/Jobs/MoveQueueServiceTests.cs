@@ -1065,6 +1065,70 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
         }
 
         [Fact]
+        public async Task EnqueueMoveAsync_VerifiedDeletionAuthorizedByStorageContracts_EnqueuesWithoutPolicyRevisions()
+        {
+            // The cleanup-policy resolver authorizes verified deletion from the
+            // roots' storage contracts and leaves the retired weak-storage policy
+            // revisions null; the snapshot check must not demand them.
+            var jobs = new List<MoveJob>();
+            var persistence = CreateInMemoryPersistence(jobs);
+            var service = new MoveQueueService(
+                NullLogger<MoveQueueService>.Instance,
+                persistence.Object,
+                new NoopHubBroadcaster(),
+                TimeProvider.System,
+                BuildSemanticsResolver());
+
+            var jobId = await service.EnqueueMoveAsync(
+                9,
+                "/library/Title",
+                "/downloads/Title",
+                sourceCleanupMode: MoveSourceCleanupMode.DeleteAfterVerifiedCopy,
+                sourceRootFolderId: 3,
+                sourceStorageContractRevision: 0,
+                targetRootFolderId: 4,
+                targetStorageContractRevision: 2);
+
+            var job = Assert.Single(jobs, candidate => candidate.Id == jobId);
+            Assert.Equal(MoveSourceCleanupMode.DeleteAfterVerifiedCopy, job.SourceCleanupMode);
+            Assert.Null(job.SourcePolicyRevision);
+            Assert.Null(job.TargetPolicyRevision);
+            Assert.Equal(0, job.SourceStorageContractRevision);
+            Assert.Equal(2, job.TargetStorageContractRevision);
+        }
+
+        [Theory]
+        [InlineData("missing-target-contract")]
+        [InlineData("source-root-without-contract")]
+        [InlineData("negative-policy-revision")]
+        public async Task EnqueueMoveAsync_VerifiedDeletionWithIncompleteStorageSnapshot_RejectsBeforePersisting(string gap)
+        {
+            var jobs = new List<MoveJob>();
+            var persistence = CreateInMemoryPersistence(jobs);
+            var service = new MoveQueueService(
+                NullLogger<MoveQueueService>.Instance,
+                persistence.Object,
+                new NoopHubBroadcaster(),
+                TimeProvider.System,
+                BuildSemanticsResolver());
+
+            var rejected = await Assert.ThrowsAsync<ArgumentException>(() =>
+                service.EnqueueMoveAsync(
+                    9,
+                    "/library/Title",
+                    "/downloads/Title",
+                    sourceCleanupMode: MoveSourceCleanupMode.DeleteAfterVerifiedCopy,
+                    sourceRootFolderId: 3,
+                    sourceStorageContractRevision: gap == "source-root-without-contract" ? null : 0,
+                    targetRootFolderId: 4,
+                    targetPolicyRevision: gap == "negative-policy-revision" ? -1 : null,
+                    targetStorageContractRevision: gap == "missing-target-contract" ? null : 2));
+
+            Assert.Contains("complete root-folder policy snapshot", rejected.Message);
+            Assert.Empty(jobs);
+        }
+
+        [Fact]
         public async Task EnqueueMoveAsync_SameMoveIdentityWithDifferentCleanupPolicy_ConflictsInsteadOfDeduplicating()
         {
             var jobs = new List<MoveJob>();
@@ -1323,10 +1387,6 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
                         FileSystemCaseSensitivityMode.Auto,
                         boundary,
                         target),
-                    SourceBoundaryDirectoryObjectIdentityVersion: 2,
-                    SourceBoundaryDirectoryObjectIdentity: "test-source-boundary-identity",
-                    TargetBoundaryDirectoryObjectIdentityVersion: 2,
-                    TargetBoundaryDirectoryObjectIdentity: "test-target-boundary-identity",
                     DeleteEmptySource: true,
                     SourceCleanupBoundary: boundary),
                 cancellation.Token);
@@ -1911,7 +1971,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
                 RequestedPath = targetPath,
                 Status = MoveJobStatus.NeedsAttention,
                 Phase = MoveJobPhase.Published,
-                ExecutionProtocolVersion = MoveExecutionProtocol.MarkerlessDatabaseState,
+                ExecutionProtocolVersion = MoveExecutionProtocol.Current,
                 SourceDirectoryCleanupState = completedCleanupState,
                 TargetDirectoryObjectIdentity = "target-generation",
                 FailureKind = MoveFailureKind.Unknown,
@@ -2635,7 +2695,13 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
             bool deleteEmptySource = true,
             string? sourceCleanupBoundary = null,
             MoveSourceCleanupMode sourceCleanupMode = MoveSourceCleanupMode.RetainSource,
-            bool forceCopyAndRetainSource = false)
+            bool forceCopyAndRetainSource = false,
+            int? sourceRootFolderId = null,
+            int? sourcePolicyRevision = null,
+            int? sourceStorageContractRevision = null,
+            int? targetRootFolderId = null,
+            int? targetPolicyRevision = null,
+            int? targetStorageContractRevision = null)
         {
             var target = FileSystemPathIdentity.ResolveNativeAbsolutePath(requestedPath);
             var source = FileSystemPathIdentity.ResolveNativeAbsolutePath(
@@ -2692,13 +2758,15 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
                     new string('A', 64))],
                 target,
                 targetIdentity,
-                SourceBoundaryDirectoryObjectIdentityVersion: 2,
-                SourceBoundaryDirectoryObjectIdentity: "test-source-boundary-identity",
-                TargetBoundaryDirectoryObjectIdentityVersion: 2,
-                TargetBoundaryDirectoryObjectIdentity: "test-target-boundary-identity",
                 DeleteEmptySource: deleteEmptySource,
                 SourceCleanupBoundary: effectiveSourceCleanupBoundary,
                 SourceCleanupMode: sourceCleanupMode,
+                SourceRootFolderId: sourceRootFolderId,
+                SourcePolicyRevision: sourcePolicyRevision,
+                TargetRootFolderId: targetRootFolderId,
+                TargetPolicyRevision: targetPolicyRevision,
+                SourceStorageContractRevision: sourceStorageContractRevision,
+                TargetStorageContractRevision: targetStorageContractRevision,
                 ForceCopyAndRetainSource: forceCopyAndRetainSource));
         }
     }

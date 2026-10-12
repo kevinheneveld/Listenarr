@@ -406,9 +406,11 @@ export interface RootFolder {
   canScanFilesystem?: boolean
   canPublishNewFiles?: boolean
   canMutateFilesystem?: boolean
-  canRetireWithDurableIdentity?: boolean
+  canRetireSource?: boolean
   canRetireAfterVerifiedCopy?: boolean
+  /** @deprecated Compatibility value only; use current storage capability fields. */
   weakStorageSourceCleanupPolicy?: 'RetainSource' | 'DeleteSourceAfterVerifiedCopy'
+  /** @deprecated Revision of the legacy setting; does not authorize source deletion. */
   weakStoragePolicyRevision?: number
   confirmationToken?: string | null
   activeRelocation?: RootFolderPathChangeResult | null
@@ -1451,11 +1453,13 @@ export interface UnmatchedFilesResponse {
   jobId: string
   status: 'Queued' | 'Processing' | 'Completed' | 'Failed'
   error?: string
+  warnings?: string[]
   items: UnmatchedFileItem[]
 }
 
 export interface SavedUnmatchedResponse {
   lastScannedAt?: string
+  warnings?: string[]
   items: UnmatchedFileItem[]
 }
 
@@ -1514,6 +1518,7 @@ export interface FileRenameResultItem {
   newPath?: string
   success: boolean
   rolledBack: boolean
+  sourceRetained?: boolean
   error?: string
 }
 

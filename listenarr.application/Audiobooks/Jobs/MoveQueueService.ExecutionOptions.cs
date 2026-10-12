@@ -31,11 +31,13 @@ public partial class MoveQueueService
         {
             return;
         }
+        // Verified deletion is authorized by the roots' storage contracts; the
+        // weak-storage policy revisions are no longer an authority and the
+        // resolver leaves them null, so only reject a snapshot that lacks the
+        // contract revision for a configured root (or carries a negative one).
         if (command.TargetRootFolderId is not > 0
-            || command.TargetPolicyRevision is not >= 0
             || command.TargetStorageContractRevision is not >= 0
-            || command.SourceRootFolderId.HasValue
-                != command.SourcePolicyRevision.HasValue
+            || command.TargetPolicyRevision is < 0
             || command.SourceRootFolderId.HasValue
                 != command.SourceStorageContractRevision.HasValue
             || command.SourceRootFolderId is <= 0

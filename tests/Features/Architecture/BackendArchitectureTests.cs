@@ -206,7 +206,6 @@ public sealed class BackendArchitectureTests : BaseTests
             "Listenarr.Tests.Features.Infrastructure.Library.Moving.MoveBackgroundService_FailureTests",
             "Listenarr.Tests.Features.Infrastructure.Library.Moving.MoveBackgroundService_FilePathPreservationTests",
             "Listenarr.Tests.Features.Infrastructure.Metadata.Parsing.PathMetadataParserTests",
-            "Listenarr.Tests.Features.Infrastructure.Migrations.MigrationMetadataTests",
             "Listenarr.Tests.Features.Infrastructure.Migrations.ReleasedSchemaUpgradeTests",
             "Listenarr.Tests.Features.Infrastructure.Notifications.Delivery.NotificationServiceTests",
             "Listenarr.Tests.Features.Infrastructure.Notifications.Discord.DiscordBotServiceTests",
@@ -1104,7 +1103,7 @@ public sealed class BackendArchitectureTests : BaseTests
             architecture,
             StringComparison.Ordinal);
         Assert.Contains(
-            "root-folder physical identities, active root relocations, directory ownership, durable audiobook-deletion intents, owner-bound file-rename journals, then audiobook-file identities",
+            "root path/case capabilities, active relocations, directory ownership, deletion intents, owner-bound rename journals, and audiobook-file path identities",
             architecture,
             StringComparison.Ordinal);
     }
@@ -1156,10 +1155,14 @@ public sealed class BackendArchitectureTests : BaseTests
             "entry.claim"
         };
 
-        var allowedQuarantineFiles = new HashSet<string>(StringComparer.Ordinal)
+        var allowedOperationNamespaceFiles = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            "listenarr.infrastructure/FileSystem/CompatibilitySourceCleanupCoordinator.cs",
-            "listenarr.infrastructure/Library/Scanning/ScanFileDiscovery.Enumeration.cs"
+            ["listenarr.infrastructure/FileSystem/CompatibilitySourceCleanupCoordinator.cs"] =
+                ".listenarr-quarantine-",
+            ["listenarr.infrastructure/Library/Scanning/ScanFileDiscovery.Enumeration.cs"] =
+                ".listenarr-quarantine-",
+            ["listenarr.infrastructure/FileSystem/VerifiedFileRenameTransactionCoordinator.cs"] =
+                ".listenarr-organize-"
         };
         var violations = productionRoots
             .SelectMany(root => Directory.EnumerateFiles(
@@ -1175,9 +1178,11 @@ public sealed class BackendArchitectureTests : BaseTests
             .SelectMany(candidate => forbidden
                 .Where(token => candidate.Source.Contains(token, StringComparison.Ordinal)
                     && !(token == ".listenarr-"
-                        && allowedQuarantineFiles.Contains(candidate.File)
+                        && allowedOperationNamespaceFiles.TryGetValue(
+                            candidate.File,
+                            out var auditedPrefix)
                         && candidate.Source.Contains(
-                            ".listenarr-quarantine-",
+                            auditedPrefix,
                             StringComparison.Ordinal)))
                 .Select(token => $"{candidate.File}: {token}"))
             .ToList();

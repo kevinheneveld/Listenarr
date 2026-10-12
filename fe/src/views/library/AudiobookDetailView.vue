@@ -883,7 +883,10 @@
             </label>
           </div>
           <p v-if="deleteCapabilities?.reason" class="warning-text">
-            {{ deleteCapabilities.reason }} The audiobook can still be removed from the library.
+            {{ deleteCapabilities.reason }}
+            <span v-if="deleteCapabilities.canRemoveFromLibrary">
+              The audiobook can still be removed from the library.
+            </span>
           </p>
 
           <div class="checkbox-row">
@@ -1092,7 +1095,6 @@ import { logger } from '@/utils/logger'
 import { errorTracking } from '@/services/errorTracking'
 import { useProtectedImages } from '@/composables/useProtectedImages'
 import { showConfirm } from '@/composables/useConfirm'
-import { preparePhysicalDeleteRetry } from '@/composables/useMutationSemanticsConfirmation'
 import { buildAudibleProductUrl } from '@/utils/marketDomains'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import TransferFilesModal from '@/components/domain/audiobook/TransferFilesModal.vue'
@@ -1183,6 +1185,8 @@ const audiobookshelfConfigured = ref(false)
 const rescanningMetadata = ref(false)
 const weakStorageMissingFiles = ref<WeakStorageMissingFilesResponse>({ items: [] })
 let weakStorageMissingFilesRequestId = 0
+let scanDetailRefreshRequestId = 0
+let detailViewUnmounted = false
 const trackedScanJob = computed(() => {
   const currentBookId = audiobook.value?.id
   if (!currentBookId) return undefined
@@ -2035,9 +2039,6 @@ onMounted(async () => {
     if (!audiobook.value) return
     if (String(job.audiobookId) !== String(audiobook.value.id)) return
     scanNotificationsStore.applyUpdate(job)
-    if (job.status.toLowerCase() === 'completed') {
-      void loadWeakStorageMissingFiles()
-    }
   })
 
   // subscribe to AudiobookUpdate messages and merge detail when this audiobook is updated (e.g., after a move)
@@ -2085,6 +2086,8 @@ function handleClickOutside() {
 }
 
 onUnmounted(() => {
+  detailViewUnmounted = true
+  scanDetailRefreshRequestId++
   document.removeEventListener('click', handleClickOutside)
   try {
     if (audiobookUpdateUnsub) audiobookUpdateUnsub()
@@ -2100,6 +2103,70 @@ watch(
     syncActiveTabFromRoute()
   },
 )
+
+let lastHandledTerminalScanJobId: string | null = null
+watch(
+  () => route.params.id,
+  () => {
+    scanDetailRefreshRequestId++
+  },
+)
+watch(
+  () =>
+    [
+      trackedScanJob.value?.jobId,
+      trackedScanJob.value?.status,
+      trackedScanJob.value?.error,
+    ] as const,
+  async ([jobId, status, scanError]) => {
+    if (!jobId || !status) return
+    const normalizedStatus = status.toLowerCase()
+    if (normalizedStatus !== 'completed' && normalizedStatus !== 'failed') return
+    if (lastHandledTerminalScanJobId === jobId) return
+    lastHandledTerminalScanJobId = jobId
+
+    if (normalizedStatus === 'completed') {
+      await refreshAudiobookAfterScan(jobId)
+      return
+    }
+
+    const toast = useToast()
+    toast.error('Scan failed', scanError || 'The audiobook scan did not complete successfully.')
+  },
+  { flush: 'post' },
+)
+
+async function refreshAudiobookAfterScan(jobId: string) {
+  const id = audiobook.value?.id ?? parseInt(route.params.id as string)
+  const routeId = String(route.params.id)
+  const requestId = ++scanDetailRefreshRequestId
+  const isCurrent = () =>
+    !detailViewUnmounted &&
+    requestId === scanDetailRefreshRequestId &&
+    audiobook.value?.id === id &&
+    parseInt(routeId, 10) === id &&
+    String(route.params.id) === routeId &&
+    trackedScanJob.value?.jobId === jobId
+  try {
+    let refreshed: Audiobook | null = null
+    if (typeof apiService.getAudiobook === 'function') {
+      refreshed = await apiService.getAudiobook(id)
+    } else {
+      await libraryStore.fetchLibrary()
+      refreshed = libraryStore.audiobooks.find((candidate) => candidate.id === id) ?? null
+    }
+
+    if (!isCurrent()) return
+    if (refreshed) {
+      audiobook.value = refreshed
+      await afterLoad(isCurrent)
+    }
+  } catch (err) {
+    logger.debug('Unable to refresh audiobook after scan completion', err)
+  }
+
+  if (isCurrent()) await loadWeakStorageMissingFiles()
+}
 
 async function loadAudiobook() {
   loading.value = true
@@ -2146,9 +2213,11 @@ async function loadAudiobook() {
 }
 
 // After loading audiobook, also fetch quality profiles so we can display the assigned profile
-async function afterLoad() {
-  await loadQualityProfilesForDetail()
-  await loadIdentifiersForDetail()
+async function afterLoad(isCurrent: () => boolean = () => true) {
+  await loadQualityProfilesForDetail(isCurrent)
+  if (!isCurrent()) return
+  await loadIdentifiersForDetail(isCurrent)
+  if (!isCurrent()) return
   try {
     const img = audiobook.value?.imageUrl
     if (img) {
@@ -2161,21 +2230,22 @@ async function afterLoad() {
   } catch {}
 }
 
-async function loadQualityProfilesForDetail() {
+async function loadQualityProfilesForDetail(isCurrent: () => boolean = () => true) {
   try {
-    qualityProfiles.value = await apiService.getQualityProfiles()
+    const profiles = await apiService.getQualityProfiles()
+    if (isCurrent()) qualityProfiles.value = profiles
   } catch (err) {
     logger.warn('Failed to load quality profiles for detail view:', err)
   }
 }
 
-async function loadIdentifiersForDetail() {
+async function loadIdentifiersForDetail(isCurrent: () => boolean = () => true) {
   const id = audiobook.value?.id
   if (!id || typeof apiService.getAudiobookIdentifiers !== 'function') return
 
   try {
     const response = await apiService.getAudiobookIdentifiers(id)
-    if (!audiobook.value || audiobook.value.id !== id) return
+    if (!isCurrent() || !audiobook.value || audiobook.value.id !== id) return
     audiobook.value = {
       ...audiobook.value,
       identifiers: Array.isArray(response?.identifiers) ? response.identifiers : [],
@@ -2480,10 +2550,6 @@ async function executeDelete() {
       deleteFiles: shouldDeleteFiles,
       deleteFolder: shouldDeleteFolder,
       excludeFromAuthorMonitoring: excludeFromAuthorMonitoring.value,
-      retryAfterBlockedMutation: shouldDeleteFiles
-        ? (error) =>
-            preparePhysicalDeleteRetry(error, audiobook.value!.id, audiobook.value?.basePath)
-        : undefined,
     })
     if (success) {
       const toast = useToast()
@@ -2525,7 +2591,7 @@ function unavailableDeleteCapabilities(): AudiobookDeleteCapabilities {
     canRemoveFromLibrary: true,
     canDeleteTrackedFiles: false,
     canDeleteFolder: false,
-    reason: 'Physical-delete safety could not be checked.',
+    reason: 'Filesystem delete capability could not be checked.',
     fallbackAction: 'RemoveFromLibraryOnly',
   }
 }

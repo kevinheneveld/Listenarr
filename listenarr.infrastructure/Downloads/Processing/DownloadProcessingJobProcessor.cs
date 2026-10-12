@@ -17,6 +17,8 @@
  */
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Listenarr.Infrastructure.Downloads.Processing
@@ -283,12 +285,26 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                 try
                 {
                     var downloadImportService = scope.ServiceProvider.GetRequiredService<IDownloadImportService>();
-                    var importOptions = isDirectDownload && string.Equals(
-                        download.GetMetadataString(DirectDownloadMetadataKeys.RequiresArchiveExtraction),
-                        bool.TrueString,
-                        StringComparison.OrdinalIgnoreCase)
-                        ? new DownloadImportOptions(ForceArchiveExtraction: true)
-                        : null;
+                    var retainSource = !isDirectDownload && queueItem.CanMoveFiles != true
+                        || bool.TryParse(download.GetMetadataString(Download.ImportSourceRetentionRequiredMetadataKey), out var persistedRetention) && persistedRetention
+                        || job.TryGetJobDataString(Download.ImportSourceRetentionRequiredMetadataKey, out var retainedJobValue)
+                            && bool.TryParse(retainedJobValue, out var retainedJob) && retainedJob;
+                    if (retainSource)
+                    {
+                        // Persist before publication so retry/restart cannot upgrade a
+                        // retained operation into destructive Move when client state changes.
+                        download.SetMetadata(Download.ImportSourceRetentionRequiredMetadataKey, true);
+                        job.JobData[Download.ImportSourceRetentionRequiredMetadataKey] = true;
+                        await downloadProcessingJobService.UpdateJobAsync(job);
+                        await downloadService.UpdateAsync(download);
+                    }
+                    var importOptions = new DownloadImportOptions(
+                        ForceArchiveExtraction: isDirectDownload && string.Equals(
+                            download.GetMetadataString(DirectDownloadMetadataKeys.RequiresArchiveExtraction),
+                            bool.TrueString,
+                            StringComparison.OrdinalIgnoreCase),
+                        CompatibilityBatchId: ResolveCompatibilityBatchId(job.Id),
+                        ForceCopyAndRetainSource: retainSource);
                     results = await downloadImportService.ImportDownloadFilesAsync(
                         audiobook,
                         files,
@@ -371,8 +387,8 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                 }
 
                 job.JobData[Download.SourceRetainedMetadataKey] = results.Any(result =>
-                    result.SourceDisposition
-                        == ImportSourceDisposition.Retained);
+                    !string.IsNullOrWhiteSpace(result.SourcePath)
+                        && result.SourceDisposition != ImportSourceDisposition.Retired);
                 job.SetCheckpoint("FilesImported", results.Count);
                 await downloadProcessingJobService.UpdateJobAsync(job);
             }
@@ -432,36 +448,7 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                     cancellationToken);
             }
 
-            // Auto-verify the freshly imported audio (ADR-0001) when enabled, so a
-            // wrong grab gets flagged right away instead of waiting for the next
-            // manual library walk. Best-effort: verification must never disrupt the
-            // import control flow, and it's skipped entirely when whisper.cpp isn't
-            // installed (no point queueing jobs that can only fail).
-            try
-            {
-                var verifyConfigService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
-                var importSettings = await verifyConfigService.GetApplicationSettingsAsync();
-                if (importSettings?.VerificationOnImport ?? true)
-                {
-                    var whisper = scope.ServiceProvider.GetRequiredService<Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService>();
-                    if (await whisper.IsAvailableAsync())
-                    {
-                        var verificationQueue = scope.ServiceProvider.GetRequiredService<Listenarr.Application.Audiobooks.Verification.ILibraryVerificationQueueService>();
-                        var verificationJobId = await verificationQueue.EnqueueAsync(
-                            new List<int> { audiobook.Id }, Listenarr.Application.Audiobooks.Verification.VerificationTriggers.Import);
-                        job.AddLogEntry($"Enqueued verification job {verificationJobId} for audiobook {audiobook.Id}");
-                    }
-                    else
-                    {
-                        logger.LogDebug(
-                            "Skipping verify-on-import for audiobook {AudiobookId}: whisper.cpp unavailable", audiobook.Id);
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
-                logger.LogWarning(ex, "Failed to enqueue verify-on-import for audiobook {AudiobookId}", audiobook.Id);
-            }
+            await TryEnqueueVerifyOnImportAsync(scope, job, audiobook);
 
             var finalizationService = scope.ServiceProvider.GetRequiredService<IImportFinalizationService>();
             bool? sourceRetained = job.TryGetJobDataString(
@@ -492,6 +479,18 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                 await ScheduleRetryAsync(job, downloadProcessingJobService, historyRepository, download, audiobook,
                     correlationId, $"Unable to commit import finalization: {exception.Message}", cancellationToken);
             }
+        }
+
+        private static Guid ResolveCompatibilityBatchId(string jobId)
+        {
+            if (Guid.TryParse(jobId, out var parsed))
+            {
+                return parsed;
+            }
+
+            var hash = SHA256.HashData(
+                Encoding.UTF8.GetBytes("download-import:" + jobId));
+            return new Guid(hash.AsSpan(0, 16));
         }
     }
 }
