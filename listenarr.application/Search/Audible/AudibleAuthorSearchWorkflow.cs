@@ -164,9 +164,11 @@ namespace Listenarr.Application.Search.Audible
                 // Thousand Leagues…"), and strict containment silently
                 // dropped the variants (live case: the Bill Homewood
                 // edition invisible while 11 siblings matched).
+                // AudibleTitleMatcher (upstream #1043) covers substring and whole-word
+                // matches across title/subtitle/series; MostlyMatches keeps the fuzzy
+                // token-overlap tier for spelled-out-number variants.
                 var titleFiltered = authorFiltered.Where(b =>
-                    (!string.IsNullOrWhiteSpace(b.Title) && b.Title.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) ||
-                    (!string.IsNullOrWhiteSpace(b.Subtitle) && b.Subtitle.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                    AudibleTitleMatcher.Matches(b, title) ||
                     TitleMatcher.MostlyMatches(b.Title, b.Subtitle, title)).ToList();
                 if (titleFiltered.Count == 0)
                 {

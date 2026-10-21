@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
 import { describe, it, beforeEach, expect, vi } from 'vitest'
 import WantedView from '@/views/content/WantedView.vue'
@@ -52,6 +52,7 @@ vi.mock('@/services/api', () => ({
   apiService: {
     getImageUrl: vi.fn((url: string) => url || 'https://via.placeholder.com/300x450?text=No+Image'),
     getQualityProfiles: vi.fn(async () => []),
+    getDownloads: vi.fn(async () => []),
     // Server-side wanted-search queue; resolves idle so polling never starts by default.
     enqueueWantedSearch: vi.fn(async (ids: number[]) => ({
       accepted: ids.length,
@@ -160,7 +161,7 @@ describe('WantedView image recache behavior', () => {
     libraryStore.fetchLibrary = vi.fn(async () => undefined)
 
     const downloadsStore = useDownloadsStore()
-    downloadsStore.downloads = [
+    const fixtureDownloads = [
       {
         id: 'd-pending',
         title: 'Pending Book',
@@ -184,6 +185,11 @@ describe('WantedView image recache behavior', () => {
         metadata: {},
       },
     ] as ReturnType<typeof useDownloadsStore>['downloads']
+    downloadsStore.downloads = fixtureDownloads
+    // The view hydrates the downloads store on mount (#936); serve the same fixture.
+    vi.mocked(apiService.getDownloads).mockResolvedValueOnce(
+      fixtureDownloads as unknown as ReturnType<typeof apiService.getDownloads>,
+    )
 
     const wrapper = mount(WantedView, { global: { plugins: [pinia] } })
     await new Promise((r) => setTimeout(r, 10))
@@ -277,6 +283,10 @@ describe('WantedView server-side search batch', () => {
     expect(button.text()).toContain('Search Filtered (1)')
 
     await button.trigger('click')
+    await flushPromises()
+    const confirmModal = wrapper.findComponent({ name: 'ConfirmModal' })
+    expect(confirmModal.props('visible')).toBe(true)
+    await confirmModal.vm.$emit('confirm')
     await new Promise((r) => setTimeout(r, 10))
 
     expect(apiService.enqueueWantedSearch).toHaveBeenCalledTimes(1)
@@ -292,10 +302,67 @@ describe('WantedView server-side search batch', () => {
     expect(button.text()).toContain('Search All (3)')
 
     await button.trigger('click')
+    await flushPromises()
+    const confirmModal = wrapper.findComponent({ name: 'ConfirmModal' })
+    expect(confirmModal.props('visible')).toBe(true)
+    await confirmModal.vm.$emit('confirm')
     await new Promise((r) => setTimeout(r, 10))
 
     expect(apiService.enqueueWantedSearch).toHaveBeenCalledWith([1, 2, 3])
     expect(idleWantedSearchSnapshot.isRunning).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('asks for confirmation first and cancelling queues nothing (#1009)', async () => {
+    const wrapper = mountWithWanted()
+    await new Promise((r) => setTimeout(r, 10))
+
+    await wrapper.find('[data-testid="wanted-search-button"]').trigger('click')
+    await flushPromises()
+
+    const confirmModal = wrapper.findComponent({ name: 'ConfirmModal' })
+    expect(confirmModal.exists()).toBe(true)
+    expect(confirmModal.props('visible')).toBe(true)
+    expect(confirmModal.props('message')).toContain('3')
+    expect(apiService.enqueueWantedSearch).not.toHaveBeenCalled()
+
+    await confirmModal.vm.$emit('cancel')
+    await flushPromises()
+
+    expect(confirmModal.props('visible')).toBe(false)
+    expect(apiService.enqueueWantedSearch).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('hydrates downloads on mount and leaves books with an active download out of the batch (#936)', async () => {
+    vi.mocked(apiService.getDownloads).mockResolvedValueOnce([
+      {
+        id: 'd-1',
+        title: 'Alpha Book',
+        status: 'Downloading',
+        progress: 50,
+        totalSize: 1000,
+        downloadedSize: 500,
+        audiobookId: 1,
+        startedAt: new Date().toISOString(),
+        metadata: {},
+      },
+    ] as unknown as ReturnType<typeof apiService.getDownloads>)
+
+    const wrapper = mountWithWanted()
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(apiService.getDownloads).toHaveBeenCalled()
+    const button = wrapper.find('[data-testid="wanted-search-button"]')
+    expect(button.text()).toContain('Search All (2)')
+
+    await button.trigger('click')
+    await flushPromises()
+    const confirmModal = wrapper.findComponent({ name: 'ConfirmModal' })
+    await confirmModal.vm.$emit('confirm')
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(apiService.enqueueWantedSearch).toHaveBeenCalledWith([2, 3])
     wrapper.unmount()
   })
 

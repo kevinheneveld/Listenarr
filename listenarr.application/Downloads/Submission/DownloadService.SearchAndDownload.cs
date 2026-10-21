@@ -15,6 +15,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
+using Listenarr.Application.Downloads.Processing;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Downloads.Submission
@@ -44,6 +45,20 @@ namespace Listenarr.Application.Downloads.Submission
                     Success = false,
                     Message = "Audiobook has no quality profile assigned"
                 };
+            }
+
+            // Check if an active download already exists before querying indexers (Issue #936)
+            try
+            {
+                if (await DownloadDuplicateGuard.HasActiveDownloadAsync(audiobookId, configurationService, downloadRepository))
+                {
+                    logger.LogInformation("Skipping search for audiobook {AudiobookId} — active download exists. Title: '{Title}'", audiobookId, LogRedaction.SanitizeText(audiobook.Title));
+                    return new SearchAndDownloadResult { Success = false, Message = "An active download already exists for this audiobook" };
+                }
+            }
+            catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException or StackOverflowException))
+            {
+                logger.LogWarning(ex, "Failed to check for duplicate downloads for audiobook {AudiobookId}", audiobookId);
             }
 
             // Build search query from audiobook metadata
@@ -184,6 +199,12 @@ namespace Listenarr.Application.Downloads.Submission
 
             // Send to download client with audiobookId for proper metadata linking
             var downloadId2 = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
+
+            if (string.IsNullOrEmpty(downloadId2))
+            {
+                logger.LogInformation("Download was skipped (duplicate or client rejected) for audiobook {AudiobookId}", audiobookId);
+                return new SearchAndDownloadResult { Success = false, Message = "Download skipped — an active download already exists", DownloadClientUsed = downloadClientId, SearchResult = topResult.SearchResult };
+            }
 
             // Log to history
             await LogDownloadHistory(audiobook, "Search", topResult.SearchResult);

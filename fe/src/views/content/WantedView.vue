@@ -38,7 +38,7 @@
         <button
           class="btn btn-primary"
           data-testid="wanted-search-button"
-          @click="queueWantedSearch"
+          @click="openConfirmWantedSearch"
           :disabled="wantedSearchBusy || queueSnapshot.isRunning || searchableWanted.length === 0"
           :title="
             filterText
@@ -218,6 +218,17 @@
       </template>
     </EmptyState>
 
+    <!-- Confirm wanted search (#1009): the batch sends one indexer query per book -->
+    <ConfirmModal
+      :visible="showConfirmWantedSearch"
+      title="Search Missing Audiobooks"
+      :message="confirmWantedSearchMessage"
+      confirmLabel="Search"
+      :confirming="wantedSearchBusy"
+      @confirm="queueWantedSearch"
+      @cancel="closeConfirmWantedSearch"
+    />
+
     <!-- Manual Search Modal -->
     <ManualSearchModal
       :is-open="showManualSearchModal"
@@ -245,6 +256,7 @@ import { useToast } from '@/services/toastService'
 import { handleImageError } from '@/utils/imageFallback'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import ManualImportModal from '@/components/feedback/ManualImportModal.vue'
+import { ConfirmModal } from '@/components/feedback'
 import { EmptyState, LoadingState } from '@/components/base'
 import type { Audiobook, SearchResult, Download, WantedSearchQueueSnapshot } from '@/types'
 import { safeText } from '@/utils/textUtils'
@@ -355,6 +367,13 @@ onMounted(async () => {
     await libraryStore.fetchLibrary()
   }
   await configurationStore.loadQualityProfiles()
+  // Issue #936: hydrate the downloads store on mount so books with an active download
+  // are excluded from the batch on a fresh load, not only after the store polls.
+  try {
+    await downloadsStore.loadDownloads()
+  } catch (e) {
+    logger.warn('Failed to load downloads on Wanted mount:', e)
+  }
 
   await syncWantedLayout()
 
@@ -590,8 +609,30 @@ async function onWantedSearchFinished(snapshot: WantedSearchQueueSnapshot) {
   }
 }
 
+const showConfirmWantedSearch = ref(false)
+
+const confirmWantedSearchMessage = computed(() => {
+  const count = searchableWanted.value.length
+  const scope = filterText.value ? 'matching the filter' : 'missing'
+  if (count === 1) {
+    return `Search for 1 ${scope} audiobook? This sends a search to every indexer and grabs the best match. The batch runs on the server, so you can leave this page.`
+  }
+  return `Search for all ${count} ${scope} audiobooks? This sends one search per book to every indexer and grabs the best matches. The batch runs on the server, so you can leave this page.`
+})
+
+function openConfirmWantedSearch() {
+  if (wantedSearchBusy.value || queueSnapshot.value.isRunning) return
+  if (searchableWanted.value.length === 0) return
+  showConfirmWantedSearch.value = true
+}
+
+function closeConfirmWantedSearch() {
+  showConfirmWantedSearch.value = false
+}
+
 const queueWantedSearch = async () => {
   const ids = searchableWanted.value.map((item) => item.id)
+  showConfirmWantedSearch.value = false
   if (ids.length === 0) return
 
   wantedSearchBusy.value = true
