@@ -32,7 +32,7 @@ namespace Listenarr.Tests.Features.Api.Features.Library
             AudiobookAddLockManager.ResetForTesting();
             var controller = _provider.GetRequiredService<LibraryController>();
 
-            const string asin = "B00CONCURRENT1";
+            const string asin = "B00CONCUR1";
             LibraryController.AddToLibraryRequest MakeRequest() => new()
             {
                 Metadata = new AudibleBookMetadata
