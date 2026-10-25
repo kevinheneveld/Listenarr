@@ -39,7 +39,6 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
             var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
-            var configService = scope.ServiceProvider.GetRequiredService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
 
             var audiobook = await audiobookRepository.GetByIdAsync(audiobookId);
             if (audiobook == null)
@@ -54,11 +53,9 @@ namespace Listenarr.Infrastructure.HostedServices.Search
 
             try
             {
-                var appSettings = await configService.GetApplicationSettingsAsync();
                 var queued = await ProcessAudiobookAsync(
                     audiobook, searchService, qualityProfileService, downloadService,
-                    audiobookRepository, downloadRepository, fileRepository,
-                    appSettings.AutomaticSearchTitleOnlyFallback, ct,
+                    audiobookRepository, downloadRepository, fileRepository, ct,
                     blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
                     filterPipeline: scope.ServiceProvider.GetService<SearchResultFilterPipeline>());
 

@@ -98,15 +98,6 @@ namespace Listenarr.Tests.Features.Application.Search
         }
 
         [Fact]
-        public async Task SearchIndexersAsync_CooperativeCancellation_StillPropagates()
-        {
-            var workflow = CreateWorkflow(TorznabIndexer("Cancelled"), TorznabIndexer("Fast"));
-
-            await Assert.ThrowsAsync<OperationCanceledException>(
-                () => workflow.SearchIndexersAsync("some book", isAutomaticSearch: true));
-        }
-
-        [Fact]
         public async Task TorznabProvider_HttpClientTimeout_ReturnsNoResultsInsteadOfThrowing()
         {
             using var httpClient = new HttpClient(new HangingHandler()) { Timeout = TimeSpan.FromMilliseconds(100) };

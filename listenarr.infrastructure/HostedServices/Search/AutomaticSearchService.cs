@@ -32,33 +32,33 @@ namespace Listenarr.Infrastructure.HostedServices.Search
     {
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            logger.LogInformation("AutomaticSearchService started. Sweep interval is configurable (AutomaticSearchIntervalHours), read each cycle");
+            logger.LogInformation("AutomaticSearchService started. Sweep interval and per-book cooldown are read from settings each cycle");
 
             await cycleRunner.RunPeriodicAsync(
                 nameof(AutomaticSearchService),
                 initialDelay: TimeSpan.FromMinutes(5),
-                // Read the interval from settings each cycle so a change takes effect
-                // without a restart. Clamped to [1, 168] hours; falls back to 24h on error.
-                intervalProvider: GetSearchInterval,
+                intervalProvider: GetSweepInterval,
                 runCycle: processor.RunCycleAsync,
                 stoppingToken);
 
             logger.LogInformation("AutomaticSearchService stopped");
         }
 
-        private TimeSpan GetSearchInterval()
+        // Read each cycle so a settings change takes effect without a restart. The sweep
+        // cadence only decides how often the worker looks; eligibility is the cooldown's job.
+        private TimeSpan GetSweepInterval()
         {
             try
             {
                 using var scope = scopeFactory.CreateScope();
-                var config = scope.ServiceProvider.GetRequiredService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
-                var settings = config.GetApplicationSettingsAsync().GetAwaiter().GetResult();
-                return TimeSpan.FromHours(Math.Clamp(settings.AutomaticSearchIntervalHours, 1, 168));
+                var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+                var settings = configurationService.GetApplicationSettingsAsync().GetAwaiter().GetResult();
+                return AutomaticSearchTiming.FromSettings(settings).SweepInterval;
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
-                logger.LogWarning(ex, "Failed to read AutomaticSearchIntervalHours; defaulting to 24h");
-                return TimeSpan.FromHours(24);
+                logger.LogWarning(ex, "Could not read automatic-search timing settings; sweeping every {Hours} hour(s)", AutomaticSearchTiming.Default.SweepInterval.TotalHours);
+                return AutomaticSearchTiming.Default.SweepInterval;
             }
         }
     }
@@ -96,19 +96,14 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
             var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
-            var configService = scope.ServiceProvider.GetRequiredService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
+            var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
             // Optional: drives the live search-activity indicator (sidebar).
             var searchProgressReporter = scope.ServiceProvider.GetService<SearchProgressReporter>();
 
-            var appSettings = await configService.GetApplicationSettingsAsync();
-            var intervalHours = Math.Clamp(appSettings.AutomaticSearchIntervalHours, 1, 168);
-            // Per-book throttle: with a large wanted list, searching every book back-to-back
-            // hammers the indexers. 0 disables it. Manual "Search now" is unaffected.
-            var bookDelay = TimeSpan.FromSeconds(Math.Clamp(appSettings.AutomaticSearchBookDelaySeconds, 0, 300));
-            var enableTitleOnlyFallback = appSettings.AutomaticSearchTitleOnlyFallback;
+            var timing = AutomaticSearchTiming.FromSettings(await configurationService.GetApplicationSettingsAsync());
 
-            // Don't re-search a book more often than the configured sweep interval.
-            var cutoffTime = DateTime.UtcNow.AddHours(-intervalHours);
+            // A book is eligible once per cooldown, however often the sweep itself runs.
+            var cutoffTime = timing.EligibilityCutoff(DateTime.UtcNow);
             var monitoredAudiobooks = await audiobookRepository.GetMonitoredAudiobooksForSearchAsync(cutoffTime, stoppingToken);
 
             _logger.LogInformation("Found {Count} monitored audiobooks eligible for automatic search", monitoredAudiobooks.Count);
@@ -126,6 +121,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             var processedCount = 0;
             var downloadsQueued = 0;
 
+            var isFirstBook = true;
             foreach (var audiobook in monitoredAudiobooks)
             {
                 if (stoppingToken.IsCancellationRequested)
@@ -133,8 +129,15 @@ namespace Listenarr.Infrastructure.HostedServices.Search
 
                 try
                 {
+                    // Pause between books so a large wanted list does not hammer the indexers.
+                    if (!isFirstBook && timing.BookDelay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(timing.BookDelay, stoppingToken);
+                    }
+                    isFirstBook = false;
+
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
-                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, enableTitleOnlyFallback, stoppingToken,
+                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, stoppingToken,
                         blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
                         filterPipeline: scope.ServiceProvider.GetService<SearchResultFilterPipeline>());
 
@@ -161,10 +164,6 @@ namespace Listenarr.Infrastructure.HostedServices.Search
 
                     _logger.LogInformation("Processed audiobook '{Title}' - queued {QueuedCount} downloads",
                         audiobook.Title, downloadsQueuedForBook);
-
-                    // Throttle between books so a large wanted list doesn't hammer the indexers.
-                    if (bookDelay > TimeSpan.Zero)
-                        await Task.Delay(bookDelay, stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -199,7 +198,6 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             IAudiobookRepository audiobookRepository,
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
-            bool enableTitleOnlyFallback,
             CancellationToken stoppingToken,
             IBlockedReleaseRepository? blockedReleaseRepository = null,
             SearchResultFilterPipeline? filterPipeline = null)
@@ -249,18 +247,22 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             var searchResults = await searchService.SearchAsync(searchQuery, category: "3030", isAutomaticSearch: true);
             _logger.LogInformation("Found {Count} raw search results for audiobook '{Title}'", searchResults.Count, audiobook.Title);
 
-            // Optional title-only fallback: when the full "Title Author Series" query finds nothing,
-            // retry with just the title to catch releases named loosely. Doubles indexer queries for
-            // unfound books, so it's opt-out on the background sweep (AutomaticSearchTitleOnlyFallback).
-            if (searchResults.Count == 0 && enableTitleOnlyFallback)
+            // Author-free fallback: release names often omit the author, so a full title+author
+            // query can return nothing even when the book is available. Retry without the author,
+            // then constrain the broadened results to titles that still match this book, so a
+            // same-title/different-book release can't pass quality scoring and be grabbed.
+            if (searchResults.Count == 0)
             {
-                var fallbackQuery = _resultClassifier.BuildTitleOnlySearchQuery(audiobook);
+                var fallbackQuery = _resultClassifier.BuildTitleFallbackSearchQuery(audiobook);
                 if (!string.IsNullOrWhiteSpace(fallbackQuery)
                     && !string.Equals(fallbackQuery, searchQuery, StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogInformation("No results for '{Title}', retrying with title-only query: {Query}", audiobook.Title, fallbackQuery);
-                    searchResults = await searchService.SearchAsync(fallbackQuery, category: "3030", isAutomaticSearch: true);
-                    _logger.LogInformation("Title-only fallback found {Count} results for '{Title}'", searchResults.Count, audiobook.Title);
+                    _logger.LogInformation("No results for '{Title}' with the full query; retrying without the author: {Query}",
+                        audiobook.Title, fallbackQuery);
+                    var fallbackResults = await searchService.SearchAsync(fallbackQuery, isAutomaticSearch: true);
+                    searchResults = _resultClassifier.ConstrainFallbackResultsToTitle(fallbackResults, audiobook);
+                    _logger.LogInformation("Author-free fallback for '{Title}': {Raw} raw result(s), {Kept} kept after title match",
+                        audiobook.Title, fallbackResults.Count, searchResults.Count);
                 }
             }
 

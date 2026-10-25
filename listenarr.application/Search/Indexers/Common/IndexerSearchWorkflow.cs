@@ -16,7 +16,6 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-using Listenarr.Application.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Search.Indexers.Common;
@@ -92,7 +91,16 @@ public class IndexerSearchWorkflow
                 _logger.LogInformation("Found {Count} results from indexer {Name}", indexerResults.Count, indexer.Name);
                 return indexerResults;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            catch (OperationCanceledException ex)
+            {
+                // No workflow-level cancellation token flows into this search, so an
+                // OperationCanceledException here is an HttpClient per-request timeout
+                // (TaskCanceledException derives from OperationCanceledException). Contain it
+                // to this indexer so a single slow indexer can't abort every other one's results.
+                _logger.LogWarning(ex, "Timed out searching indexer {Name} for query: {Query}", indexer.Name, query);
+                return new List<IndexerSearchResult>();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
                 _logger.LogError(ex, "Error searching indexer {Name} for query: {Query}", indexer.Name, query);
                 return new List<IndexerSearchResult>();
@@ -251,17 +259,6 @@ public class IndexerSearchWorkflow
             }
 
             return providerResults;
-        }
-        catch (OperationCanceledException ex) when (HttpClientTimeoutClassifier.IsHttpClientTimeout(ex))
-        {
-            // HttpClient.Timeout surfaces as a TaskCanceledException, which the
-            // "is not OperationCanceledException" clauses up the whole call chain let
-            // through — so one slow indexer used to abort the entire search (live: a
-            // 60s TorrentDownload response turned a Wanted-page search into a 500 and
-            // discarded the three indexers that had already answered). Nobody cancelled
-            // this search; it is a per-indexer failure like any other.
-            _logger.LogWarning("Indexer {Name} timed out; continuing with the other indexers", indexer.Name);
-            return new List<IndexerSearchResult>();
         }
         catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
         {

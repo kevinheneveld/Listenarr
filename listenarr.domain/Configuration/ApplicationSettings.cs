@@ -333,24 +333,23 @@ namespace Listenarr.Domain.Configuration
         public string DefaultSearchLanguage { get; set; } = "english";
 
         /// <summary>
-        /// How often the automatic-search sweep runs, in hours. A daily (24h) cadence is
-        /// plenty for a large wanted list and spares the indexers (and shared Prowlarr).
-        /// Read each sweep so a change takes effect without a restart. Clamped to [1, 168].
+        /// How often the automatic-search worker sweeps for eligible books, in hours.
+        /// This is only the cadence of the check; which books it picks up is decided by
+        /// <see cref="AutomaticSearchCooldownHours"/>. Read each cycle, clamped to [1, 168].
         /// </summary>
-        public int AutomaticSearchIntervalHours { get; set; } = 24;
+        public int AutomaticSearchIntervalHours { get; set; } = 1;
 
         /// <summary>
-        /// Delay between per-book searches during the automatic sweep, in seconds, to avoid
-        /// hammering indexers when the wanted list is large. Manual "Search now" is untouched.
-        /// 0 disables the throttle. Clamped to [0, 300].
+        /// How long a book stays ineligible for automatic search after it was last searched,
+        /// in hours. One shared cooldown for every book. Clamped to [1, 720].
+        /// </summary>
+        public int AutomaticSearchCooldownHours { get; set; } = 24;
+
+        /// <summary>
+        /// Pause between consecutive book searches inside one sweep, in seconds, so a large
+        /// wanted list does not hammer the indexers. 0 disables it. Manual "Search now" is
+        /// unaffected. Clamped to [0, 300].
         /// </summary>
         public int AutomaticSearchBookDelaySeconds { get; set; } = 5;
-
-        /// <summary>
-        /// When an automatic search finds nothing, optionally retry with a title-only query.
-        /// This doubles indexer queries for every unfound book, so the background sweep can
-        /// disable it; manual "Search now" always uses the fallback regardless.
-        /// </summary>
-        public bool AutomaticSearchTitleOnlyFallback { get; set; } = true;
     }
 }

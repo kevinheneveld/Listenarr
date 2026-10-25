@@ -54,6 +54,10 @@ public class SqliteMigrationSchemaTests : BaseTests
         "20260925200000_AddAiAssistRankSearches";
     private const string OperationEvidencePublicationsMigrationId =
         "20261002210137_AddOperationEvidencePublications";
+    private const string RetireForkAutomaticSearchTuningMigrationId =
+        "20261021212417_RetireForkAutomaticSearchTuning";
+    private const string AutomaticSearchTimingMigrationId =
+        "20261021212418_AddAutomaticSearchTiming";
 
     private static (SqliteConnection Connection, ListenArrDbContext Context)
         CreateMigratedSqliteContext()
@@ -253,7 +257,10 @@ public class SqliteMigrationSchemaTests : BaseTests
                 SeriesTriageDecisionsMigrationId,
                 AiAssistReviewVerificationsMigrationId,
                 AiAssistRankSearchesMigrationId,
-                OperationEvidencePublicationsMigrationId
+                OperationEvidencePublicationsMigrationId,
+                // Fork-local: drops the July fork columns so upstream #714's migration can add its own.
+                RetireForkAutomaticSearchTuningMigrationId,
+                AutomaticSearchTimingMigrationId
             ],
             postCanary);
         Assert.Contains("20251124102000_AddMoveJobSourcePath", applied);
