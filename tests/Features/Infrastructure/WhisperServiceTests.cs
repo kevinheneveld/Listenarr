@@ -473,5 +473,21 @@ namespace Listenarr.Tests.Features.Infrastructure
             }
             finally { File.Delete(source); }
         }
+
+        [Theory]
+        [InlineData("CHAPTER I Harlow Fry curled up in her favorite swing chair on her front porch",
+                    "Recorded Books, an RB Media audio brand, presents Frost and Venom by Christine Feehan, narrated by Alyssa Bresnahan. Chapter one.",
+                    true)]
+        [InlineData("Audible presents Project Hail Mary by Andy Weir narrated by Ray Porter",
+                    "Project Hail Mary by Andy Weir narrated by Ray Porter and some more words",
+                    false)]
+        [InlineData("CHAPTER I Harlow Fry curled up in her favorite swing chair",
+                    "Harlow Fry curled up in her favorite swing chair on her front porch",
+                    false)]
+        [InlineData("CHAPTER I Harlow Fry curled up", null, false)]
+        public void VadDecodeShouldReplace_OnlyWhenTheVadDecodeIsTheOneWithCredits(string plain, string? vad, bool expected)
+        {
+            Assert.Equal(expected, WhisperService.VadDecodeShouldReplace(plain, vad));
+        }
     }
 }

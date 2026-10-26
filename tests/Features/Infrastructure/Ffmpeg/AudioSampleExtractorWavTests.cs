@@ -84,5 +84,48 @@ namespace Listenarr.Tests.Features.Infrastructure.Ffmpeg
             Assert.Throws<IOException>(() =>
                 AudioSampleExtractor.ConcatWavs(new[] { bogus }, Path.Join(_dir, "out.wav")));
         }
+
+        private static byte[] Samples(params (int Count, short Value)[] runs)
+        {
+            var bytes = new List<byte>();
+            foreach (var (count, value) in runs)
+            {
+                for (var i = 0; i < count; i++) bytes.AddRange(BitConverter.GetBytes(value));
+            }
+            return bytes.ToArray();
+        }
+
+        [Fact]
+        public void TrailingSilenceSeconds_MeasuresDigitalSilenceAtTheTail()
+        {
+            // 2 s of loud signal followed by 3 s of zeros (16 kHz mono).
+            var wav = WriteWav("tail.wav", Samples((32000, 8000), (48000, 0)));
+
+            Assert.Equal(3.0, AudioSampleExtractor.TrailingSilenceSeconds(wav));
+        }
+
+        [Fact]
+        public void TrailingSilenceSeconds_LoudTail_IsZero()
+        {
+            var wav = WriteWav("loud.wav", Samples((48000, 0), (32000, 8000)));
+
+            Assert.Equal(0.0, AudioSampleExtractor.TrailingSilenceSeconds(wav));
+        }
+
+        [Fact]
+        public void TrailingSilenceSeconds_WholeClipSilent_IsTheWholeClip()
+        {
+            var wav = WriteWav("silent.wav", Samples((16000 * 4, 0)));
+
+            Assert.Equal(4.0, AudioSampleExtractor.TrailingSilenceSeconds(wav));
+        }
+
+        [Fact]
+        public void TrailingSilenceSeconds_RoomToneBelowThreshold_CountsAsSilence()
+        {
+            var wav = WriteWav("roomtone.wav", Samples((32000, 8000), (16000, 120), (16000, -120)));
+
+            Assert.Equal(2.0, AudioSampleExtractor.TrailingSilenceSeconds(wav));
+        }
     }
 }

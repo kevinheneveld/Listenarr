@@ -119,7 +119,37 @@ namespace Listenarr.Application.Audiobooks.Verification
             var titleTokens = Tokenize(TitleUtils.NormalizeTitle(title));
             if (titleTokens.Count == 0) return null;
 
-            return BestWindow(transcriptTokens, titleTokens, nameMode: false);
+            // Stopwords carry no identity. "Frost and Venom" used to score a
+            // third of a title off a stray "and" in ordinary narration — live,
+            // that 0.333 cleared the gross-mismatch ceiling and made the neutral
+            // NoSpokenCredits outcome unreachable for every short title with a
+            // "the"/"and"/"of" in it. Content words are matched against content
+            // words heard; the reported span is still the original heard text,
+            // so "judge and jury" reads back as spoken. A title made only of
+            // stopwords falls back to the plain alignment.
+            var contentTitle = titleTokens.Where(t => !NameStopWords.Contains(t)).ToList();
+            if (contentTitle.Count == 0) return BestWindow(transcriptTokens, titleTokens, nameMode: false);
+
+            var heard = new List<string>(transcriptTokens.Count);
+            var heardIndices = new List<int>(transcriptTokens.Count);
+            for (var i = 0; i < transcriptTokens.Count; i++)
+            {
+                if (NameStopWords.Contains(transcriptTokens[i])) continue;
+                heard.Add(transcriptTokens[i]);
+                heardIndices.Add(i);
+            }
+
+            var (score, start, consumed) = BestAlignment(heard, contentTitle, nameMode: false);
+            string? matchedText = null;
+            if (start >= 0 && score >= MatchedTextMinScore)
+            {
+                var last = Math.Min(start + Math.Max(consumed, 1), heard.Count) - 1;
+                var from = heardIndices[start];
+                var to = heardIndices[last];
+                matchedText = string.Join(' ', transcriptTokens.Skip(from).Take(to - from + 1));
+            }
+
+            return new VerificationFieldMatch(Math.Round(score, 3), matchedText);
         }
 
         /// <summary>
@@ -169,9 +199,32 @@ namespace Listenarr.Application.Audiobooks.Verification
         /// score is the best window. Alignment keeps locality — "Andy" scoring
         /// against minute-apart tokens is not a name match.
         /// </summary>
+        // Only surface matched text when there is something usable to audit;
+        // a sub-noise-floor "best" window is misleading in the triage UI.
+        private const double MatchedTextMinScore = 0.35;
+
         private static VerificationFieldMatch BestWindow(IReadOnlyList<string> transcriptTokens, IReadOnlyList<string> targetTokens, bool nameMode)
         {
-            if (transcriptTokens.Count == 0) return new VerificationFieldMatch(0, null);
+            var (bestScore, bestStart, bestConsumed) = BestAlignment(transcriptTokens, targetTokens, nameMode);
+
+            string? matchedText = null;
+            if (bestStart >= 0 && bestScore >= MatchedTextMinScore)
+            {
+                var length = Math.Min(Math.Max(bestConsumed, 1), transcriptTokens.Count - bestStart);
+                matchedText = string.Join(' ', transcriptTokens.Skip(bestStart).Take(length));
+            }
+
+            return new VerificationFieldMatch(Math.Round(bestScore, 3), matchedText);
+        }
+
+        /// <summary>
+        /// Best alignment of the target phrase anywhere in the transcript:
+        /// (score, start index into the transcript, transcript tokens consumed).
+        /// Start is -1 when the transcript is empty.
+        /// </summary>
+        private static (double Score, int Start, int Consumed) BestAlignment(IReadOnlyList<string> transcriptTokens, IReadOnlyList<string> targetTokens, bool nameMode)
+        {
+            if (transcriptTokens.Count == 0) return (0, -1, 0);
 
             var bestScore = 0.0;
             var bestStart = -1;
@@ -188,16 +241,7 @@ namespace Listenarr.Application.Audiobooks.Verification
                 }
             }
 
-            // Only surface matched text when there is something usable to audit;
-            // a sub-noise-floor "best" window is misleading in the triage UI.
-            string? matchedText = null;
-            if (bestStart >= 0 && bestScore >= 0.35)
-            {
-                var length = Math.Min(Math.Max(bestConsumed, 1), transcriptTokens.Count - bestStart);
-                matchedText = string.Join(' ', transcriptTokens.Skip(bestStart).Take(length));
-            }
-
-            return new VerificationFieldMatch(Math.Round(bestScore, 3), matchedText);
+            return (bestScore, bestStart, bestConsumed);
         }
 
         /// <summary>
@@ -235,8 +279,11 @@ namespace Listenarr.Application.Audiobooks.Verification
                         var one = dp[i, j] + TokenSimilarity(target[i], transcript[start + j], nameMode);
                         if (one > dp[i + 1, j + 1]) dp[i + 1, j + 1] = one;
 
-                        // 2:1 — two target tokens fused against one heard token
-                        if (i + 1 < target.Count)
+                        // 2:1 — two target tokens fused against one heard token.
+                        // Both halves must be real words: fusing the numeral of
+                        // "Two Towers" gives "2towers", one edit from "towers",
+                        // and credits a token that was never heard.
+                        if (i + 1 < target.Count && CanFuse(target[i], target[i + 1]))
                         {
                             var fusedTarget = dp[i, j] + 2 * TokenSimilarity(target[i] + target[i + 1], transcript[start + j], nameMode);
                             if (fusedTarget > dp[i + 2, j + 1]) dp[i + 2, j + 1] = fusedTarget;
@@ -249,6 +296,7 @@ namespace Listenarr.Application.Audiobooks.Verification
                     // and can phonetic-match a first name (live regression:
                     // "Andy" scoring 0.85 against "and the").
                     if (j + 1 < span
+                        && CanFuse(transcript[start + j], transcript[start + j + 1])
                         && !(nameMode && (NameStopWords.Contains(transcript[start + j]) || NameStopWords.Contains(transcript[start + j + 1]))))
                     {
                         var fusedHeard = dp[i, j] + TokenSimilarity(target[i], transcript[start + j] + transcript[start + j + 1], nameMode);
@@ -277,6 +325,8 @@ namespace Listenarr.Application.Audiobooks.Verification
             }
             return (best, consumed);
         }
+
+        private static bool CanFuse(string left, string right) => left.Length >= 2 && right.Length >= 2;
 
         private static double TokenSimilarity(string target, string heard, bool nameMode)
         {

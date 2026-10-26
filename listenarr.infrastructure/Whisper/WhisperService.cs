@@ -270,6 +270,16 @@ namespace Listenarr.Infrastructure.Whisper
                 {
                     transcript = (headText + " " + transcript).Trim();
                 }
+
+                // Still nothing announcement-shaped? Whisper's fixed 30 s chunks
+                // swallow an announcer under intro music (and a credits block
+                // before the outro) WITHOUT leaving a timestamp hole, so neither
+                // the gap re-probe nor the head probe can see it. Voice activity
+                // detection re-segments the clip on speech, which is what
+                // recovered those credits live (see WhisperService.Vad).
+                var vadTranscript = await TryVadRedecodeAsync(wavPath, modelPath, transcript, priorityClass, cancellationToken);
+                if (vadTranscript != null) return vadTranscript;
+
                 return transcript.Length == 0 ? null : transcript;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -284,7 +294,8 @@ namespace Listenarr.Infrastructure.Whisper
         }
 
         private async Task<string?> RunWhisperCliAsync(
-            string wavPath, string modelPath, int? offsetMs, int? durationMs, ProcessPriorityClass? priorityClass, CancellationToken cancellationToken)
+            string wavPath, string modelPath, int? offsetMs, int? durationMs, ProcessPriorityClass? priorityClass, CancellationToken cancellationToken,
+            string? vadModelPath = null)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -316,6 +327,12 @@ namespace Listenarr.Infrastructure.Whisper
             {
                 startInfo.ArgumentList.Add("--duration");
                 startInfo.ArgumentList.Add(durationMs.Value.ToString());
+            }
+            if (vadModelPath != null)
+            {
+                startInfo.ArgumentList.Add("--vad");
+                startInfo.ArgumentList.Add("-vm");
+                startInfo.ArgumentList.Add(vadModelPath);
             }
 
             var result = await _processRunner.RunAsync(startInfo, TranscribeTimeoutMs, cancellationToken, priorityClass);

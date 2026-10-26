@@ -475,5 +475,152 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.Equal("deterministic:whisper-base.en→small.en", verdict.Method);
             Assert.Contains("unabridged edition", verdict.Transcript);
         }
+
+        private static Audiobook TwoTowers() => new()
+        {
+            Id = 3,
+            Title = "The Two Towers",
+            Authors = new List<string> { "J. R. R. Tolkien" },
+            Narrators = new List<string> { "Rob Inglis" },
+            Publisher = "Recorded Books"
+        };
+
+        [Fact]
+        public void Evaluate_NarrationEchoesOneTitleWord_IsNoSpokenCredits()
+        {
+            // A title word spoken by the narration is partial noise, not a credit:
+            // with no trace of the author and nothing announcement-shaped the
+            // outcome is the neutral NoSpokenCredits, not a flag.
+            var verdict = CreateVerifier().Evaluate(
+                TwoTowers(),
+                "aragorn sped on up the hill every now and again he bent to the ground and far below the towers " +
+                "of the gate stood silent while the grey company rode on through the long day without a word spoken",
+                closingText: null);
+
+            Assert.True(
+                verdict.Outcome == VerificationOutcome.NoSpokenCredits,
+                $"got {verdict.Outcome}: title {verdict.TitleMatch?.Score} ('{verdict.TitleMatch?.MatchedText}'), author {verdict.AuthorMatch?.Score} ('{verdict.AuthorMatch?.MatchedText}'), announces {DeterministicIdentityVerifier.AnnouncesSomething(verdict.Transcript)}");
+        }
+
+        [Fact]
+        public void Evaluate_NarrationEchoesTitleWordButCreditsNameAnotherBook_IsStillMismatch()
+        {
+            var verdict = CreateVerifier().Evaluate(
+                TwoTowers(),
+                "Penguin Audio presents The Towers of Trebizond by Rose Macaulay, read by Juliet Stevenson. Chapter one.",
+                closingText: null);
+
+            Assert.NotEqual(VerificationOutcome.NoSpokenCredits, verdict.Outcome);
+            Assert.NotEqual(VerificationOutcome.Match, verdict.Outcome);
+        }
+
+        private static DeterministicIdentityVerifier.VerdictCandidate Candidate(
+            DeterministicIdentityVerifier verifier, Audiobook book, string? opening, string? closing, bool escalated) =>
+            new(verifier.Evaluate(book, opening, closing), opening, closing, escalated);
+
+        [Fact]
+        public void ChooseBestVerdict_CreditBearingFirstPass_BeatsCreditlessEscalation()
+        {
+            // The Frost and Venom case: base.en heard the announcer under the
+            // music, small.en collapsed the same 16 s to "CHAPTER I". The text
+            // with the credits wins even though the bigger model produced the other.
+            var verifier = CreateVerifier();
+            var firstPass = Candidate(verifier, HailMary(),
+                "Audible Studios presents Project Hail Mary by Randy Fear, narrated by Jay Carter. Chapter one. Ryland Grace woke up.",
+                null, escalated: false);
+            var escalated = Candidate(verifier, HailMary(),
+                "CHAPTER I Ryland Grace woke up in a bed he did not know with two arms he did not remember having and a question",
+                null, escalated: true);
+            Assert.NotEqual(VerificationOutcome.Match, firstPass.Verdict.Outcome);
+
+            var best = DeterministicIdentityVerifier.ChooseBestVerdict(new[] { escalated, firstPass });
+
+            Assert.Same(firstPass, best);
+            Assert.False(best.UsesEscalatedText);
+        }
+
+        [Fact]
+        public void ChooseBestVerdict_DecidedOutcome_BeatsInconclusiveFirstPass()
+        {
+            var verifier = CreateVerifier();
+            var firstPass = Candidate(verifier, HailMary(),
+                "closing even by author c clock some story text follows here and continues on for a while longer",
+                null, escalated: false);
+            var escalated = Candidate(verifier, HailMary(),
+                "Project Hail Mary by Andy Weir narrated by Ray Porter",
+                null, escalated: true);
+            Assert.Equal(VerificationOutcome.Match, escalated.Verdict.Outcome);
+
+            var best = DeterministicIdentityVerifier.ChooseBestVerdict(new[] { firstPass, escalated });
+
+            Assert.Same(escalated, best);
+        }
+
+        [Fact]
+        public void ChooseBestVerdict_TwoDecidedReadings_PrefersTheLargerModel()
+        {
+            var verifier = CreateVerifier();
+            var firstPass = Candidate(verifier, HailMary(),
+                "Audible presents The Martian by Mark Watney narrated by Wil Wheaton",
+                null, escalated: false);
+            var escalated = Candidate(verifier, HailMary(),
+                "Audible presents Project Hail Mary by Andy Weir narrated by Ray Porter",
+                null, escalated: true);
+            Assert.Equal(VerificationOutcome.Mismatch, firstPass.Verdict.Outcome);
+            Assert.Equal(VerificationOutcome.Match, escalated.Verdict.Outcome);
+
+            var best = DeterministicIdentityVerifier.ChooseBestVerdict(new[] { firstPass, escalated });
+
+            Assert.Same(escalated, best);
+        }
+
+        [Fact]
+        public void WindowOptions_YieldsDistinctTexts_EscalatedFirst()
+        {
+            Assert.Equal(
+                new[] { ("b", true), ("a", false) },
+                DeterministicIdentityVerifier.WindowOptions("a", "b").Select(o => (o.Text!, o.Escalated)).ToArray());
+            Assert.Equal(
+                new[] { ("a", true) },
+                DeterministicIdentityVerifier.WindowOptions("a", "a").Select(o => (o.Text!, o.Escalated)).ToArray());
+            Assert.Equal(
+                new[] { ("b", true) },
+                DeterministicIdentityVerifier.WindowOptions(null, "b").Select(o => (o.Text!, o.Escalated)).ToArray());
+            var none = DeterministicIdentityVerifier.WindowOptions(null, null).ToArray();
+            Assert.Single(none);
+            Assert.Null(none[0].Text);
+        }
+
+        [Fact]
+        public async Task VerifyAsync_EscalationLosesTheCredits_KeepsFirstPassTranscript()
+        {
+            var whisper = new Mock<IWhisperService>();
+            whisper.SetupGet(w => w.ModelName).Returns("base.en");
+            whisper.Setup(w => w.TranscribeAsync("/tmp/opening.wav", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("Audible Studios presents Project Hail Mary by Randy Fear, narrated by Jay Carter. Chapter one. Ryland Grace woke up.");
+            whisper.Setup(w => w.TranscribeWithModelAsync("/tmp/opening.wav", "small.en", It.IsAny<CancellationToken>()))
+                .ReturnsAsync("CHAPTER I Ryland Grace woke up in a bed he did not know with two arms he did not remember having and a question");
+
+            var samples = new AudioSampleSet { OpeningClipPath = "/tmp/opening.wav" };
+            var extractor = new Mock<IAudioSampleExtractor>();
+            extractor.Setup(e => e.ExtractAsync(It.IsAny<IReadOnlyList<string>>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<AudioSampleStrategy>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(samples);
+
+            var configuration = new Mock<IConfigurationService>();
+            configuration.Setup(c => c.GetApplicationSettingsAsync())
+                .ReturnsAsync(new ApplicationSettings { VerificationEscalationModel = "small.en" });
+
+            var verifier = new DeterministicIdentityVerifier(
+                extractor.Object, whisper.Object, configuration.Object,
+                NullLogger<DeterministicIdentityVerifier>.Instance);
+
+            var verdict = await verifier.VerifyAsync(HailMary(), "/tmp/book.mp3");
+
+            whisper.Verify(w => w.TranscribeWithModelAsync("/tmp/opening.wav", "small.en", It.IsAny<CancellationToken>()), Times.Once);
+            Assert.Contains("Project Hail Mary", verdict.Transcript);
+            Assert.Equal("deterministic:whisper-base.en", verdict.Method);
+            Assert.NotNull(verdict.HeardCredits);
+            Assert.Equal("Project Hail Mary", verdict.HeardCredits!.Title);
+        }
     }
 }

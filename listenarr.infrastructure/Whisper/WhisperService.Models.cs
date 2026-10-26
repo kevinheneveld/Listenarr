@@ -54,10 +54,10 @@ namespace Listenarr.Infrastructure.Whisper
             var cached = Path.Join(_modelsDownloadDir, fileName);
             if (File.Exists(cached)) return cached;
 
-            return await DownloadModelAsync(fileName, cached, cancellationToken);
+            return await DownloadModelAsync(fileName, cached, string.Format(ModelDownloadUrlTemplate, fileName), MinDownloadedModelBytes, cancellationToken);
         }
 
-        private async Task<string?> DownloadModelAsync(string fileName, string destination, CancellationToken cancellationToken)
+        private async Task<string?> DownloadModelAsync(string fileName, string destination, string url, long minBytes, CancellationToken cancellationToken)
         {
             if (_httpClientFactory == null)
             {
@@ -71,8 +71,7 @@ namespace Listenarr.Infrastructure.Whisper
                 // Another escalation may have completed the download while we waited.
                 if (File.Exists(destination)) return destination;
 
-                var url = string.Format(ModelDownloadUrlTemplate, fileName);
-                _logger.LogInformation("Downloading whisper escalation model {File} from {Url}", fileName, url);
+                _logger.LogInformation("Downloading whisper model {File} from {Url}", fileName, url);
 
                 Directory.CreateDirectory(_modelsDownloadDir);
                 var tmpFile = destination + ".tmp";
@@ -87,7 +86,7 @@ namespace Listenarr.Infrastructure.Whisper
                 }
 
                 var length = new FileInfo(tmpFile).Length;
-                if (length < MinDownloadedModelBytes)
+                if (length < minBytes)
                 {
                     _logger.LogWarning(
                         "Downloaded whisper model {File} is implausibly small ({Bytes} bytes) — discarding",
@@ -99,7 +98,7 @@ namespace Listenarr.Infrastructure.Whisper
                 // Atomic publish: a crash mid-download leaves only the .tmp,
                 // never a truncated file at the real path.
                 File.Move(tmpFile, destination, overwrite: true);
-                _logger.LogInformation("whisper escalation model {File} installed ({Mb} MB)", fileName, length / (1024 * 1024));
+                _logger.LogInformation("whisper model {File} installed ({Kb} KB)", fileName, length / 1024);
                 return destination;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -108,7 +107,7 @@ namespace Listenarr.Infrastructure.Whisper
             }
             catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
-                _logger.LogWarning(ex, "whisper model download failed for {File} — escalation skipped", fileName);
+                _logger.LogWarning(ex, "whisper model download failed for {File} — the pass that needed it is skipped", fileName);
                 return null;
             }
             finally

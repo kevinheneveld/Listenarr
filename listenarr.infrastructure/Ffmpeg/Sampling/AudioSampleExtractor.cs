@@ -104,7 +104,9 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
             if (existing.Count == 0) return null;
             if (existing.Count == 1)
             {
-                return await ClipAsync(ffmpegPath, existing[0], tempDir, fromEnd, seconds, priorityClass, ct);
+                return fromEnd
+                    ? await ClipTailAsync(ffmpegPath, existing[0], tempDir, seconds, priorityClass, ct)
+                    : await ClipAsync(ffmpegPath, existing[0], tempDir, fromEnd, seconds, priorityClass, ct);
             }
 
             var order = fromEnd ? ((IEnumerable<string>)existing).Reverse().ToList() : existing;
@@ -115,7 +117,12 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
                 foreach (var file in order)
                 {
                     if (remaining < 1) break;
-                    var piece = await ClipAsync(ffmpegPath, file, tempDir, fromEnd, (int)Math.Ceiling(remaining), priorityClass, ct);
+                    var want = (int)Math.Ceiling(remaining);
+                    // The very last file of the book gets the trailing-silence
+                    // treatment; earlier tails are joined as-is.
+                    var piece = fromEnd && pieces.Count == 0
+                        ? await ClipTailAsync(ffmpegPath, file, tempDir, want, priorityClass, ct)
+                        : await ClipAsync(ffmpegPath, file, tempDir, fromEnd, want, priorityClass, ct);
                     if (piece == null) continue; // unreadable source — try the next
                     pieces.Add(piece);
                     remaining -= WavSeconds(piece);
@@ -146,6 +153,97 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
         }
 
         /// <summary>Seconds of audio in a 16 kHz mono s16le WAV (32,000 bytes/s).</summary>
+        // A closing window that is mostly silence says nothing. Live case: an
+        // Audible Original ended with well over 90 s of digital silence, so the
+        // closing window transcribed as six "[BLANK_AUDIO]" tokens while the
+        // credits sat just before the silence. Below this much trailing
+        // silence the window is used as-is (a few seconds of room tone is
+        // normal); above it the window is moved back past the silence, up to
+        // the cap.
+        internal const double MinTrailingSilenceSeconds = 15;
+        internal const double MaxTrailingSilenceSkipSeconds = 900;
+        private const int MaxTrailingSilenceProbes = 12;
+        // 16-bit peak below this (≈ -38 dBFS) counts as silence.
+        internal const int SilencePeakThreshold = 400;
+
+        /// <summary>
+        /// Cuts the closing window of one file, moving it back past trailing
+        /// silence so the window ends where the audio actually ends.
+        /// </summary>
+        private async Task<string?> ClipTailAsync(string ffmpegPath, string sourcePath, string tempDir, int seconds, ProcessPriorityClass? priorityClass, CancellationToken ct)
+        {
+            var skip = 0.0;
+            for (var attempt = 0; attempt < MaxTrailingSilenceProbes; attempt++)
+            {
+                var clip = await ClipAsync(ffmpegPath, sourcePath, tempDir, fromEnd: true, seconds, priorityClass, ct, tailSkipSeconds: (int)Math.Ceiling(skip));
+                if (clip == null) return null;
+
+                var silent = TrailingSilenceSeconds(clip);
+                if (silent < MinTrailingSilenceSeconds || WavSeconds(clip) < 1) return clip;
+                if (skip + silent > MaxTrailingSilenceSkipSeconds || attempt == MaxTrailingSilenceProbes - 1)
+                {
+                    _logger.LogInformation(
+                        "closing window of {Source}: {Silent:0}s of trailing silence reaches the {Cap:0}s cap — keeping the window as cut",
+                        sourcePath, skip + silent, MaxTrailingSilenceSkipSeconds);
+                    return clip;
+                }
+
+                // A window that is silent to its very start may sit inside a
+                // longer silence: step back by what was measured and look again.
+                skip += silent;
+                _logger.LogInformation(
+                    "closing window of {Source}: skipping {Silent:0}s of trailing silence (total {Total:0}s)",
+                    sourcePath, silent, skip);
+                TryDelete(clip);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Seconds of silence (16-bit peak below <paramref name="peakThreshold"/>)
+        /// at the end of a 16 kHz mono s16le WAV, measured in quarter-second
+        /// blocks from the tail. Public + pure for unit testing.
+        /// </summary>
+        public static double TrailingSilenceSeconds(string wavPath, int peakThreshold = SilencePeakThreshold)
+        {
+            const int bytesPerSecond = 16000 * 2;
+            const int blockBytes = bytesPerSecond / 4;
+            try
+            {
+                var located = Whisper.WhisperService.TryLocateDataChunk(wavPath);
+                if (located == null) return 0;
+                var (chunkOffset, dataSize) = located.Value;
+                var dataStart = chunkOffset + 8;
+                using var source = File.OpenRead(wavPath);
+                var dataEnd = Math.Min(source.Length, dataStart + dataSize);
+                var buffer = new byte[blockBytes];
+                var silentBlocks = 0;
+                var position = dataEnd;
+                while (position - blockBytes >= dataStart)
+                {
+                    position -= blockBytes;
+                    source.Seek(position, SeekOrigin.Begin);
+                    source.ReadExactly(buffer, 0, blockBytes);
+                    var loud = false;
+                    for (var i = 0; i + 1 < blockBytes; i += 2)
+                    {
+                        if (Math.Abs((int)BitConverter.ToInt16(buffer, i)) >= peakThreshold)
+                        {
+                            loud = true;
+                            break;
+                        }
+                    }
+                    if (loud) break;
+                    silentBlocks++;
+                }
+                return silentBlocks / 4.0;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                return 0;
+            }
+        }
+
         internal static double WavSeconds(string wavPath)
         {
             var located = Whisper.WhisperService.TryLocateDataChunk(wavPath);
@@ -203,7 +301,7 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
             }
         }
 
-        private async Task<string?> ClipAsync(string ffmpegPath, string sourcePath, string tempDir, bool fromEnd, int seconds, ProcessPriorityClass? priorityClass, CancellationToken ct)
+        private async Task<string?> ClipAsync(string ffmpegPath, string sourcePath, string tempDir, bool fromEnd, int seconds, ProcessPriorityClass? priorityClass, CancellationToken ct, int tailSkipSeconds = 0)
         {
             var clipPath = Path.Join(tempDir, $"{Guid.NewGuid():N}.wav");
             try
@@ -222,13 +320,14 @@ namespace Listenarr.Infrastructure.Ffmpeg.Sampling
                 if (fromEnd)
                 {
                     // Seek relative to end-of-file; on inputs shorter than the
-                    // window ffmpeg just starts at 0.
+                    // window ffmpeg just starts at 0. A tail skip moves the
+                    // window back past trailing silence (ClipTailAsync).
                     startInfo.ArgumentList.Add("-sseof");
-                    startInfo.ArgumentList.Add($"-{seconds}");
+                    startInfo.ArgumentList.Add($"-{seconds + Math.Max(0, tailSkipSeconds)}");
                 }
                 startInfo.ArgumentList.Add("-i");
                 startInfo.ArgumentList.Add(sourcePath);
-                if (!fromEnd)
+                if (!fromEnd || tailSkipSeconds > 0)
                 {
                     startInfo.ArgumentList.Add("-t");
                     startInfo.ArgumentList.Add(seconds.ToString());

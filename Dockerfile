@@ -43,9 +43,12 @@ RUN git clone --depth 1 --branch ${WHISPER_CPP_VERSION} https://github.com/ggml-
 		-DWHISPER_BUILD_SERVER=OFF \
 	&& cmake --build /whisper/build --config Release -j"$(nproc)" --target whisper-cli \
 	&& /whisper/models/download-ggml-model.sh ${WHISPER_MODEL} \
+	&& curl -fsSL -o /whisper/models/ggml-silero-v5.1.2.bin \
+		https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin \
 	&& printf '%s\n' \
 		"whisper.cpp ${WHISPER_CPP_VERSION} (MIT License) - https://github.com/ggml-org/whisper.cpp" \
 		"ggml-${WHISPER_MODEL}.bin model from https://huggingface.co/ggerganov/whisper.cpp (MIT, derived from OpenAI Whisper weights)" \
+		"ggml-silero-v5.1.2.bin voice-activity model from https://huggingface.co/ggml-org/whisper-vad (MIT, converted from snakers4/silero-vad)" \
 		"See LICENSE-whisper.txt alongside this notice for the full license text." \
 		> /whisper/NOTICE-whisper.txt
 
@@ -108,6 +111,7 @@ COPY --from=build /app/publish .
 ARG WHISPER_MODEL=base.en
 COPY --from=whisper-builder /whisper/build/bin/whisper-cli /app/tools/whisper/whisper-cli
 COPY --from=whisper-builder /whisper/models/ggml-${WHISPER_MODEL}.bin /app/tools/whisper/ggml-${WHISPER_MODEL}.bin
+COPY --from=whisper-builder /whisper/models/ggml-silero-v5.1.2.bin /app/tools/whisper/ggml-silero-v5.1.2.bin
 COPY --from=whisper-builder /whisper/LICENSE /app/tools/whisper/LICENSE-whisper.txt
 COPY --from=whisper-builder /whisper/NOTICE-whisper.txt /app/tools/whisper/NOTICE-whisper.txt
 RUN chmod +x /app/tools/whisper/whisper-cli

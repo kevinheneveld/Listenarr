@@ -35,7 +35,7 @@ namespace Listenarr.Application.Audiobooks.Verification
     /// lower-confidence path, and everything ambiguous (music intro, foreign
     /// language) lands in Uncertain for human review rather than being guessed at.
     /// </summary>
-    public class DeterministicIdentityVerifier : IIdentityVerifier
+    public partial class DeterministicIdentityVerifier : IIdentityVerifier
     {
         // Field weights, by how reliably STT renders each field. Renormalized
         // over the fields the book actually has (a missing narrator must not
@@ -50,8 +50,12 @@ namespace Listenarr.Application.Audiobooks.Verification
         private const double AuthorMatchThreshold = 0.65;
         // Kept strictly below the noise a partial echo produces: one of three
         // title tokens present scores 0.333, which must stay Uncertain, not
-        // become a confident Mismatch.
+        // become a confident Mismatch. (Stopwords no longer count as title
+        // tokens, so a stray "and" cannot produce that echo any more.)
         private const double GrossMismatchCeiling = 0.30;
+        // Up to half the title's content words heard, with no author and no
+        // announcement, is still "no credits" rather than a partial claim.
+        private const double NoCreditsTitleEchoCeiling = 0.50;
 
         private readonly IAudioSampleExtractor _extractor;
         private readonly IWhisperService _whisper;
@@ -131,10 +135,16 @@ namespace Listenarr.Application.Audiobooks.Verification
             // can't reach a confident Match, re-read the SAME extracted samples
             // with a larger model — proper nouns are exactly where small models
             // garble (live case: base.en heard "Before Eden"'s closing credits
-            // as "closing even"). The escalated verdict wins even when it too
-            // isn't a Match: its transcript and heard credits are still better
-            // material for the card and the relabel flow. Escalation failures
-            // (model missing, download failed) silently keep the first pass.
+            // as "closing even"). The larger model is NOT uniformly better,
+            // though: on a Recorded Books title base.en heard the announcer
+            // over the intro music ("...presents Frost and Venom by Christine
+            // Fijan, narrated by Elisa Bresnand") and the closing credits, while
+            // small.en collapsed the same clips to "CHAPTER I" and swallowed the
+            // credits block whole. So the passes compete per window: every
+            // combination of first-pass and escalated text is scored and the
+            // one carrying the most credit evidence wins (ChooseBestVerdict).
+            // Escalation failures (model missing, download failed) silently
+            // keep the first pass.
             var escalationModel = settings?.VerificationEscalationModel?.Trim();
             if (ShouldEscalate(verdict.Outcome, escalationModel, _whisper.ModelName))
             {
@@ -154,15 +164,29 @@ namespace Listenarr.Application.Audiobooks.Verification
 
                 if (escalatedOpening != null || escalatedClosing != null)
                 {
-                    // Best-available text per window: a null escalated window
-                    // must not erase a good first-pass window from the stored
-                    // verdict/transcript.
-                    openingText = escalatedOpening ?? openingText;
-                    closingText = escalatedClosing ?? closingText;
-                    verdict = ApplyCompleteness(Evaluate(audiobook, openingText, closingText), completeness) with
+                    var candidates = new List<VerdictCandidate>();
+                    foreach (var (oText, oEscalated) in WindowOptions(openingText, escalatedOpening))
                     {
-                        Method = ComposeEscalatedMethod(_whisper.ModelName, escalationModel!)
-                    };
+                        foreach (var (cText, cEscalated) in WindowOptions(closingText, escalatedClosing))
+                        {
+                            if (oText == null && cText == null) continue;
+                            var candidate = ApplyCompleteness(Evaluate(audiobook, oText, cText), completeness);
+                            candidates.Add(new VerdictCandidate(candidate, oText, cText, oEscalated || cEscalated));
+                        }
+                    }
+
+                    if (candidates.Count > 0)
+                    {
+                        var best = ChooseBestVerdict(candidates);
+                        openingText = best.OpeningText;
+                        closingText = best.ClosingText;
+                        verdict = best.UsesEscalatedText
+                            ? best.Verdict with { Method = ComposeEscalatedMethod(_whisper.ModelName, escalationModel!) }
+                            : best.Verdict;
+                        _logger.LogInformation(
+                            "Escalation of audiobook {Id}: kept {Source} text ({Outcome}, confidence {Confidence:0.00}) out of {Count} window combinations",
+                            audiobook.Id, best.UsesEscalatedText ? "escalated" : "first-pass", verdict.Outcome, verdict.Confidence, candidates.Count);
+                    }
                 }
             }
 
@@ -284,10 +308,7 @@ namespace Listenarr.Application.Audiobooks.Verification
                 // content — many books open with pure narration, and this was
                 // the top false-flag in live use. A confident Mismatch requires
                 // credit-shaped claims that CONTRADICT the metadata.
-                var heard = SpokenCreditsExtractor.Extract(transcript);
-                var announcesSomething = heard?.Title != null || heard?.Author != null
-                    || SpokenCreditsExtractor.ContainsCreditMarkers(transcript);
-                if (!announcesSomething)
+                if (!AnnouncesSomething(transcript))
                 {
                     outcome = VerificationOutcome.NoSpokenCredits;
                     confidence = 0.3;
@@ -298,6 +319,19 @@ namespace Listenarr.Application.Audiobooks.Verification
                     var worst = Math.Max(title.Score, author.Score);
                     confidence = Math.Round(Math.Min(0.95, 0.70 + (GrossMismatchCeiling - worst)), 3);
                 }
+            }
+            else if (author != null && author.Score < GrossMismatchCeiling
+                     && (title?.Score ?? 0) <= NoCreditsTitleEchoCeiling
+                     && !AnnouncesSomething(transcript))
+            {
+                // No trace of the author, at most half the title's words, and
+                // nothing announcement-shaped anywhere in the transcript: a
+                // title word echoed by the narration ("towers" in a reading of
+                // The Two Towers) is partial noise, not a credit. Without this
+                // the echo alone kept credit-less books in the flagged bucket —
+                // live, 219 Uncertain verdicts against a single NoSpokenCredits.
+                outcome = VerificationOutcome.NoSpokenCredits;
+                confidence = 0.3;
             }
             else if ((title?.Score ?? 0) >= TitleMatchThreshold && (author == null || author.Score >= AuthorMatchThreshold))
             {
@@ -395,6 +429,19 @@ namespace Listenarr.Application.Audiobooks.Verification
             return new VerificationFieldMatch(
                 outside?.Score ?? 0,
                 $"series phrase only: {title.MatchedText}");
+        }
+
+        /// <summary>
+        /// Does the transcript carry anything credit-shaped at all — an
+        /// announcement phrase or an extractable heard title/author? Absence
+        /// of credits is never evidence of wrong content.
+        /// </summary>
+        public static bool AnnouncesSomething(string? transcript)
+        {
+            if (string.IsNullOrWhiteSpace(transcript)) return false;
+            if (SpokenCreditsExtractor.ContainsCreditMarkers(transcript)) return true;
+            var heard = SpokenCreditsExtractor.Extract(transcript);
+            return heard?.Title != null || heard?.Author != null;
         }
 
         private static double WeightedScore(VerificationFieldMatch? title, VerificationFieldMatch? author, VerificationFieldMatch? narrator, VerificationFieldMatch? publisher)

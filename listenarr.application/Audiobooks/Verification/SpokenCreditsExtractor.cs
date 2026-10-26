@@ -99,7 +99,7 @@ namespace Listenarr.Application.Audiobooks.Verification
         // distinguish "announces a different book" (a real mismatch) from "never
         // announces anything" (NoSpokenCredits — not evidence of wrong content).
         private static readonly Regex CreditMarkerRegex = new(
-            @"\b(?:(?:narrated|read|performed)(?:\s+(?:for|to)\s+you)?\s+by|written\s+by|presents?\b|audiobook|unabridged|abridged|production\s+of|thank\s+you\s+for\s+listening|this\s+is\s+audible|recorded\s+books|copyright(?:ed)?\s+\d{4})",
+            @"\b(?:(?:narrated|read|performed)(?:\s+(?:for|to)\s+you)?\s+by|written\s+by|presents?\b|audiobook|unabridged|abridged|production\s+of|recording\s+of|read\s+aloud|thank\s+you\s+for\s+listening|this\s+is\s+audible|recorded\s+books|librivox|copyright(?:ed)?\s+\d{4})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         /// <summary>

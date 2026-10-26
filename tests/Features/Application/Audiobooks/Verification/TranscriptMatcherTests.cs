@@ -244,5 +244,46 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.NotNull(match);
             Assert.True(match!.Score < 0.35, $"expected no match, got {match.Score}");
         }
+
+        [Fact]
+        public void MatchTitle_StopwordEchoedByNarration_ScoresNothing()
+        {
+            // Live: "Frost and Venom" scored 0.333 against pure narration because
+            // the narration said "and". That cleared the gross-mismatch ceiling
+            // and kept a credit-less book out of the neutral NoSpokenCredits bucket.
+            var tokens = TranscriptMatcher.Tokenize(
+                "Harlow curled up in her favorite swing chair and she needed to find balance and serenity again");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "Frost and Venom");
+
+            Assert.NotNull(match);
+            Assert.Equal(0, match!.Score);
+            Assert.Null(match.MatchedText);
+        }
+
+        [Fact]
+        public void MatchTitle_StopwordTitleInSpokenCredits_StillMatchesAndQuotesTheSpokenSpan()
+        {
+            var tokens = TranscriptMatcher.Tokenize(
+                "Recorded Books, an RB Media audio brand, presents Frost and Venom by Christine Feehan, narrated by Alyssa Bresnahan.");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "Frost and Venom");
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.95, $"expected ~1.0, got {match.Score}");
+            Assert.Equal("frost and venom", match.MatchedText);
+        }
+
+        [Fact]
+        public void MatchTitle_LeadingArticle_DoesNotCountTowardTheScore()
+        {
+            var tokens = TranscriptMatcher.Tokenize(
+                "the rain had not stopped for three days and the river kept rising past the old stone markers");
+
+            var match = TranscriptMatcher.MatchTitle(tokens, "The Andromeda Strain");
+
+            Assert.NotNull(match);
+            Assert.Equal(0, match!.Score);
+        }
     }
 }
