@@ -93,8 +93,8 @@ namespace Listenarr.Application.Audiobooks.Verification
                 sb.Append("  Publisher: ").Append(audiobook.Publisher).Append('\n');
             }
 
-            sb.Append("\nTranscript:\n");
-            sb.Append(AiLibrarySweepJudge.Truncate(transcript, MaxTranscriptChars));
+            sb.Append("\nTranscript (opening and closing windows; long narration elided as […]):\n");
+            sb.Append(Excerpt(transcript, MaxTranscriptChars));
             sb.Append('\n');
             return sb.ToString();
         }
@@ -104,6 +104,38 @@ namespace Listenarr.Application.Audiobooks.Verification
         /// unknown decision or a missing confidence yields null — which leaves
         /// the deterministic verdict untouched.
         /// </summary>
+        /// <summary>
+        /// The part of the transcript the model gets to see. Credits sit at the
+        /// START of the opening window and the END of the closing window, so a
+        /// plain head truncation threw away exactly the closing credits on a
+        /// long narration (live: "…production of Frost and Venom by Christine
+        /// Vihan, narrated by…" at character 1,700 of a 1,938-character
+        /// transcript, and the judge answered "no spoken credits"). Each window
+        /// keeps its head and its tail within an equal share of the budget.
+        /// Public + pure for unit testing.
+        /// </summary>
+        public static string Excerpt(string transcript, int maxChars)
+        {
+            var windows = transcript.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (windows.Length == 0) return string.Empty;
+
+            const string ellipsis = " […] ";
+            var budget = Math.Max(80, maxChars / windows.Length);
+            var parts = new List<string>(windows.Length);
+            foreach (var window in windows)
+            {
+                if (window.Length <= budget)
+                {
+                    parts.Add(window);
+                    continue;
+                }
+                var head = (int)(budget * 0.55);
+                var tail = Math.Max(1, budget - head - ellipsis.Length);
+                parts.Add(string.Concat(window.AsSpan(0, head), ellipsis, window.AsSpan(window.Length - tail)));
+            }
+            return string.Join('\n', parts);
+        }
+
         public static VerificationAiReview? ParseResponse(string? responseText, string? model)
         {
             if (string.IsNullOrWhiteSpace(responseText)) return null;

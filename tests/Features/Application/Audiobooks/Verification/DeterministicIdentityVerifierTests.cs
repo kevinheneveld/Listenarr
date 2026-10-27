@@ -622,5 +622,39 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.NotNull(verdict.HeardCredits);
             Assert.Equal("Project Hail Mary", verdict.HeardCredits!.Title);
         }
+
+        [Fact]
+        public void ChooseBestVerdict_ExtractableHeardCredits_BeatAnnouncementPhrasesAlone()
+        {
+            // Both inconclusive, both "announce something"; only the first pass
+            // names a title and author the relabel flow and the AI judge can use.
+            var verifier = CreateVerifier();
+            var firstPass = Candidate(verifier, HailMary(),
+                "Audible Studios presents Project Hail Mary by Randy Fear, narrated by Jay Carter. Chapter one. Ryland Grace woke up.",
+                "the end of the story and that was that for everyone involved in the whole affair",
+                escalated: false);
+            var escalated = Candidate(verifier, HailMary(),
+                "CHAPTER I Ryland Grace woke up in a bed he did not know with two arms he did not remember having",
+                "the end of the story about mary and the crew, and that was that for everyone involved. Thank you for listening.",
+                escalated: true);
+            Assert.NotEqual(VerificationOutcome.Match, firstPass.Verdict.Outcome);
+            Assert.Equal(VerificationOutcome.Uncertain, escalated.Verdict.Outcome);
+
+            var best = DeterministicIdentityVerifier.ChooseBestVerdict(new[] { escalated, firstPass });
+
+            Assert.Same(firstPass, best);
+        }
+
+        [Fact]
+        public void HeardCreditsFrom_FallsBackToTheClosingWindow()
+        {
+            var heard = DeterministicIdentityVerifier.HeardCreditsFrom(
+                "CHAPTER I Harlow Fry curled up in her favorite swing chair on her front porch and thought about the day",
+                "She finally believed. We hope you have enjoyed this production of Frost and Venom by Christine Vihan, narrated by Elisa Bresnehan.");
+
+            Assert.NotNull(heard);
+            Assert.Equal("Frost and Venom", heard!.Title);
+            Assert.Equal("Christine Vihan", heard.Author);
+        }
     }
 }

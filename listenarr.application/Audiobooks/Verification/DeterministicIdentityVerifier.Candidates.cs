@@ -36,11 +36,12 @@ namespace Listenarr.Application.Audiobooks.Verification
         /// <summary>
         /// Picks the verdict carrying the most credit evidence: a decided
         /// outcome (Match or Mismatch) beats anything inconclusive; among
-        /// inconclusive verdicts one whose transcript has announcement-shaped
-        /// text or an extractable heard credit beats one with none; then higher
-        /// confidence; the escalated (larger-model) text breaks remaining ties,
-        /// and decides outright between two decided outcomes. Public + pure so
-        /// the ranking is directly unit-testable.
+        /// inconclusive verdicts one whose windows yield an extractable heard
+        /// title/author beats one with only announcement-shaped phrases, which
+        /// beats one with none; then higher confidence; the escalated
+        /// (larger-model) text breaks remaining ties, and decides outright
+        /// between two decided outcomes. Public + pure so the ranking is
+        /// directly unit-testable.
         /// </summary>
         public static VerdictCandidate ChooseBestVerdict(IReadOnlyList<VerdictCandidate> candidates)
         {
@@ -50,7 +51,7 @@ namespace Listenarr.Application.Audiobooks.Verification
             var bestRank = -1;
             foreach (var candidate in candidates)
             {
-                var rank = EvidenceRank(candidate.Verdict);
+                var rank = EvidenceRank(candidate);
                 if (best == null || Beats(candidate, rank, best, bestRank))
                 {
                     best = candidate;
@@ -74,12 +75,29 @@ namespace Listenarr.Application.Audiobooks.Verification
             }
         }
 
-        private const int DecidedRank = 2;
+        private const int DecidedRank = 3;
 
-        private static int EvidenceRank(VerificationVerdict verdict)
+        private static int EvidenceRank(VerdictCandidate candidate)
         {
-            if (verdict.Outcome is VerificationOutcome.Match or VerificationOutcome.Mismatch) return DecidedRank;
-            return AnnouncesSomething(verdict.Transcript) ? 1 : 0;
+            if (candidate.Verdict.Outcome is VerificationOutcome.Match or VerificationOutcome.Mismatch) return DecidedRank;
+            if (HeardCreditsFrom(candidate.OpeningText, candidate.ClosingText) != null) return 2;
+            return AnnouncesSomething(candidate.Verdict.Transcript) ? 1 : 0;
+        }
+
+        /// <summary>
+        /// What the audio CLAIMS the book is, read from whichever window
+        /// actually announces it: the opening first, the closing when the
+        /// opening names nothing (the extractor reads only the head of the text
+        /// it is given, so closing credits behind a long opening were lost).
+        /// Null when neither window yields a title or an author.
+        /// </summary>
+        public static SpokenCredits? HeardCreditsFrom(string? openingText, string? closingText)
+        {
+            var heard = SpokenCreditsExtractor.Extract(openingText);
+            if (heard?.Title != null || heard?.Author != null) return heard;
+            var closing = SpokenCreditsExtractor.Extract(closingText);
+            if (closing?.Title != null || closing?.Author != null) return closing;
+            return heard ?? closing;
         }
 
         /// <summary>

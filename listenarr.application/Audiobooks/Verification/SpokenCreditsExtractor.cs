@@ -208,6 +208,15 @@ namespace Listenarr.Application.Audiobooks.Verification
                 fragment = fragment[(presents.Index + presents.Length)..];
             }
 
+            // Closing-credit phrasing: "We hope you have enjoyed this production
+            // of Frost and Venom by …", "This has been a recording of …". The
+            // title starts after the "of".
+            var productionOf = Regex.Match(fragment, @"\b(?:production|recording|presentation|performance|reading)\s+of\b[,:]?\s*", RegexOptions.IgnoreCase | RegexOptions.RightToLeft);
+            if (productionOf.Success)
+            {
+                fragment = fragment[(productionOf.Index + productionOf.Length)..];
+            }
+
             // Strip production lead-ins ("a sci-fi audio production,", "and now,")
             // repeatedly — some idents chain them.
             string previous;

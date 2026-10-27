@@ -193,7 +193,7 @@ namespace Listenarr.Application.Audiobooks.Verification
             // Independently of the match verdict, extract what the credits CLAIM
             // the book is — on a flagged book this seeds the "find the correct
             // match" relabel flow with the actual title/author the audio names.
-            verdict = verdict with { HeardCredits = SpokenCreditsExtractor.Extract(openingText ?? closingText) };
+            verdict = verdict with { HeardCredits = HeardCreditsFrom(openingText, closingText) };
 
             // (Completeness was already folded into every Evaluate above so the
             // closing/escalation gating saw the true outcome; nothing to apply

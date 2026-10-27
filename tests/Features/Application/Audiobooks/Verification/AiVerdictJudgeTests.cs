@@ -92,5 +92,27 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
 
             Assert.True(prompt.Length < AiVerdictJudge.MaxTranscriptChars + 200);
         }
+
+        [Fact]
+        public void BuildUserPrompt_KeepsTheTailOfTheClosingWindow()
+        {
+            // Closing credits live at the END of the closing window; a head-only
+            // truncation dropped them on long narration (live book 715).
+            var transcript =
+                "[opening] " + new string('x', 1500) + "\n" +
+                "[closing] " + new string('y', 1500) + " production of Frost and Venom by Christine Vihan, narrated by Elisa Bresnehan.";
+
+            var prompt = AiVerdictJudge.BuildUserPrompt(new Audiobook { Title = "Frost and Venom" }, transcript);
+
+            Assert.Contains("narrated by Elisa Bresnehan", prompt);
+            Assert.Contains("[opening] xxx", prompt);
+            Assert.True(prompt.Length < AiVerdictJudge.MaxTranscriptChars + 300, $"prompt length {prompt.Length}");
+        }
+
+        [Fact]
+        public void Excerpt_ShortTranscript_IsUnchanged()
+        {
+            Assert.Equal("[opening] a b c", AiVerdictJudge.Excerpt("[opening] a b c\n", 1200));
+        }
     }
 }

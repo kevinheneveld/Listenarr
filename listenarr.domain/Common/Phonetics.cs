@@ -56,8 +56,13 @@ namespace Listenarr.Domain.Common
                 n--;
             }
 
+            // The leading letter is kept as its consonant CLASS, not literally:
+            // speech-to-text hears "Feehan" as "Vihan"/"Veehan" and "Porter" as
+            // "Borter", and Soundex's literal first letter made exactly those
+            // pairs differ while every other position already forgave them.
             var result = new System.Text.StringBuilder(n);
-            result.Append(letters[0]);
+            var firstCode = CodeOf(letters[0]);
+            result.Append(firstCode == '0' ? letters[0] : firstCode);
 
             var previousCode = CodeOf(letters[0]);
             for (var i = 1; i < n; i++)

@@ -285,5 +285,19 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Verification
             Assert.NotNull(match);
             Assert.Equal(0, match!.Score);
         }
+
+        [Theory]
+        [InlineData("we hope you have enjoyed this production of frost and venom by christine vihan narrated by elisa bresnehan")]
+        [InlineData("we hope you have enjoyed this production of frost and venom by christine fehan narrated by elisa bresnahan")]
+        [InlineData("recorded books presents frost and venom by christine veehan")]
+        public void MatchNames_SttSwapsTheLeadingConsonantOfASurname_StillMatches(string spoken)
+        {
+            // Live: base.en/small.en rendered "Feehan" as Vihan, Fehan and Veehan.
+            // f/v share a Soundex class everywhere except the literal first letter.
+            var match = TranscriptMatcher.MatchNames(TranscriptMatcher.Tokenize(spoken), new[] { "Christine Feehan" });
+
+            Assert.NotNull(match);
+            Assert.True(match!.Score >= 0.85, $"expected author corroboration, got {match.Score}");
+        }
     }
 }
