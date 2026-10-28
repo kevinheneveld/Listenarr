@@ -71,7 +71,7 @@ COPY . .
 WORKDIR "/src/listenarr.api"
 # Ensure Node.js is available in the build image so MSBuild targets that run
 # the frontend (npm/vite) can execute during `dotnet publish`.
-# Use NodeSource to install Node 24 (Active LTS as of 2026; Node 20/22 are EOL).
+# Use NodeSource to install Node 26 — the same Node.js major as CI and the Discord bot runtime.
 # NOTE: download-then-run, never `curl | bash` — a failed download feeds bash
 # empty input (exit 0) and apt then silently installs Ubuntu's npm-less
 # nodejs 18, exploding much later at `npm: not found`. Retry the download and
@@ -79,7 +79,7 @@ WORKDIR "/src/listenarr.api"
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends curl ca-certificates gnupg \
 	&& for i in 1 2 3; do \
-		curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh && break; \
+		curl -fsSL https://deb.nodesource.com/setup_26.x -o /tmp/nodesource-setup.sh && break; \
 		echo "NodeSource download failed (attempt $i)"; sleep 10; \
 	done \
 	&& bash /tmp/nodesource-setup.sh \

@@ -11,7 +11,7 @@ apt-get install -y --no-install-recommends ca-certificates curl gnupg libcap2
 # Download-then-run, never `curl | bash`: a failed download feeds bash empty
 # input (exit 0) and apt then installs Ubuntu's npm-less nodejs 18.
 for i in 1 2 3; do
-	curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource-setup.sh && break
+	curl -fsSL https://deb.nodesource.com/setup_26.x -o /tmp/nodesource-setup.sh && break
 	echo "NodeSource download failed (attempt $i)"; sleep 10
 done
 bash /tmp/nodesource-setup.sh
