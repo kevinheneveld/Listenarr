@@ -1,6 +1,6 @@
 {
   "name": "listenarr",
-  "version": "1.5.6",
+  "version": "1.5.11",
   "private": true,
   "description": "Listenarr - Automated audiobook downloading and management",
   "engines": {
@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "concurrently": "^10.0.3",
-    "wait-on": "^9.0.10"
+    "wait-on": "^9.5.1"
   },
   "devDependencies": {
     "husky": "^9.1.7"
