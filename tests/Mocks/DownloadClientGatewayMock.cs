@@ -66,6 +66,13 @@ namespace Listenarr.Tests.Mocks
             return QueueResult;
         }
 
+        public async Task<DownloadClientQueueSnapshot> GetQueueSnapshotAsync(DownloadClientConfiguration client, CancellationToken ct = default)
+        {
+            RegisterMethodCall(nameof(GetQueueSnapshotAsync));
+
+            return DownloadClientQueueSnapshot.Complete([]);
+        }
+
         public async Task<List<(string Id, string Name)>> GetRecentHistoryAsync(DownloadClientConfiguration client, int limit = 100, CancellationToken ct = default)
         {
             RegisterMethodCall(nameof(GetRecentHistoryAsync));
