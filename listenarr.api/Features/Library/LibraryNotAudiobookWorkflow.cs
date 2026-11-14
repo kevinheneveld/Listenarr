@@ -187,7 +187,7 @@ namespace Listenarr.Api.Features.Library
                         {
                             continue;
                         }
-                        await _blockedReleaseRepository.AddAsync(new BlockedRelease
+                        await _blockedReleaseRepository.AddAsync(new ForkBlockedRelease
                         {
                             AudiobookId = id,
                             ReleaseTitle = delivered.Title,

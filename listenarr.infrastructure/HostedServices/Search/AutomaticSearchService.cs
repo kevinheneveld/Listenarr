@@ -395,7 +395,19 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
-            var acceptable = scoredResults
+            // Drop releases already blocked for this book before picking a winner.
+            //
+            // This is the path that actually re-grabs. The blocklist filter was wired into
+            // SearchAndDownloadAsync, which covers the manual search endpoint and the retry that
+            // follows a failure, but this service does not go through it: it scores results here and
+            // calls StartDownloadAsync directly. So a release could fail, be blocked, and be grabbed
+            // again by the next automatic pass a minute later, which is what a live install saw.
+            using var blocklistScope = _serviceScopeFactory.CreateScope();
+            var blocklistService = blocklistScope.ServiceProvider.GetRequiredService<IBlocklistService>();
+            var selectableResults = await BlockedReleaseFilter.ExcludeAsync(
+                blocklistService, audiobook.Id, scoredResults, _logger);
+
+            var acceptable = selectableResults
                 .Where(s => !s.IsRejected) // Only non-rejected results
                 .OrderByDescending(s => s.TotalScore)
                 .ToList();

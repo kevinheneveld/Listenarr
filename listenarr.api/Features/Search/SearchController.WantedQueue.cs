@@ -22,6 +22,8 @@ namespace Listenarr.Api.Features.Search
 {
     public partial class SearchController
     {
+        private readonly Listenarr.Application.Search.Contracts.IWantedSearchQueue? _wantedSearchQueue;
+
         /// <summary>
         /// Queue a set of wanted audiobooks for automatic search. The server walks
         /// the list in the background, so the batch outlives the browser tab.

@@ -146,6 +146,10 @@ namespace Listenarr.Application.Downloads.Submission
                 }
             }
 
+            // Upstream's release blocklist (failed downloads, keyed by release identity) is a second,
+            // independent list next to the fork's title/hash one consulted above.
+            scoredResults = await BlockedReleaseFilter.ExcludeAsync(blocklistService, audiobookId, scoredResults, logger);
+
             // Only consider non-rejected, score > 0 results
             var acceptable = scoredResults
                 .Where(s => !s.IsRejected && s.TotalScore > 0)

@@ -591,7 +591,7 @@
         <AudiobookFileUploadZone
           v-if="audiobook.id"
           :audiobook-id="audiobook.id"
-          @uploaded="loadAudiobook"
+          @uploaded="() => loadAudiobook()"
         />
         <!-- Bulk-selection toolbar: pick a range of files (shift-click extends) and move
              or delete them together, instead of one action at a time. -->
@@ -992,6 +992,9 @@
   <RenamePreviewModal
     :visible="showOrganizeModal"
     :audiobook-ids="audiobook ? [audiobook.id] : []"
+    :title="isOrganizeFromRepair ? REPAIR_ORGANIZE_TITLE : undefined"
+    :can-go-back="isOrganizeFromRepair"
+    @back="backToRepair"
     @close="showOrganizeModal = false"
     @done="handleOrganizeDone"
   />
@@ -1058,6 +1061,15 @@
     @close="showSplitModal = false"
     @done="onSplitDone"
   />
+
+  <RepairBooksModal
+    :visible="showRepairModal"
+    :audiobook-ids="audiobook ? [audiobook.id] : []"
+    :is-resumed="isRepairResumed"
+    @close="showRepairModal = false"
+    @done="handleRepairDone"
+    @organize="organizeAfterRepair"
+  />
 </template>
 
 <script setup lang="ts">
@@ -1107,6 +1119,8 @@ import ExtractFileModal from '@/components/domain/organize/ExtractFileModal.vue'
 import SplitCollectionModal from '@/components/domain/audiobook/SplitCollectionModal.vue'
 import ManualSearchModal from '@/components/domain/search/ManualSearchModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
+import RepairBooksModal from '@/components/domain/repair/RepairBooksModal.vue'
+import { REPAIR_ORGANIZE_TITLE } from '@/utils/repair'
 import CustomSelect from '@/components/form/CustomSelect.vue'
 import DeleteConfirmationModal from '@/components/feedback/DeleteConfirmationModal.vue'
 import { Pill } from '@/components/base'
@@ -1124,6 +1138,7 @@ import {
   PhShieldWarning,
   PhShieldSlash,
   PhEarSlash,
+  PhWrench,
   PhTrash,
   PhClock,
   PhFolder,
@@ -1501,6 +1516,11 @@ const verificationCompleteUnsub = signalRService.onVerificationComplete((payload
 onUnmounted(() => {
   verificationCompleteUnsub()
 })
+// Organize opened by Repair, as its last step
+const isOrganizeFromRepair = ref(false)
+const showRepairModal = ref(false)
+// Repair shown again by Back from its step 3 (Organize): as it was left
+const isRepairResumed = ref(false)
 const showMoreActions = ref(false)
 
 // History state
@@ -1592,6 +1612,20 @@ const topActions = computed<DetailTopAction[]>(() => [
     },
   },
   {
+    key: 'repair',
+    label: 'Repair Book',
+    title: 'Repair Book',
+    ariaLabel: 'Repair Book',
+    icon: PhWrench,
+    disabled: !audiobook.value,
+    desktopGroup: 'secondary',
+    desktopClass: 'warning',
+    onClick: () => {
+      isRepairResumed.value = false
+      showRepairModal.value = true
+    },
+  },
+  {
     key: 'organize',
     label: 'Organize Files',
     title: 'Organize Files',
@@ -1600,6 +1634,7 @@ const topActions = computed<DetailTopAction[]>(() => [
     disabled: !audiobook.value?.files?.length && !audiobook.value?.filePath,
     desktopGroup: 'secondary',
     onClick: () => {
+      isOrganizeFromRepair.value = false
       showOrganizeModal.value = true
     },
   },
@@ -1703,6 +1738,7 @@ type DetailTopAction = {
     | 'monitor'
     | 'edit'
     | 'rescan-metadata'
+    | 'repair'
     | 'organize'
     | 'transfer-files'
     | 'split-collection'
@@ -2168,8 +2204,10 @@ async function refreshAudiobookAfterScan(jobId: string) {
   if (isCurrent()) await loadWeakStorageMissingFiles()
 }
 
-async function loadAudiobook() {
-  loading.value = true
+// Quietly: the book shown until the new one is in, without the page's loading state (a dialog
+// is open over it)
+async function loadAudiobook({ isQuiet = false } = {}) {
+  if (!isQuiet) loading.value = true
   error.value = null
   clearFileSelection()
 
@@ -2619,6 +2657,26 @@ function closeEditModal() {
 async function handleEditSaved() {
   // Refresh the audiobook data after edit
   await loadAudiobook()
+}
+
+async function handleRepairDone() {
+  showRepairModal.value = false
+  await loadAudiobook()
+}
+
+async function organizeAfterRepair() {
+  showRepairModal.value = false
+  isOrganizeFromRepair.value = true
+  showOrganizeModal.value = true
+  // Organize reads its previews from the server: the book behind is refreshed meanwhile, quietly
+  await loadAudiobook({ isQuiet: true })
+}
+
+// Back from Organize to Repair's step 2, as it was left
+function backToRepair() {
+  showOrganizeModal.value = false
+  isRepairResumed.value = true
+  showRepairModal.value = true
 }
 
 async function handleOrganizeDone() {

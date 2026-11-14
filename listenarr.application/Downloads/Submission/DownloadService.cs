@@ -34,6 +34,7 @@ namespace Listenarr.Application.Downloads.Submission
         IHubBroadcaster hubBroadcaster,
         IDownloadHistoryService downloadHistoryService,
         DownloadClientSelector downloadClientSelector,
+        IBlocklistService blocklistService,
         DownloadCachedTorrentStore cachedTorrentStore,
         IDownloadSubmissionPreparer submissionPreparer,
         DirectDownloadWorkflow directDownloadWorkflow,
@@ -170,7 +171,7 @@ namespace Listenarr.Application.Downloads.Submission
             if (prepared is PreparedDirectDownloadSubmission directDownload)
             {
                 logger.LogInformation("Processing trusted direct download for: {Title}", candidate.Title);
-                return await directDownloadWorkflow.CreateTrackedDownloadAsync(directDownload, audiobookId);
+                return await directDownloadWorkflow.CreateTrackedDownloadAsync(directDownload, audiobookId, candidate.ReleaseIdentifier);
             }
 
             var isTorrent = prepared.Protocol == DownloadProtocol.Torrent;
@@ -282,7 +283,6 @@ namespace Listenarr.Application.Downloads.Submission
                 }
             }
 
-            var settings = await configurationService.GetApplicationSettingsAsync();
             var notificationData = await DownloadNotificationPayloadBuilder.BuildBookDownloadingPayloadAsync(
                 audiobookRepository,
                 audiobookId,
@@ -290,7 +290,7 @@ namespace Listenarr.Application.Downloads.Submission
                 ToSearchResult(candidate, prepared),
                 downloadClient);
 
-            await notificationService.SendNotificationAsync("book-downloading", notificationData, settings.WebhookUrl, settings.EnabledNotificationTriggers);
+            await notificationService.SendNotificationAsync(NotificationTriggers.BookDownloading, notificationData);
 
             // Trigger an immediate realtime queue update so the UI shows the new download right away
             // Add a small delay to allow the download client to process and index the new download

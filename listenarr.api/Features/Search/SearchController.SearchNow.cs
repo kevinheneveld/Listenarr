@@ -22,6 +22,8 @@ namespace Listenarr.Api.Features.Search
 {
     public partial class SearchController
     {
+        private readonly Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? _automaticSearchInvoker;
+
         /// <summary>
         /// On-demand "Search now" for a set of audiobooks (e.g. every owned, monitored book in a
         /// series). Runs the same per-book automatic-search logic as the background cycle — so it

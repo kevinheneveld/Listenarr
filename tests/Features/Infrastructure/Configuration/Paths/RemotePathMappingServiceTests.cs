@@ -87,11 +87,8 @@ namespace Listenarr.Tests.Features.Infrastructure.Configuration.Paths
         {
             Assert.Equal(given, await remotePathMappingService.TranslatePathAsync(client, given));
 
-            // Mutate through the SERVICE, not the repository: production
-            // writes go through CreateAsync, which invalidates the mapping
-            // cache the translate path now reads from. A repo-direct write
-            // would leave the earlier translate's empty-list cache in place
-            // (exactly the staleness the invalidation exists to prevent).
+            // Created through the service: the translate above cached an empty set for this client,
+            // and only the service's own writers clear it.
             await remotePathMappingService.CreateAsync(new RemotePathMappingBuilder()
                 .WithDownloadClientConfiguration(client)
                 .WithRemotePath(remotePath)

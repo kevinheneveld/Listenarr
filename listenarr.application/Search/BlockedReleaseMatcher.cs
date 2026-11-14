@@ -28,10 +28,10 @@ namespace Listenarr.Application.Search
     /// </summary>
     public static class BlockedReleaseMatcher
     {
-        public static bool IsBlocked(string? resultTitle, IReadOnlyList<BlockedRelease> blocked)
+        public static bool IsBlocked(string? resultTitle, IReadOnlyList<ForkBlockedRelease> blocked)
             => IsBlocked(resultTitle, resultMagnetOrHash: null, blocked);
 
-        public static bool IsBlocked(string? resultTitle, string? resultMagnetOrHash, IReadOnlyList<BlockedRelease> blocked)
+        public static bool IsBlocked(string? resultTitle, string? resultMagnetOrHash, IReadOnlyList<ForkBlockedRelease> blocked)
         {
             if (blocked.Count == 0) return false;
 

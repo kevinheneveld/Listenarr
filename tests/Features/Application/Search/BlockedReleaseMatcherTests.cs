@@ -22,8 +22,8 @@ namespace Listenarr.Tests.Features.Application.Search
 {
     public class BlockedReleaseMatcherTests
     {
-        private static List<BlockedRelease> Blocked(params string[] titles) =>
-            titles.Select(t => new BlockedRelease { AudiobookId = 1, ReleaseTitle = t }).ToList();
+        private static List<ForkBlockedRelease> Blocked(params string[] titles) =>
+            titles.Select(t => new ForkBlockedRelease { AudiobookId = 1, ReleaseTitle = t }).ToList();
 
         [Fact]
         public void IsBlocked_ExactTitle_Matches()
@@ -64,7 +64,7 @@ namespace Listenarr.Tests.Features.Application.Search
         [Fact]
         public void IsBlocked_NoBlockedEntries_DoesNotMatch()
         {
-            Assert.False(BlockedReleaseMatcher.IsBlocked("anything", new List<BlockedRelease>()));
+            Assert.False(BlockedReleaseMatcher.IsBlocked("anything", new List<ForkBlockedRelease>()));
         }
 
         // --- Hash matching -------------------------------------------------
@@ -73,8 +73,8 @@ namespace Listenarr.Tests.Features.Application.Search
         // Same 20 bytes, base32-encoded (what many magnet links carry).
         private const string Base32Hash = "YEX6DQDLXISUVHOJ6UM3GNNKPQJWPKEK";
 
-        private static List<BlockedRelease> BlockedWithHash(string title, string? hash) =>
-            new() { new BlockedRelease { AudiobookId = 1, ReleaseTitle = title, TorrentHash = hash } };
+        private static List<ForkBlockedRelease> BlockedWithHash(string title, string? hash) =>
+            new() { new ForkBlockedRelease { AudiobookId = 1, ReleaseTitle = title, TorrentHash = hash } };
 
         [Fact]
         public void IsBlocked_HashMatch_BlocksRetitledRelease()

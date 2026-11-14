@@ -21,7 +21,7 @@ namespace Listenarr.Application.Audiobooks.Contracts.Repositories
 {
     public interface IBlockedReleaseRepository
     {
-        Task AddAsync(BlockedRelease blockedRelease, CancellationToken ct = default);
-        Task<List<BlockedRelease>> GetByAudiobookIdAsync(int audiobookId, CancellationToken ct = default);
+        Task AddAsync(ForkBlockedRelease blockedRelease, CancellationToken ct = default);
+        Task<List<ForkBlockedRelease>> GetByAudiobookIdAsync(int audiobookId, CancellationToken ct = default);
     }
 }

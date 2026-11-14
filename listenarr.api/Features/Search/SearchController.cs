@@ -17,7 +17,6 @@
  */
 
 using System.Text.Json;
-using Listenarr.Application.Notifications.Progress;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Listenarr.Api.Features.Search
@@ -37,9 +36,6 @@ namespace Listenarr.Api.Features.Search
         private readonly SearchByTitleWorkflow _searchByTitleWorkflow;
         private readonly IDownloadReferenceService? _downloadReferenceService;
         private readonly IConfigurationService? _configurationService;
-        private readonly ISearchActivityTracker? _searchActivityTracker;
-        private readonly Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? _automaticSearchInvoker;
-        private readonly Listenarr.Application.Search.Contracts.IWantedSearchQueue? _wantedSearchQueue;
 
         public SearchController(
             ISearchService searchService,
@@ -53,7 +49,7 @@ namespace Listenarr.Api.Features.Search
             SearchByTitleWorkflow? searchByTitleWorkflow = null,
             IDownloadReferenceService? downloadReferenceService = null,
             IConfigurationService? configurationService = null,
-            ISearchActivityTracker? searchActivityTracker = null,
+            Listenarr.Application.Notifications.Progress.ISearchActivityTracker? searchActivityTracker = null,
             Listenarr.Application.Search.Contracts.IAutomaticSearchInvoker? automaticSearchInvoker = null,
             Listenarr.Application.Search.Contracts.IWantedSearchQueue? wantedSearchQueue = null)
         {
@@ -85,8 +81,7 @@ namespace Listenarr.Api.Features.Search
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<SearchByTitleWorkflow>.Instance,
                 configurationService);
             _downloadReferenceService = downloadReferenceService;
-            _searchActivityTracker = searchActivityTracker;
-            _automaticSearchInvoker = automaticSearchInvoker;
+            (_searchActivityTracker, _automaticSearchInvoker) = (searchActivityTracker, automaticSearchInvoker);
         }
 
         /// <summary>
@@ -360,6 +355,11 @@ namespace Listenarr.Api.Features.Search
         /// Search the Audible catalog for audiobooks.
         /// </summary>
         [HttpGet("audible")]
+        [ProducesResponseType(typeof(AudibleSearchResponse), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<ActionResult<AudibleSearchResponse>> SearchAudible(
             [FromQuery] string query,
             [FromQuery] string region = "us",
@@ -376,6 +376,17 @@ namespace Listenarr.Api.Features.Search
                 if (result == null)
                 {
                     return NotFound("No results found");
+                }
+
+                // Audible did not answer. Returning the empty result would be a 200 that
+                // says "this book is not in the catalogue", which is a different claim and
+                // one a caller acts on differently. 503 says try again instead.
+                if (result.ProviderUnavailable)
+                {
+                    _logger.LogWarning(
+                        "Audible did not answer for query: {Query}; reporting unavailable rather than zero matches",
+                        LogRedaction.SanitizeText(query));
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, "The Audible catalog did not respond. This is not a confirmed zero-match; retry shortly.");
                 }
 
                 return Ok(result);

@@ -58,7 +58,7 @@ namespace Listenarr.Application.Downloads
                     return;
                 }
 
-                await repository.AddAsync(new BlockedRelease
+                await repository.AddAsync(new ForkBlockedRelease
                 {
                     AudiobookId = download.AudiobookId.Value,
                     ReleaseTitle = download.Title!,
@@ -94,7 +94,7 @@ namespace Listenarr.Application.Downloads
 
             if (!string.IsNullOrWhiteSpace(download.OriginalUrl))
             {
-                var m = System.Text.RegularExpressions.Regex.Match(download.OriginalUrl, @"btih:([0-9a-fA-F]{40})");
+                var m = System.Text.RegularExpressions.Regex.Match(download.OriginalUrl, @"urn:btih:([0-9a-fA-F]{40})");
                 if (m.Success)
                 {
                     return m.Groups[1].Value;

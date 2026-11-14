@@ -29,15 +29,15 @@ namespace Listenarr.Infrastructure.Persistence.Repositories
             _db = db ?? throw new ArgumentNullException(nameof(db));
         }
 
-        public async Task AddAsync(BlockedRelease blockedRelease, CancellationToken ct = default)
+        public async Task AddAsync(ForkBlockedRelease blockedRelease, CancellationToken ct = default)
         {
-            _db.BlockedReleases.Add(blockedRelease);
+            _db.ForkBlockedReleases.Add(blockedRelease);
             await _db.SaveChangesAsync(ct);
         }
 
-        public async Task<List<BlockedRelease>> GetByAudiobookIdAsync(int audiobookId, CancellationToken ct = default)
+        public async Task<List<ForkBlockedRelease>> GetByAudiobookIdAsync(int audiobookId, CancellationToken ct = default)
         {
-            return await _db.BlockedReleases
+            return await _db.ForkBlockedReleases
                 .AsNoTracking()
                 .Where(b => b.AudiobookId == audiobookId)
                 .ToListAsync(ct);

@@ -40,6 +40,7 @@ namespace Listenarr.Infrastructure.Persistence
         public DbSet<DownloadClientConfiguration> DownloadClientConfigurations { get; set; } = null!;
         public DbSet<User> Users { get; set; } = null!;
         public DbSet<Download> Downloads { get; set; } = null!;
+        public DbSet<BlockedRelease> BlockedReleases { get; set; } = null!;
         public DbSet<DownloadProcessingJob> DownloadProcessingJobs { get; set; } = null!;
         public DbSet<FileMutationJournal> FileMutationJournals { get; set; } = null!;
         public DbSet<VerifiedFileRenameJournal> VerifiedFileRenameJournals { get; set; } = null!;
@@ -59,7 +60,9 @@ namespace Listenarr.Infrastructure.Persistence
         public DbSet<AuthorCacheEntry> AuthorCacheEntries { get; set; } = null!;
         public DbSet<SeriesCacheEntry> SeriesCacheEntries { get; set; } = null!;
         public DbSet<UserSession> UserSessions { get; set; } = null!;
-        public DbSet<Listenarr.Domain.Search.BlockedRelease> BlockedReleases { get; set; } = null!;
+        // Fork-local blocklist (wrong-content rejections, reaped stalls, terminal import failures),
+        // matched by title/hash. Lives beside upstream's identity-keyed BlockedReleases table.
+        public DbSet<Listenarr.Domain.Search.ForkBlockedRelease> ForkBlockedReleases { get; set; } = null!;
         public DbSet<VerificationJobRecord> VerificationJobs { get; set; } = null!;
         public DbSet<SeriesTriageDecision> SeriesTriageDecisions { get; set; } = null!;
 
@@ -130,6 +133,13 @@ namespace Listenarr.Infrastructure.Persistence
             modelBuilder.ApplyConfigurationsFromAssembly(typeof(ListenArrDbContext).Assembly);
 
             // Register commonly used indexes here for safety; prefer moving indexes into configuration classes.
+            // One entry per release per book, and the lookup on the search path is always
+            // "what is blocked for this book", so the pair is both the uniqueness rule and
+            // the access path.
+            modelBuilder.Entity<BlockedRelease>()
+                .HasIndex(entry => new { entry.AudiobookId, entry.ReleaseIdentifier })
+                .IsUnique();
+
             modelBuilder.Entity<Download>().HasIndex(d => d.Status);
             modelBuilder.Entity<Download>().HasIndex(d => d.DownloadClientId);
             modelBuilder.Entity<Download>().HasIndex(d => d.CompletedAt);

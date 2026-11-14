@@ -3,6 +3,7 @@ using Listenarr.Application.Search.Filters;
 using Listenarr.Application.Search.Strategies;
 using Listenarr.Infrastructure.DependencyInjection;
 using Listenarr.Infrastructure.DependencyInjection.Downloads;
+using Listenarr.Infrastructure.Downloads.Blocklist;
 using Listenarr.Infrastructure.Downloads.DirectDownload;
 using Listenarr.Infrastructure.HostedServices;
 using Listenarr.Tests.Common;
@@ -193,6 +194,9 @@ namespace Listenarr.Tests.Builders
 
             services.AddSingleton(startupConfigServiceMock.Object);
             services.AddSingleton(new Mock<IDownloadHistoryService>().Object);
+            // Real implementation, not a mock: the blocklist is only meaningful when the
+            // search path can actually read back what a failure wrote.
+            services.AddScoped<IBlocklistService, BlocklistService>();
             services.AddSingleton(new Mock<IDiscordBotService>().Object);
             services.AddSingleton<IFfmpegService, FfmpegServiceMock>();
             services.AddSingleton<Listenarr.Application.Audiobooks.Verification.Contracts.IWhisperService, Listenarr.Tests.Mocks.WhisperServiceMock>();

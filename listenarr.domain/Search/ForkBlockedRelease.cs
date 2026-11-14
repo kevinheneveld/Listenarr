@@ -27,7 +27,7 @@ namespace Listenarr.Domain.Search
     /// the search forever (two live loops: a 15-book collection re-imported
     /// after every cleanup, and a mislabeled wrong-book release likewise).
     /// </summary>
-    public class BlockedRelease
+    public class ForkBlockedRelease
     {
         public int Id { get; set; }
         public int AudiobookId { get; set; }

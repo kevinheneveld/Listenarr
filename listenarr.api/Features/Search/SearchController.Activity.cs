@@ -23,6 +23,8 @@ namespace Listenarr.Api.Features.Search
 {
     public partial class SearchController
     {
+        private readonly ISearchActivityTracker? _searchActivityTracker;
+
         /// <summary>
         /// Current background automatic-search activity plus a short rolling history
         /// of recent outcomes. Lets the live UI indicator (sidebar) hydrate
