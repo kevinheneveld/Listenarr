@@ -217,6 +217,47 @@ namespace Listenarr.Tests.Features.Application.Search
             Assert.Equal("White Rural Rage", pick!.SearchResult.Title);
         }
 
+        private static AutomaticSearchAssessment Assessment(params (string Title, int Score, bool Confirmed)[] items) =>
+            new("fingerprint", items.Select(i =>
+            {
+                var result = new SearchResult { Title = i.Title, Size = 500L * 1024 * 1024 };
+                return new AutomaticCandidateScore(
+                    new QualityScore { SearchResult = result, TotalScore = i.Score },
+                    new(i.Confirmed ? BookIdentityStatus.CorroboratedTitle : BookIdentityStatus.UnresolvedTitle, "test"),
+                    SearchCandidateFingerprint.Compute(result));
+            }).ToArray());
+
+        [Fact]
+        public async Task PickAsync_Assessment_FlaggedBest_DropsToNextEligibleAndNeverToAnUnconfirmedRelease()
+        {
+            var assessment = Assessment(("Best", 90, true), ("Unconfirmed", 100, false), ("Second", 80, true));
+            var ai = new AiAssistServiceMock { Configured = true, Response = "{\"reject\":[{\"index\":0,\"reason\":\"different book\"}]}" };
+            var gate = new AiReleaseGate(ai, Settings(true), NullLogger.Instance);
+
+            var pick = await gate.PickAsync(Book, assessment.Candidates[0], assessment);
+
+            Assert.Same(assessment.Candidates[2], pick);
+        }
+
+        [Fact]
+        public async Task PickAsync_Assessment_GateOff_KeepsTheSelectedBest()
+        {
+            var assessment = Assessment(("Second", 100, true), ("Best", 100, true));
+            var gate = new AiReleaseGate(new AiAssistServiceMock { Configured = true }, Settings(false), NullLogger.Instance);
+
+            Assert.Same(assessment.Candidates[1], await gate.PickAsync(Book, assessment.Candidates[1], assessment));
+        }
+
+        [Fact]
+        public async Task PickAsync_Assessment_EveryEligibleFlagged_ReturnsNull()
+        {
+            var assessment = Assessment(("Best", 90, true), ("Unconfirmed", 100, false));
+            var ai = new AiAssistServiceMock { Configured = true, Response = "{\"reject\":[{\"index\":0,\"reason\":\"different book\"}]}" };
+            var gate = new AiReleaseGate(ai, Settings(true), NullLogger.Instance);
+
+            Assert.Null(await gate.PickAsync(Book, assessment.Candidates[0], assessment));
+        }
+
         [Fact]
         public async Task PickAsync_NoCandidates_ReturnsNull()
         {

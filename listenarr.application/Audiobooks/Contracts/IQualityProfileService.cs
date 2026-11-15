@@ -13,6 +13,9 @@ namespace Listenarr.Application.Audiobooks.Contracts
         // runtime-relative size sanity check; null skips it (e.g. profile
         // testing without a book context).
         Task<QualityScore> ScoreSearchResult(SearchResult searchResult, QualityProfile profile, int? expectedRuntimeMinutes = null);
-        Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile, int? expectedRuntimeMinutes = null);
+        Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile);
+
+        /// <summary>Fork: scoring that also knows the book's runtime, which enables the collection-sized-release rejection.</summary>
+        Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile, int? expectedRuntimeMinutes);
     }
 }

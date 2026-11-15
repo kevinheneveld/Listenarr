@@ -6,6 +6,7 @@ using Listenarr.Infrastructure.DependencyInjection.Downloads;
 using Listenarr.Infrastructure.Downloads.Blocklist;
 using Listenarr.Infrastructure.Downloads.DirectDownload;
 using Listenarr.Infrastructure.HostedServices;
+using Listenarr.Application.Search.Matching;
 using Listenarr.Tests.Common;
 using Listenarr.Tests.Mocks;
 using Listenarr.Tests.Mocks.Api;
@@ -224,6 +225,9 @@ namespace Listenarr.Tests.Builders
             services.AddSingleton<SearchResultFilterPipeline>();
             services.AddSingleton<Listenarr.Application.Search.Contracts.ISearchResultFilter, RelevanceFilter>();
             services.AddSingleton<Listenarr.Application.Search.Contracts.ISearchResultFilter, NumberConflictFilter>();
+            services.AddScoped<IAutomaticSearchScoringService, AutomaticSearchScoringService>();
+            services.AddScoped<ReleaseAnnotationCatalogProvider>();
+            services.AddSingleton(TestAnnotationCatalog.CreateSource());
             services.AddSingleton<MetadataStrategyCoordinator>();
             services.AddSingleton<AsinCandidateCollector>();
             services.AddSingleton<AsinEnricher>();

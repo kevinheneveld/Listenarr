@@ -15,7 +15,6 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
-using Listenarr.Application.Search.Filters;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -37,7 +36,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             var downloadRepository = scope.ServiceProvider.GetRequiredService<IDownloadRepository>();
             var fileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
-            var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
+            var automaticScoring = scope.ServiceProvider.GetRequiredService<IAutomaticSearchScoringService>();
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
 
             var audiobook = await audiobookRepository.GetByIdAsync(audiobookId);
@@ -54,10 +53,9 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             try
             {
                 var queued = await ProcessAudiobookAsync(
-                    audiobook, searchService, qualityProfileService, downloadService,
+                    audiobook, searchService, downloadService, automaticScoring,
                     audiobookRepository, downloadRepository, fileRepository, ct,
-                    blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
-                    filterPipeline: scope.ServiceProvider.GetService<SearchResultFilterPipeline>());
+                    blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
 
                 // Targeted write for the same reason as the cycle loop: never
                 // re-save the whole entity just to bump the timestamp.

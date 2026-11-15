@@ -40,11 +40,7 @@ namespace Listenarr.Application.Downloads.Submission
             if (audiobook.QualityProfile == null)
             {
                 logger.LogWarning("Audiobook '{Title}' has no quality profile assigned", audiobook.Title);
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = "Audiobook has no quality profile assigned"
-                };
+                return new SearchAndDownloadResult { Success = false, Message = "Audiobook has no quality profile assigned" };
             }
 
             // Check if an active download already exists before querying indexers (Issue #936)
@@ -72,36 +68,11 @@ namespace Listenarr.Application.Downloads.Submission
 
             if (searchResults == null || !searchResults.Any())
             {
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = "No search results found"
-                };
+                return new SearchAndDownloadResult { Success = false, Message = "No search results found" };
             }
 
-            // Context-aware filter pass — reject non-audiobook matter and results whose
-            // title isn't relevant to this specific audiobook before scoring picks one
-            // to download.
-            var preFilterCount = searchResults.Count;
-            searchResults = filterPipeline.ApplyFilters(searchResults, logFilteredResults: true, audiobook: audiobook);
-            if (searchResults.Count < preFilterCount)
-            {
-                logger.LogInformation("Filtered {Removed} of {Total} raw results for audiobook '{Title}' via context-aware pipeline",
-                    preFilterCount - searchResults.Count, preFilterCount, LogRedaction.SanitizeText(audiobook.Title));
-            }
-            if (!searchResults.Any())
-            {
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = "No relevant results found (all filtered as non-audiobook or title-irrelevant)"
-                };
-            }
-
-            // Drop blocklisted releases (wrong-content rejections, reaped stalls,
-            // client-reported failures). The sweep path already filters these;
-            // without the same filter here, the post-failure re-search re-grabs
-            // the exact release that just failed, forever.
+            // Drop the fork's blocklisted releases (wrong-content rejections, reaped stalls,
+            // client-reported failures), matched by title or info hash.
             if (blockedReleaseRepository != null)
             {
                 var blocked = await blockedReleaseRepository.GetByAudiobookIdAsync(audiobook.Id);
@@ -118,19 +89,18 @@ namespace Listenarr.Application.Downloads.Submission
                     }
                     if (!searchResults.Any())
                     {
-                        return new SearchAndDownloadResult
-                        {
-                            Success = false,
-                            Message = "All results are blocklisted releases"
-                        };
+                        return new SearchAndDownloadResult { Success = false, Message = "All results are blocklisted releases" };
                     }
                 }
             }
 
-            // Score results against quality profile
-            // Score results against quality profile (runtime enables the
-            // collection-sized-release rejection).
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile, audiobook.Runtime);
+            // Upstream's release blocklist (failed downloads, keyed by release identity) is a second,
+            // independent list. Drop its releases before they are assessed, so a blocked release
+            // can never be the one selected.
+            searchResults = await BlockedReleaseFilter.ExcludeAsync(blocklistService, audiobookId, searchResults, logger);
+
+            var assessment = await automaticScoring.ScoreAsync(audiobook, searchResults, audiobook.QualityProfile);
+            var scoredResults = assessment.Candidates;
 
             // Log all scored results for debugging
             logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, LogRedaction.SanitizeText(audiobook.Title));
@@ -146,42 +116,25 @@ namespace Listenarr.Application.Downloads.Submission
                 }
             }
 
-            // Upstream's release blocklist (failed downloads, keyed by release identity) is a second,
-            // independent list next to the fork's title/hash one consulted above.
-            scoredResults = await BlockedReleaseFilter.ExcludeAsync(blocklistService, audiobookId, scoredResults, logger);
+            // Identity, compatibility and quality decide the pick.
+            var best = automaticScoring.SelectBest(assessment);
 
-            // Only consider non-rejected, score > 0 results
-            var acceptable = scoredResults
-                .Where(s => !s.IsRejected && s.TotalScore > 0)
-                .OrderByDescending(s => s.TotalScore)
-                .ToList();
-
-            if (acceptable.Count == 0)
+            if (best == null)
             {
                 logger.LogWarning("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = "No acceptable search results found"
-                };
+                return new SearchAndDownloadResult { Success = false, Message = "No acceptable search results found" };
             }
 
-            // AI release gate: one model call over the shortlist names releases
-            // that are clearly not this audiobook (music albums, wrong books);
-            // the pick drops to the best unflagged candidate. Fails open — an
-            // unreachable endpoint or garbage answer gates nothing, and a
-            // wrongly-gated release only waits for the next search cycle.
-            var topResult = await PickThroughAiGateAsync(audiobook, acceptable);
+            // AI release gate: a second opinion over the eligible candidates. Fails open — an
+            // unreachable endpoint or garbage answer gates nothing, and a wrongly-gated release
+            // only waits for the next search cycle.
+            var topResult = await new AiReleaseGate(aiAssist, configurationService, logger).PickAsync(audiobook, best, assessment);
             if (topResult == null)
             {
                 logger.LogWarning(
                     "AI release gate flagged every acceptable candidate for audiobook '{Title}' — skipping this cycle",
                     LogRedaction.SanitizeText(audiobook.Title));
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = "All candidates were flagged as wrong content by the AI release gate"
-                };
+                return new SearchAndDownloadResult { Success = false, Message = "All candidates were flagged as wrong content by the AI release gate" };
             }
 
             // Assign score to SearchResult
@@ -194,14 +147,13 @@ namespace Listenarr.Application.Downloads.Submission
             if (downloadClientId == null)
             {
                 logger.LogWarning("No suitable download client found for type: {Type}", isTorrent ? "Torrent" : "NZB");
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = $"No suitable download client found for {(isTorrent ? "torrent" : "NZB")} results"
-                };
+                return new SearchAndDownloadResult { Success = false, Message = $"No suitable download client found for {(isTorrent ? "torrent" : "NZB")} results" };
             }
 
             // Send to download client with audiobookId for proper metadata linking
+            if (!await automaticScoring.IsCurrentAsync(assessment, audiobookId))
+                return new SearchAndDownloadResult { Success = false, Message = "Search context changed; retry search" };
+
             var downloadId2 = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
 
             if (string.IsNullOrEmpty(downloadId2))
@@ -222,18 +174,6 @@ namespace Listenarr.Application.Downloads.Submission
                 DownloadClientUsed = downloadClientId,
                 SearchResult = topResult.SearchResult
             };
-        }
-
-        /// <summary>
-        /// The shared AI release gate (see <see cref="AiReleaseGate"/>): best unflagged
-        /// candidate, the plain top pick when the gate is off or fails, null only when the
-        /// gate flagged the whole shortlist.
-        /// </summary>
-        private Task<QualityScore?> PickThroughAiGateAsync(
-            Audiobook audiobook,
-            List<QualityScore> acceptable)
-        {
-            return new AiReleaseGate(aiAssist, configurationService, logger).PickAsync(audiobook, acceptable);
         }
     }
 }

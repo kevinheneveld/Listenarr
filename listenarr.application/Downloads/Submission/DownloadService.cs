@@ -26,8 +26,8 @@ namespace Listenarr.Application.Downloads.Submission
         IConfigurationService configurationService,
         IDownloadRepository downloadRepository,
         ILogger<DownloadService> logger,
-        IQualityProfileService qualityProfileService,
         ISearchService searchService,
+        IAutomaticSearchScoringService automaticScoring,
         IDownloadClientGateway clientGateway,
         IDownloadQueueService downloadQueueService,
         INotificationService notificationService,
@@ -39,7 +39,6 @@ namespace Listenarr.Application.Downloads.Submission
         IDownloadSubmissionPreparer submissionPreparer,
         DirectDownloadWorkflow directDownloadWorkflow,
         DownloadRemovalWorkflow downloadRemovalWorkflow,
-        Search.Filters.SearchResultFilterPipeline filterPipeline,
         IAiAssistService aiAssist,
         IBlockedReleaseRepository? blockedReleaseRepository = null) : IDownloadService
     {

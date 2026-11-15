@@ -285,7 +285,10 @@ namespace Listenarr.Application.Audiobooks.Quality
 
 
 
-        public async Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile, int? expectedRuntimeMinutes = null)
+        public Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile) =>
+            ScoreSearchResults(searchResults, profile, null);
+
+        public async Task<List<QualityScore>> ScoreSearchResults(List<SearchResult> searchResults, QualityProfile profile, int? expectedRuntimeMinutes)
         {
             var scores = await Task.WhenAll(searchResults.Select(result => ScoreSearchResult(result, profile, expectedRuntimeMinutes)));
 

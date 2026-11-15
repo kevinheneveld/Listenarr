@@ -12,6 +12,7 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission;
 public sealed class BlocklistSearchWiringTests : BaseTests
 {
     private const string InfoHash = "ABCDEF1234567890ABCDEF1234567890ABCDEF12";
+    private const string ReleaseName = "Mira Chen - Blocked Book [M4B]";
 
     [Fact]
     public async Task SearchAndDownloadAsync_WhenTheOnlyCandidateIsBlocked_ReportsNoAcceptableResults()
@@ -27,9 +28,11 @@ public sealed class BlocklistSearchWiringTests : BaseTests
             .ReturnsAsync([
                 new SearchResult
                 {
-                    // Names the book and its author: the fork's relevance filter drops a listing
-                    // that does not, and the precondition below needs this one to be grabbable.
-                    Title = "Mira Chen - Blocked Book [M4B]",
+                    // The release has to name the book and its author: automatic selection only
+                    // grabs a candidate whose identity it can confirm, and the precondition below
+                    // needs this one to be grabbable.
+                    Title = ReleaseName,
+                    IdentityEvidence = new CandidateIdentityEvidence { ReleaseName = ReleaseName },
                     MagnetLink = $"magnet:?xt=urn:btih:{InfoHash}&dn=book",
                     Size = 800_000_000,
                     Seeders = 20
@@ -75,7 +78,7 @@ public sealed class BlocklistSearchWiringTests : BaseTests
         await blocklist.BlockAsync(
             audiobook.Id,
             ReleaseIdentity.For(InfoHash, null, null, null)!,
-            "The Only Listing",
+            ReleaseName,
             800_000_000,
             "simulated earlier failure");
 

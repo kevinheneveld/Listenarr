@@ -45,6 +45,20 @@ namespace Listenarr.Application.Search
         }
 
         /// <summary>
+        /// Gate an automatic-search assessment: <paramref name="best"/> leads the shortlist,
+        /// followed by the other eligible candidates by score. Only eligible candidates can win.
+        /// </summary>
+        public async Task<AutomaticCandidateScore?> PickAsync(
+            Audiobook audiobook, AutomaticCandidateScore best, AutomaticSearchAssessment assessment, CancellationToken ct = default)
+        {
+            var eligible = new[] { best }
+                .Concat(assessment.Candidates.Where(c => !c.IsRejected && !ReferenceEquals(c, best)).OrderByDescending(c => c.TotalScore))
+                .ToList();
+            var picked = await PickAsync(audiobook, eligible.Select(c => c.Quality).ToList(), ct);
+            return picked == null ? null : eligible.FirstOrDefault(c => ReferenceEquals(c.Quality, picked));
+        }
+
+        /// <summary>
         /// Returns the best-scored candidate the gate didn't flag, the plain top pick whenever the
         /// gate is off or fails, and null only when it confidently flagged the entire shortlist
         /// (and nothing scored below it).

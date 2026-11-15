@@ -18,7 +18,6 @@
 
 using Listenarr.Application.Notifications.Progress;
 using Listenarr.Application.Search;
-using Listenarr.Application.Search.Filters;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -94,11 +93,11 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             var downloadRepository = scope.ServiceProvider.GetRequiredService<IDownloadRepository>();
             var fileRepository = scope.ServiceProvider.GetRequiredService<IAudiobookFileRepository>();
             var searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();
-            var qualityProfileService = scope.ServiceProvider.GetRequiredService<IQualityProfileService>();
             var downloadService = scope.ServiceProvider.GetRequiredService<IDownloadService>();
             var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
             // Optional: drives the live search-activity indicator (sidebar).
             var searchProgressReporter = scope.ServiceProvider.GetService<SearchProgressReporter>();
+            var automaticScoring = scope.ServiceProvider.GetRequiredService<IAutomaticSearchScoringService>();
 
             var timing = AutomaticSearchTiming.FromSettings(await configurationService.GetApplicationSettingsAsync());
 
@@ -137,9 +136,8 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                     isFirstBook = false;
 
                     var downloadsQueuedForBook = await ProcessAudiobookAsync(
-                        audiobook, searchService, qualityProfileService, downloadService, audiobookRepository, downloadRepository, fileRepository, stoppingToken,
-                        blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>(),
-                        filterPipeline: scope.ServiceProvider.GetService<SearchResultFilterPipeline>());
+                        audiobook, searchService, downloadService, automaticScoring, audiobookRepository, downloadRepository, fileRepository, stoppingToken,
+                        blockedReleaseRepository: scope.ServiceProvider.GetService<IBlockedReleaseRepository>());
 
                     downloadsQueued += downloadsQueuedForBook;
                     processedCount++;
@@ -193,14 +191,13 @@ namespace Listenarr.Infrastructure.HostedServices.Search
         private async Task<int> ProcessAudiobookAsync(
             Audiobook audiobook,
             ISearchService searchService,
-            IQualityProfileService qualityProfileService,
             IDownloadService downloadService,
+            IAutomaticSearchScoringService automaticScoring,
             IAudiobookRepository audiobookRepository,
             IDownloadRepository downloadRepository,
             IAudiobookFileRepository fileRepository,
             CancellationToken stoppingToken,
-            IBlockedReleaseRepository? blockedReleaseRepository = null,
-            SearchResultFilterPipeline? filterPipeline = null)
+            IBlockedReleaseRepository? blockedReleaseRepository = null)
         {
             if (audiobook.QualityProfile == null)
             {
@@ -249,8 +246,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
 
             // Author-free fallback: release names often omit the author, so a full title+author
             // query can return nothing even when the book is available. Retry without the author,
-            // then constrain the broadened results to titles that still match this book, so a
-            // same-title/different-book release can't pass quality scoring and be grabbed.
+            // then assess every broadened result with the same identity and quality policy.
             if (searchResults.Count == 0)
             {
                 var fallbackQuery = _resultClassifier.BuildTitleFallbackSearchQuery(audiobook);
@@ -260,9 +256,9 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                     _logger.LogInformation("No results for '{Title}' with the full query; retrying without the author: {Query}",
                         audiobook.Title, fallbackQuery);
                     var fallbackResults = await searchService.SearchAsync(fallbackQuery, isAutomaticSearch: true);
-                    searchResults = _resultClassifier.ConstrainFallbackResultsToTitle(fallbackResults, audiobook);
-                    _logger.LogInformation("Author-free fallback for '{Title}': {Raw} raw result(s), {Kept} kept after title match",
-                        audiobook.Title, fallbackResults.Count, searchResults.Count);
+                    searchResults = fallbackResults;
+                    _logger.LogInformation("Author-free fallback for '{Title}': {Raw} result(s) to assess",
+                        audiobook.Title, fallbackResults.Count);
                 }
             }
 
@@ -297,28 +293,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 return 0;
             }
 
-            // Context-aware filter pass — reject non-audiobook matter and results whose
-            // title isn't relevant to THIS audiobook (e.g., a Patterson Hood concert
-            // recording answering a James Patterson query on one shared surname)
-            // before scoring can pick one on seeders/quality alone.
-            if (filterPipeline != null)
-            {
-                var preFilterCount = searchResults.Count;
-                searchResults = filterPipeline.ApplyFilters(searchResults, logFilteredResults: true, audiobook: audiobook);
-                if (searchResults.Count < preFilterCount)
-                {
-                    _logger.LogInformation(
-                        "Filtered {Removed} of {Total} raw results for audiobook '{Title}' via context-aware pipeline",
-                        preFilterCount - searchResults.Count, preFilterCount, audiobook.Title);
-                }
-                if (!searchResults.Any())
-                {
-                    _logger.LogInformation("No relevant results remain for audiobook '{Title}' after filtering", audiobook.Title);
-                    return 0;
-                }
-            }
-
-            // Drop releases the user explicitly rejected for this book ("Wrong
+            // Drop the fork's blocklisted releases: ones the user explicitly rejected for this book ("Wrong
             // content") — without this the same wrong-content/collection release
             // wins the search again immediately after every cleanup.
             if (blockedReleaseRepository != null)
@@ -351,9 +326,17 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
-            // Score results against quality profile (runtime enables the
-            // collection-sized-release rejection).
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile, audiobook.Runtime);
+            // Upstream's release blocklist is a second, independent list. This path selects here and
+            // calls StartDownloadAsync directly, so drop its releases before they are assessed.
+            using (var blocklistScope = _serviceScopeFactory.CreateScope())
+            {
+                var blocklistService = blocklistScope.ServiceProvider.GetRequiredService<IBlocklistService>();
+                searchResults = await BlockedReleaseFilter.ExcludeAsync(
+                    blocklistService, audiobook.Id, searchResults, _logger);
+            }
+
+            var assessment = await automaticScoring.ScoreAsync(audiobook, searchResults, audiobook.QualityProfile, stoppingToken);
+            var scoredResults = assessment.Candidates;
 
             // Log all scored results for debugging
             _logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, audiobook.Title);
@@ -366,6 +349,12 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                     title = s.SearchResult.Title,
                     asin = s.SearchResult.Asin,
                     totalScore = s.TotalScore,
+                    identityStatus = s.Identity.Status.ToString(),
+                    identityReason = s.Identity.Reason,
+                    compatibilityReasons = s.Compatibility.Reasons,
+                    languageEvidence = s.Compatibility.Languages,
+                    editionEvidence = s.Compatibility.Editions,
+                    policyVersion = AutomaticSearchAssessment.PolicyVersion,
                     isRejected = s.IsRejected,
                     rejectionReasons = s.RejectionReasons,
                     source = s.SearchResult.Source,
@@ -395,33 +384,16 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
-            // Drop releases already blocked for this book before picking a winner.
-            //
-            // This is the path that actually re-grabs. The blocklist filter was wired into
-            // SearchAndDownloadAsync, which covers the manual search endpoint and the retry that
-            // follows a failure, but this service does not go through it: it scores results here and
-            // calls StartDownloadAsync directly. So a release could fail, be blocked, and be grabbed
-            // again by the next automatic pass a minute later, which is what a live install saw.
-            using var blocklistScope = _serviceScopeFactory.CreateScope();
-            var blocklistService = blocklistScope.ServiceProvider.GetRequiredService<IBlocklistService>();
-            var selectableResults = await BlockedReleaseFilter.ExcludeAsync(
-                blocklistService, audiobook.Id, scoredResults, _logger);
+            var best = automaticScoring.SelectBest(assessment);
 
-            var acceptable = selectableResults
-                .Where(s => !s.IsRejected) // Only non-rejected results
-                .OrderByDescending(s => s.TotalScore)
-                .ToList();
-
-            if (acceptable.Count == 0)
+            if (best == null)
             {
                 _logger.LogInformation("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
                 return 0;
             }
 
-            // AI release gate — the same gate the per-book search-and-download path runs.
-            // This path never consulted it and grabbed "White Rural Rage: The Threat to
-            // American Democracy" for James Patterson's "American Rage" (title-only fallback).
-            var topResult = await PickThroughAiGateAsync(audiobook, acceptable, stoppingToken);
+            // AI release gate — a second opinion over the eligible candidates.
+            var topResult = await PickThroughAiGateAsync(audiobook, best, assessment, stoppingToken);
             if (topResult == null)
             {
                 _logger.LogWarning("AI release gate flagged every acceptable candidate for audiobook '{Title}' — skipping this cycle", audiobook.Title);
@@ -466,6 +438,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                     return 0;
                 }
 
+                if (!await automaticScoring.IsCurrentAsync(assessment, audiobook.Id, stoppingToken)) return 0;
                 await downloadService.StartDownloadAsync(topResult.SearchResult, downloadClientId, audiobook.Id);
                 downloadsQueued++;
 
@@ -482,17 +455,18 @@ namespace Listenarr.Infrastructure.HostedServices.Search
         }
 
 
-        private async Task<QualityScore?> PickThroughAiGateAsync(Audiobook audiobook, List<QualityScore> acceptable, CancellationToken ct)
+        private async Task<AutomaticCandidateScore?> PickThroughAiGateAsync(
+            Audiobook audiobook, AutomaticCandidateScore best, AutomaticSearchAssessment assessment, CancellationToken ct)
         {
             using var scope = _serviceScopeFactory.CreateScope();
             var aiAssist = scope.ServiceProvider.GetService<IAiAssistService>();
             var configuration = scope.ServiceProvider.GetService<Listenarr.Application.Configuration.Contracts.IConfigurationService>();
             if (aiAssist == null || configuration == null)
             {
-                return acceptable[0];
+                return best;
             }
 
-            return await new AiReleaseGate(aiAssist, configuration, _logger).PickAsync(audiobook, acceptable, ct);
+            return await new AiReleaseGate(aiAssist, configuration, _logger).PickAsync(audiobook, best, assessment, ct);
         }
 
     }

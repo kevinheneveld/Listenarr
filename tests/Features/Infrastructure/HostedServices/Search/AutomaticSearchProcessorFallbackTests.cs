@@ -57,10 +57,9 @@ namespace Listenarr.Tests.Features.Infrastructure.HostedServices.Search
             // Isolate the fallback -> selection wiring from the quality scorer (its own tests cover
             // scoring): accept the constrained result with a positive, non-rejected score.
             var quality = new Mock<IQualityProfileService>();
-            // kevin/canary-live: the fork's scorer takes an optional expected-runtime argument.
             quality.Setup(q => q.ScoreSearchResults(
-                    It.IsAny<List<SearchResult>>(), It.IsAny<QualityProfile>(), It.IsAny<int?>()))
-                .ReturnsAsync((List<SearchResult> results, QualityProfile _, int? _) =>
+                    It.IsAny<List<SearchResult>>(), It.IsAny<QualityProfile>()))
+                .ReturnsAsync((List<SearchResult> results, QualityProfile _) =>
                     results.Select(r => new QualityScore { SearchResult = r, TotalScore = 100 }).ToList());
             Init(builder =>
             {
