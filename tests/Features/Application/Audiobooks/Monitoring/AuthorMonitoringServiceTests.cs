@@ -149,6 +149,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 .Options;
 
             await using var dbContext = new ListenArrDbContext(dbOptions);
+            dbContext.QualityProfiles.Add(new QualityProfile { Id = 1, Name = "Standard", IsDefault = true });
             // The user deleted "The Martian" and kept it out of monitoring.
             dbContext.AuthorMonitoringExclusions.Add(new AuthorMonitoringExclusion
             {

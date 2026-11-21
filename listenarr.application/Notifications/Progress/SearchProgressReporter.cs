@@ -95,7 +95,9 @@ namespace Listenarr.Application.Notifications.Progress
                         new { message, asin, audiobookId, type = "automatic", stage, timestamp = evt.Timestamp });
                 }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+            // An activity notice must never decide whether a grab happens: this call takes no
+            // token, so a cancellation here is the hub's own (a timeout), not the caller's.
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
                 _logger.LogDebug(ex, "Failed to broadcast automatic SearchProgress: {Message}", ex.Message);
             }

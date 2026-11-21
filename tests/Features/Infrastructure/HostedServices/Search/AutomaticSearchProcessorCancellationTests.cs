@@ -55,7 +55,8 @@ namespace Listenarr.Tests.Features.Infrastructure.HostedServices.Search
             await RunCycleAsync(CancellationToken.None);
 
             // Then: both broadcasts failed, the book was still grabbed, and it was stamped as searched
-            Assert.Equal(2, broadcasts);
+            // Fork: the two debug broadcasts plus the activity indicator's outcome and idle notices.
+            Assert.Equal(4, broadcasts);
             download.Verify(d => d.StartDownloadAsync(
                     It.IsAny<SearchResult>(), DirectDownloadMetadataKeys.ClientId, audiobook.Id),
                 Times.Once);

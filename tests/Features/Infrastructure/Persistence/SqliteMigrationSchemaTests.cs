@@ -415,7 +415,11 @@ public class SqliteMigrationSchemaTests : BaseTests
         Assert.False(upgraded.Database.HasPendingModelChanges());
     }
 
-    [Fact]
+    // Fork: downgrading is not supported on kevin/canary-live. EF's SQLite DropColumn rebuilds
+    // a table from the previous migration's designer model; for upstream's AddAudiobookAddedDate
+    // that model has none of the fork's Audiobooks columns, so the rebuild drops them and the
+    // fork's own Down steps then fail. Rollback on live is image + database backup.
+    [Fact(Skip = "Fork: no downgrade path through upstream column drops; roll back with a database backup.")]
     [Trait("Scenario", "ConsolidatedMigrationDowngradeReapply")]
     public async Task ConsolidatedMigration_DowngradesOneStepAndReappliesCleanly()
     {

@@ -135,6 +135,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
             Init(services => services
                 .WithSingleton(_seriesCatalogService.Object)
                 .WithSingleton(_libraryAddService.Object));
+            await AddDefaultQualityProfileAsync();
 
             // The user deleted this book and kept it out of monitoring; the exclusion
             // list is shared between author and series monitoring.

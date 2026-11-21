@@ -32,6 +32,9 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission
             return Task.CompletedTask;
         }
 
+        // Fork: automatic searches are restricted to the audiobook category.
+        private const string AudiobookCategory = "3030";
+
         [Fact]
         public async Task EmptyFullQuery_RetriesTitleOnly_AndSubmitsTheFallbackRelease()
         {
@@ -44,8 +47,8 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission
 
             Assert.True(result.Success, result.Message);
             Assert.Equal(release.Title, Assert.Single(_submitted).Title);
-            _searchService.Verify(s => s.SearchAsync(FullQuery, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
-            _searchService.Verify(s => s.SearchAsync(Title, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
+            _searchService.Verify(s => s.SearchAsync(FullQuery, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
+            _searchService.Verify(s => s.SearchAsync(Title, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
         }
 
         [Fact]
@@ -57,8 +60,8 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission
             var result = await SearchAndDownloadAsync(book);
 
             Assert.True(result.Success, result.Message);
-            _searchService.Verify(s => s.SearchAsync(FullQuery, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
-            _searchService.Verify(s => s.SearchAsync(Title, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Never);
+            _searchService.Verify(s => s.SearchAsync(FullQuery, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
+            _searchService.Verify(s => s.SearchAsync(Title, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Never);
         }
 
         [Fact]
@@ -72,7 +75,7 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission
 
             Assert.False(result.Success);
             Assert.Equal("No search results found", result.Message);
-            _searchService.Verify(s => s.SearchAsync(It.IsAny<string>(), null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Exactly(2));
+            _searchService.Verify(s => s.SearchAsync(It.IsAny<string>(), AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Exactly(2));
         }
 
         [Fact]
@@ -84,7 +87,7 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission
             var result = await SearchAndDownloadAsync(book);
 
             Assert.False(result.Success);
-            _searchService.Verify(s => s.SearchAsync(Title, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
+            _searchService.Verify(s => s.SearchAsync(Title, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
         }
 
         // There is no catch-and-retry in DownloadService: an exception from the first search
@@ -94,17 +97,17 @@ namespace Listenarr.Tests.Features.Application.Downloads.Submission
         {
             var book = await SeedAsync(Author);
             _searchService
-                .Setup(s => s.SearchAsync(FullQuery, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true))
+                .Setup(s => s.SearchAsync(FullQuery, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true))
                 .ThrowsAsync(new OperationCanceledException());
 
             await Assert.ThrowsAsync<OperationCanceledException>(() => SearchAndDownloadAsync(book));
 
-            _searchService.Verify(s => s.SearchAsync(It.IsAny<string>(), null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
+            _searchService.Verify(s => s.SearchAsync(It.IsAny<string>(), AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true), Times.Once);
         }
 
         private void Returns(string query, List<SearchResult> results) =>
             _searchService
-                .Setup(s => s.SearchAsync(query, null, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true))
+                .Setup(s => s.SearchAsync(query, AudiobookCategory, null, It.IsAny<SearchSortBy>(), It.IsAny<SearchSortDirection>(), true))
                 .ReturnsAsync(results);
 
         private Task<SearchAndDownloadResult> SearchAndDownloadAsync(Audiobook book) =>

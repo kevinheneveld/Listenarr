@@ -78,7 +78,7 @@ namespace Listenarr.Application.Downloads.Submission
                 {
                     logger.LogInformation("No results for '{Title}' with the full query; retrying without the author: {Query}",
                         LogRedaction.SanitizeText(audiobook.Title), LogRedaction.SanitizeText(fallbackQuery));
-                    searchResults = await searchService.SearchAsync(fallbackQuery, isAutomaticSearch: true);
+                    searchResults = await searchService.SearchAsync(fallbackQuery, category: "3030", isAutomaticSearch: true);
                 }
             }
 
