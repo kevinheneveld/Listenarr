@@ -39,6 +39,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 Language = "english",
                 Monitored = true
             });
+            dbContext.QualityProfiles.Add(new QualityProfile { Id = 1, Name = "Standard", IsDefault = true });
             await dbContext.SaveChangesAsync();
 
             var authorCatalogService = new Mock<IAuthorCatalogService>();
@@ -82,6 +83,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                     It.Is<LibraryAddOperationRequest>(request =>
                         request.Metadata.Title == "The Martian" &&
                         request.Monitored &&
+                        request.QualityProfileId == 1 &&
                         request.HistorySource == "AuthorMonitoring"),
                     It.IsAny<System.Threading.CancellationToken>()))
                 .ReturnsAsync(new LibraryAddOperationResult
@@ -107,6 +109,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 authorCatalogService.Object,
                 libraryAddService.Object,
                 new EfAuthorMonitoringExclusionRepository(dbContext),
+                CreateQualityProfileService(),
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var result = await service.MonitorAuthorAsync(new MonitorAuthorRequest
@@ -125,6 +128,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
             Assert.Equal("uk", result.MonitoredAuthor.Region);
             Assert.Equal("english", result.MonitoredAuthor.Language);
             Assert.NotNull(result.MonitoredAuthor.LastSuccessfulSyncAt);
+            Assert.Equal(1, result.MonitoredAuthor.QualityProfileId);
 
             libraryAddService.Verify(service => service.AddToLibraryAsync(
                 It.IsAny<LibraryAddOperationRequest>(),
@@ -180,6 +184,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 authorCatalogService.Object,
                 libraryAddService.Object,
                 new EfAuthorMonitoringExclusionRepository(dbContext),
+                CreateQualityProfileService(),
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var result = await service.MonitorAuthorAsync(new MonitorAuthorRequest
@@ -244,6 +249,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 authorCatalogService.Object,
                 Mock.Of<ILibraryAddService>(),
                 new EfAuthorMonitoringExclusionRepository(dbContext),
+                CreateQualityProfileService(),
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var syncedCount = await service.SyncDueAuthorsAsync();
@@ -315,6 +321,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 authorCatalogService.Object,
                 libraryAddService.Object,
                 new EfAuthorMonitoringExclusionRepository(dbContext),
+                CreateQualityProfileService(),
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var result = await service.UpdateAuthorLanguageAsync(1, "english");
@@ -412,6 +419,8 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 .Options;
 
             await using var dbContext = new ListenArrDbContext(dbOptions);
+            dbContext.QualityProfiles.Add(new QualityProfile { Id = 1, Name = "Standard", IsDefault = true });
+            await dbContext.SaveChangesAsync();
 
             var authorCatalogService = new Mock<IAuthorCatalogService>();
             authorCatalogService
@@ -454,6 +463,7 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
                 authorCatalogService.Object,
                 libraryAddService.Object,
                 new EfAuthorMonitoringExclusionRepository(dbContext),
+                CreateQualityProfileService(),
                 Mock.Of<ILogger<AuthorMonitoringService>>());
 
             var result = await service.MonitorAuthorAsync(new MonitorAuthorRequest
@@ -466,6 +476,87 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Monitoring
             Assert.Equal(1, result.SyncResult.AddedCount);
             Assert.NotNull(addedMetadata);
             return addedMetadata!;
+        }
+
+        [Fact]
+        public async Task SyncAuthorAsync_QualityProfileRejection_ReportsFailure()
+        {
+            var dbOptions = new DbContextOptionsBuilder<ListenArrDbContext>()
+                .UseInMemoryDatabase(databaseName: $"author-monitor-profile-{System.Guid.NewGuid():N}")
+                .Options;
+
+            await using var dbContext = new ListenArrDbContext(dbOptions);
+            dbContext.MonitoredAuthors.Add(new MonitoredAuthor
+            {
+                Id = 1,
+                AuthorName = "Andy Weir",
+                AuthorNameNormalized = "andy weir",
+                Region = "us",
+                Language = "english"
+            });
+            await dbContext.SaveChangesAsync();
+
+            var authorCatalogService = new Mock<IAuthorCatalogService>();
+            authorCatalogService
+                .Setup(service => service.GetCatalogAsync("Andy Weir", "us", 500, null, true, It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new AuthorCatalogFetchResult
+                {
+                    Author = new AuthorLookupItem { Name = "Andy Weir" },
+                    Books = new List<AudibleSearchResult>
+                    {
+                        new() { Asin = "B000MARTIAN", Title = "The Martian", Language = "english" },
+                        new() { Asin = "B000ARTEMIS", Title = "Artemis", Language = "english" }
+                    }
+                });
+
+            const string rejection = "A quality profile is required. Select a quality profile, or create one in Settings > Quality Profiles.";
+            var libraryAddService = new Mock<ILibraryAddService>();
+            libraryAddService
+                .Setup(service => service.AddToLibraryAsync(It.IsAny<LibraryAddOperationRequest>(), It.IsAny<System.Threading.CancellationToken>()))
+                .ReturnsAsync(new LibraryAddOperationResult
+                {
+                    ValidationFailed = true,
+                    ValidationCode = LibraryAddValidationCodes.QualityProfileRequired,
+                    ValidationField = "qualityProfileId",
+                    ValidationMessage = rejection,
+                    Message = rejection
+                });
+
+            var service = new AuthorMonitoringService(
+                new EfMonitoredAuthorRepository(dbContext),
+                new AudiobookRepository(dbContext),
+                authorCatalogService.Object,
+                libraryAddService.Object,
+                new EfAuthorMonitoringExclusionRepository(dbContext),
+                CreateQualityProfileService(),
+                Mock.Of<ILogger<AuthorMonitoringService>>());
+
+            var result = await service.SyncAuthorAsync(1);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(0, result.AddedCount);
+            Assert.Equal(1, result.FailedCount);
+            Assert.Equal(rejection, result.ErrorMessage);
+            var storedAuthor = await dbContext.MonitoredAuthors.SingleAsync();
+            Assert.Null(storedAuthor.LastSuccessfulSyncAt);
+            Assert.Equal(rejection, storedAuthor.LastError);
+            libraryAddService.Verify(add => add.AddToLibraryAsync(
+                    It.IsAny<LibraryAddOperationRequest>(),
+                    It.IsAny<System.Threading.CancellationToken>()),
+                Times.Once);
+        }
+
+        private static IQualityProfileService CreateQualityProfileService(QualityProfile? defaultProfile = null)
+        {
+            defaultProfile ??= new QualityProfile { Id = 1, Name = "Standard", IsDefault = true };
+            var qualityProfileService = new Mock<IQualityProfileService>();
+            qualityProfileService
+                .Setup(service => service.GetDefaultAsync())
+                .ReturnsAsync(defaultProfile);
+            qualityProfileService
+                .Setup(service => service.GetByIdAsync(defaultProfile.Id))
+                .ReturnsAsync(defaultProfile);
+            return qualityProfileService.Object;
         }
     }
 }

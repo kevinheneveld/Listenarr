@@ -49,14 +49,13 @@ public sealed class ReleasedStorageRecoveryUpgradeTests : BaseTests
             await using (var legacy = await factory.CreateDbContextAsync())
             {
                 var migrator = legacy.GetService<IMigrator>();
-                // Fork: the released pre-#993 frontier is the last kevin/canary-live migration,
-                // so the model's fork-only columns exist before the EF inserts below.
-                await migrator.MigrateAsync("20260925200000_AddAiAssistRankSearches");
-                legacy.RootFolders.Add(scenario.Root);
-                legacy.Audiobooks.Add(scenario.Audiobook);
-                legacy.LibraryDirectoryOwnerships.Add(scenario.Ownership);
-                legacy.MoveJobs.Add(scenario.Job);
-                await legacy.SaveChangesAsync();
+                await migrator.MigrateAsync("20260825021432_AddWeakStorageVerifiedCleanup");
+                await using var legacySeed = new Released134SeedDbContext(options);
+                legacySeed.RootFolders.Add(scenario.Root);
+                legacySeed.Audiobooks.Add(scenario.Audiobook);
+                legacySeed.LibraryDirectoryOwnerships.Add(scenario.Ownership);
+                legacySeed.MoveJobs.Add(scenario.Job);
+                await legacySeed.SaveChangesAsync();
                 await migrator.MigrateAsync();
             }
             using var coordinator = new FilesystemMutationCoordinator();

@@ -68,27 +68,30 @@
               : ''
           }}
         </span>
-        <div class="group-dropdown" v-if="audiobooks.length > 0">
+        <div class="group-dropdown" v-if="rawAudiobooksLength > 0">
           <button class="toolbar-btn group-btn" @click="showGroupMenu = !showGroupMenu">
-            <PhBook v-if="groupBy === 'books'" />
+            <PhWarning v-if="brokenOnly" />
+            <PhBook v-else-if="groupBy === 'books'" />
             <PhUser v-else-if="groupBy === 'authors'" />
             <PhMicrophoneStage v-else-if="groupBy === 'narrators'" />
             <PhBooks v-else />
             {{
-              groupBy === 'books'
-                ? 'Books'
-                : groupBy === 'authors'
-                  ? 'Authors'
-                  : groupBy === 'narrators'
-                    ? 'Narrators'
-                    : 'Series'
+              brokenOnly
+                ? 'Broken books'
+                : groupBy === 'books'
+                  ? 'Books'
+                  : groupBy === 'authors'
+                    ? 'Authors'
+                    : groupBy === 'narrators'
+                      ? 'Narrators'
+                      : 'Series'
             }}
             <PhCaretDown />
           </button>
           <div v-if="showGroupMenu" class="group-menu">
             <button
               class="menu-item"
-              :class="{ active: groupBy === 'books' }"
+              :class="{ active: groupBy === 'books' && !brokenOnly }"
               @click="setGroupBy('books')"
             >
               <PhBook />
@@ -118,6 +121,18 @@
               <PhMicrophoneStage />
               Narrators
             </button>
+            <!-- Temporary help until the Issues page: books Audible can't fetch metadata for, to
+                 repair -->
+            <button
+              class="menu-item"
+              :class="{ active: brokenOnly }"
+              title="Books Audible can't fetch metadata for (no title, no author, no ASIN or one that isn't an ASIN, or no region), each with its reasons. A temporary shortcut until the Issues page."
+              data-testid="group-broken"
+              @click="setGroupBy('books', { brokenOnly: true })"
+            >
+              <PhWarning />
+              Broken books
+            </button>
           </div>
         </div>
         <button class="toolbar-btn" @click="refreshLibrary">
@@ -132,7 +147,8 @@
           v-if="audiobooks.length > 0 && selectedCount === 0"
           class="toolbar-btn"
           :title="`Select the ${audiobooks.length} book${audiobooks.length === 1 ? '' : 's'} currently shown`"
-          @click="libraryStore.selectAll(audiobooks.map((b) => b.id))"
+          data-testid="select-all-audiobooks"
+          @click="selectAllBooks"
         >
           <PhCheckSquare />
           Select All ({{ audiobooks.length }})
@@ -245,6 +261,20 @@
           <PhPlus v-else />
           {{ !hasRootFolderConfigured ? 'Go to Settings' : 'Add Audiobooks' }}
         </router-link>
+      </template>
+    </EmptyState>
+
+    <!-- Broken books: none left to repair (in the current search and filters) -->
+    <EmptyState
+      v-else-if="audiobooks.length === 0 && brokenOnly"
+      title="No broken books"
+      message="Every book shown has a title and a valid ASIN."
+    >
+      <template #icon>
+        <PhCheckCircle :size="48" />
+      </template>
+      <template #action>
+        <button class="btn btn-primary" @click="setGroupBy('books')">Show all books</button>
       </template>
     </EmptyState>
 
@@ -675,6 +705,17 @@
                   </button>
                 </div>
               </div>
+              <!-- Why the server considers the book broken: always shown under the cover, in the
+                   "Broken books" group (the overlay only appears on hover) -->
+              <div
+                v-if="brokenOnly && audiobook.brokenReasons?.length"
+                class="broken-reasons grid-broken-reasons"
+                data-testid="broken-reasons"
+              >
+                <span v-for="reason in audiobook.brokenReasons" :key="reason" class="broken-reason">
+                  {{ brokenReasonLabel(reason) }}
+                </span>
+              </div>
               <!-- Extra details shown physically under poster when toggle is enabled -->
               <div v-if="showItemDetails" class="grid-bottom-details">
                 <div class="detail-line title">{{ safeText(audiobook.title) }}</div>
@@ -804,6 +845,15 @@
                   audiobook.authors?.map((author) => safeText(author)).join(', ') ||
                   'Unknown Author'
                 }}
+              </div>
+              <div
+                v-if="brokenOnly && audiobook.brokenReasons?.length"
+                class="broken-reasons"
+                data-testid="broken-reasons"
+              >
+                <span v-for="reason in audiobook.brokenReasons" :key="reason" class="broken-reason">
+                  {{ brokenReasonLabel(reason) }}
+                </span>
               </div>
               <div v-if="showItemDetails" class="list-extra-details">
                 <div
@@ -1104,6 +1154,8 @@ import {
   PhBooks,
   PhFolderOpen,
   PhWrench,
+  PhWarning,
+  PhCheckCircle,
 } from '@phosphor-icons/vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useLibraryStore } from '@/stores/library'
@@ -1117,6 +1169,7 @@ import { signalRService } from '@/services/signalr'
 import { useToast } from '@/services/toastService'
 import { buildApiPath } from '@/services/apiBase'
 import { logger } from '@/utils/logger'
+import { brokenReasonLabel } from '@/utils/brokenBookReasons'
 import BulkEditModal from '@/components/domain/collection/BulkEditModal.vue'
 import EditAudiobookModal from '@/components/domain/audiobook/EditAudiobookModal.vue'
 import RenamePreviewModal from '@/components/domain/organize/RenamePreviewModal.vue'
@@ -1425,6 +1478,8 @@ const filteredAndSortedAudiobooks = computed(() => {
     const idSet = new Set(libraryStore.idSetFilter.ids)
     filtered = filtered.filter((b) => idSet.has(b.id))
   }
+  // "Broken books": the books the server gives reasons for
+  if (brokenOnly.value) filtered = filtered.filter((b) => (b.brokenReasons?.length ?? 0) > 0)
 
   // Apply selected filter (built-in or custom)
   if (selectedFilterId.value) {
@@ -1436,10 +1491,9 @@ const filteredAndSortedAudiobooks = computed(() => {
     } else if (sid === 'missing') {
       filtered = filtered.filter((b) => getAudiobookStatus(b) === 'no-file')
     } else if (sid === 'recent') {
-      // For now: approximate by publishYear being this year or last year
       const thisYear = new Date().getFullYear()
       filtered = filtered.filter((b) => {
-        const y = Number(b.publishYear || 0)
+        const y = new Date(b.added ?? '').getFullYear()
         return !isNaN(y) && (y === thisYear || y === thisYear - 1)
       })
     } else if (sid === 'recently-imported') {
@@ -1604,6 +1658,17 @@ const filteredAndSortedAudiobooks = computed(() => {
         av = getAudiobookStatus(a)
         bv = getAudiobookStatus(b)
         break
+      case 'added': {
+        const aTime = a.added ? Date.parse(a.added) : Number.NaN
+        const bTime = b.added ? Date.parse(b.added) : Number.NaN
+        const aHasDate = Number.isFinite(aTime)
+        const bHasDate = Number.isFinite(bTime)
+
+        if (!aHasDate && !bHasDate) return 0
+        if (!aHasDate) return 1
+        if (!bHasDate) return -1
+        return (aTime - bTime) * (sortOrder.value === 'asc' ? 1 : -1)
+      }
     }
 
     if (typeof av === 'boolean' && typeof bv === 'boolean') {
@@ -1746,12 +1811,21 @@ const GROUP_BY_MODES = ['books', 'authors', 'series', 'narrators'] as const
 type GroupByMode = (typeof GROUP_BY_MODES)[number]
 const DEFAULT_VISIBLE_RANGE_END = 20
 const groupBy = ref<GroupByMode>('books')
+// "Broken books": the Books group showing only the books to repair (group=broken in the address)
+const BROKEN_GROUP = 'broken'
+const brokenOnly = ref(false)
 const showGroupMenu = ref(false)
 
 function normalizeGroupBy(value: unknown): GroupByMode | null {
+  if (value === BROKEN_GROUP) return 'books'
   return typeof value === 'string' && GROUP_BY_MODES.includes(value as GroupByMode)
     ? (value as GroupByMode)
     : null
+}
+
+// The group as the address and the saved preference name it
+function groupQueryValue(): string {
+  return brokenOnly.value ? BROKEN_GROUP : groupBy.value
 }
 
 // --- GroupBy and SortKey Initialization ---
@@ -1761,10 +1835,12 @@ try {
   const storedGroup = normalizeGroupBy(stored)
   if (storedGroup) {
     groupBy.value = storedGroup
+    brokenOnly.value = stored === BROKEN_GROUP
   }
   const initialGroup = normalizeGroupBy(route.query.group)
-  if (initialGroup && initialGroup !== groupBy.value) {
+  if (initialGroup) {
     groupBy.value = initialGroup
+    brokenOnly.value = route.query.group === BROKEN_GROUP
   }
   // Deep-linkable filter (e.g. dashboard health chips): /audiobooks?filter=needs-review.
   // The URL wins over the persisted filter; a bare visit restores the stored one.
@@ -1811,7 +1887,7 @@ try {
   for (const [k, v] of Object.entries(route.query || {})) {
     if (typeof v === 'string') normalizedQuery[k] = v
   }
-  normalizedQuery.group = groupBy.value
+  normalizedQuery.group = groupQueryValue()
   if (selectedFilterId.value) normalizedQuery.filter = selectedFilterId.value
   if (
     route.query.group !== normalizedQuery.group ||
@@ -1886,9 +1962,15 @@ watch(selectedFilterId, (sid) => {
   }
 })
 
+watch(brokenOnly, () => {
+  try {
+    localStorage.setItem(GROUP_BY_KEY, groupQueryValue())
+  } catch {}
+})
+
 watch(groupBy, (v) => {
   try {
-    localStorage.setItem(GROUP_BY_KEY, v)
+    localStorage.setItem(GROUP_BY_KEY, groupQueryValue())
   } catch {}
   // Switch to this group's persisted view mode (grid/list is per-grouping).
   viewMode.value = loadViewModeFor(v)
@@ -1991,7 +2073,9 @@ function seriesBadge(name: string): string | null {
   const row = seriesHealthFor(name)
   if (!row) return null
   if (row.catalogTotal == null) {
-    return row.missingTracked > 0 ? `${row.owned} owned · ${row.missingTracked} tracked missing` : null
+    return row.missingTracked > 0
+      ? `${row.owned} owned · ${row.missingTracked} tracked missing`
+      : null
   }
   const run = row.bestRun
   const owned = run ? run.owned : row.owned
@@ -2043,7 +2127,6 @@ function seriesMatchesCompletionFilter(name: string): boolean {
       return true
   }
 }
-
 
 const groupedCollections = computed(() => {
   if (groupBy.value === 'books') return []
@@ -2200,7 +2283,9 @@ const groupedCollections = computed(() => {
         if (row.catalogTotal != null) return Math.max(0, row.catalogTotal - row.owned)
         return row.missingTracked
       }
-      vals.sort((a, b) => (missingOf(a.name) - missingOf(b.name)) * order || a.name.localeCompare(b.name))
+      vals.sort(
+        (a, b) => (missingOf(a.name) - missingOf(b.name)) * order || a.name.localeCompare(b.name),
+      )
       break
     }
     case 'count':
@@ -2309,6 +2394,7 @@ const sortOptions = computed(() => {
       { value: 'publisher', label: 'Publisher' },
       { value: 'year', label: 'Release Year' },
       { value: 'imported', label: 'Recently Imported' },
+      { value: 'added', label: 'Date Added' },
       { value: 'monitored', label: 'Monitored' },
       { value: 'status', label: 'Status' },
     ]
@@ -2349,7 +2435,7 @@ const sortKeyProxy = computed<string>({
       sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
     } else {
       sortKey.value = val
-      sortOrder.value = 'asc'
+      sortOrder.value = val === 'added' ? 'desc' : 'asc'
     }
   },
 })
@@ -2479,12 +2565,16 @@ watch(
   (g) => {
     try {
       const mode = normalizeGroupBy(g) ?? 'books'
+      const broken = g === BROKEN_GROUP
       // If the route changed the group, use setGroupBy so we run the same DOM/update/observer logic
-      if (mode !== groupBy.value) {
+      if (mode !== groupBy.value || broken !== brokenOnly.value) {
         // fire-and-forget async to avoid blocking the router navigation
-        void setGroupBy(mode)
-      } else if (g !== mode) {
-        void router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: mode } })
+        void setGroupBy(mode, { brokenOnly: broken })
+      } else if (g !== groupQueryValue()) {
+        void router.replace({
+          path: '/audiobooks',
+          query: { ...(route.query || {}), group: groupQueryValue() },
+        })
       }
     } catch {}
   },
@@ -2837,9 +2927,11 @@ function resetVirtualScroller() {
   }
 }
 
-async function setGroupBy(mode: GroupByMode) {
-  const changed = mode !== groupBy.value
+async function setGroupBy(mode: GroupByMode, options: { brokenOnly?: boolean } = {}) {
+  const broken = mode === 'books' && !!options.brokenOnly
+  const changed = mode !== groupBy.value || broken !== brokenOnly.value
   groupBy.value = mode
+  brokenOnly.value = broken
   showGroupMenu.value = false
   if (changed) {
     resetVirtualScroller()
@@ -2861,7 +2953,10 @@ async function setGroupBy(mode: GroupByMode) {
   }
   try {
     // update route query so sidebar subnav and URL stay in sync
-    router.replace({ path: '/audiobooks', query: { ...(route.query || {}), group: mode } })
+    router.replace({
+      path: '/audiobooks',
+      query: { ...(route.query || {}), group: groupQueryValue() },
+    })
   } catch (err) {
     logger.debug('Failed to update route query for group:', err)
   }
@@ -3266,6 +3361,13 @@ async function handleEditSaved() {
       editAudiobook.value = updated
     }
   }
+}
+
+// In "Broken books", Select All takes only the broken books shown, so Repair and Delete
+// can't reach healthy books hidden by the group
+// Fork: Select All always means the books currently shown, which covers "Broken books" too.
+function selectAllBooks() {
+  libraryStore.selectAll(audiobooks.value.map((b) => b.id))
 }
 
 function applyCheckboxSelection(audiobook: Audiobook, shiftKey: boolean) {
@@ -4405,6 +4507,29 @@ defineExpose({
 .audiobook-poster-container:hover .status-overlay {
   padding: 80px 8px 8px;
   opacity: 1;
+}
+
+/* Why a book is broken, as orange tags (the warning color, like the problems Repair fixes) */
+.broken-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.grid-broken-reasons {
+  padding: 0.35rem 0.25rem 0;
+}
+
+.broken-reason {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--warning-600);
+  border-radius: 4px;
+  background: rgba(255, 165, 0, 0.15);
+  color: var(--warning-500);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* When 'show-details' class is present, render overlay expanded */

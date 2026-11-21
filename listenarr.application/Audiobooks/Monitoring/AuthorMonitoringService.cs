@@ -84,6 +84,7 @@ namespace Listenarr.Application.Audiobooks.Monitoring
         private readonly IAuthorCatalogService _authorCatalogService;
         private readonly ILibraryAddService _libraryAddService;
         private readonly IAuthorMonitoringExclusionRepository _exclusions;
+        private readonly IQualityProfileService _qualityProfileService;
         private readonly ILogger<AuthorMonitoringService> _logger;
 
         public AuthorMonitoringService(
@@ -92,6 +93,7 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             IAuthorCatalogService authorCatalogService,
             ILibraryAddService libraryAddService,
             IAuthorMonitoringExclusionRepository exclusions,
+            IQualityProfileService qualityProfileService,
             ILogger<AuthorMonitoringService> logger)
         {
             _authors = authors;
@@ -99,6 +101,7 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             _authorCatalogService = authorCatalogService;
             _libraryAddService = libraryAddService;
             _exclusions = exclusions;
+            _qualityProfileService = qualityProfileService;
             _logger = logger;
         }
 
@@ -137,11 +140,15 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             var displayName = request.Name.Trim();
 
             var monitoredAuthor = await _authors.GetByNameRegionLanguageAsync(normalizedName, normalizedRegion, normalizedLanguage, cancellationToken);
+            var qualityProfileId = await ResolveMonitoringQualityProfileIdAsync(
+                request.QualityProfileId,
+                monitoredAuthor?.QualityProfileId);
 
             if (monitoredAuthor == null)
             {
                 monitoredAuthor = new MonitoredAuthor
                 {
+                    QualityProfileId = qualityProfileId,
                     AuthorName = displayName,
                     AuthorNameNormalized = normalizedName,
                     AuthorAsin = NormalizeOptionalIdentifier(request.Asin),
@@ -155,6 +162,7 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             {
                 monitoredAuthor.AuthorName = displayName;
                 monitoredAuthor.AuthorAsin = NormalizeOptionalIdentifier(request.Asin) ?? monitoredAuthor.AuthorAsin;
+                monitoredAuthor.QualityProfileId = qualityProfileId;
                 monitoredAuthor.UpdatedAt = DateTime.UtcNow;
             }
 
@@ -166,6 +174,11 @@ namespace Listenarr.Application.Audiobooks.Monitoring
                 MonitoredAuthor = monitoredAuthor,
                 SyncResult = syncResult
             };
+        }
+
+        public Task<MonitoredAuthor?> UpdateQualityProfileAsync(int id, int qualityProfileId, CancellationToken cancellationToken = default)
+        {
+            return _authors.UpdateQualityProfileAsync(id, qualityProfileId, cancellationToken);
         }
 
         public async Task<bool> UnmonitorAuthorAsync(int id, CancellationToken cancellationToken = default)
@@ -364,6 +377,7 @@ namespace Listenarr.Application.Audiobooks.Monitoring
                         {
                             Metadata = MapToMetadata(book),
                             Monitored = true,
+                            QualityProfileId = monitoredAuthor.QualityProfileId,
                             AutoSearch = false,
                             HistorySource = "AuthorMonitoring",
                             HistoryMessage =
@@ -389,6 +403,23 @@ namespace Listenarr.Application.Audiobooks.Monitoring
                     }
 
                     result.FailedCount++;
+
+                    if (addResult.IsQualityProfileFailure)
+                    {
+                        // Every remaining addition would be rejected for the same reason, so stop
+                        // and report the configuration problem instead of a successful sync.
+                        result.Succeeded = false;
+                        result.ErrorMessage = addResult.ValidationMessage ?? addResult.Message;
+                        _logger.LogWarning(
+                            "Monitored author '{Name}' sync stopped: {Reason}",
+                            monitoredAuthor.AuthorName,
+                            result.ErrorMessage);
+                        monitoredAuthor.LastError = TruncateError(result.ErrorMessage);
+                        monitoredAuthor.LastCheckedAt = DateTime.UtcNow;
+                        monitoredAuthor.UpdatedAt = DateTime.UtcNow;
+                        await _authors.UpsertAsync(monitoredAuthor, cancellationToken);
+                        return result;
+                    }
                 }
 
                 monitoredAuthor.LastCheckedAt = DateTime.UtcNow;
@@ -424,5 +455,29 @@ namespace Listenarr.Application.Audiobooks.Monitoring
             }
         }
 
+        private async Task<int> ResolveMonitoringQualityProfileIdAsync(int? requestedProfileId, int? existingProfileId)
+        {
+            if (requestedProfileId.HasValue)
+            {
+                var requested = await _qualityProfileService.GetByIdAsync(requestedProfileId.Value);
+                return requested?.Id
+                    ?? throw new ArgumentException(
+                        $"Quality profile with ID {requestedProfileId.Value} does not exist. Select a valid quality profile.");
+            }
+
+            if (existingProfileId.HasValue)
+            {
+                var existing = await _qualityProfileService.GetByIdAsync(existingProfileId.Value);
+                if (existing != null)
+                {
+                    return existing.Id;
+                }
+            }
+
+            var defaultProfile = await _qualityProfileService.GetDefaultAsync();
+            return defaultProfile?.Id
+                ?? throw new ArgumentException(
+                    "A quality profile is required to monitor an author. Select a quality profile, or create one in Settings > Quality Profiles.");
+        }
     }
 }

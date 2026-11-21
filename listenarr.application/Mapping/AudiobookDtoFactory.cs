@@ -55,6 +55,7 @@ namespace Listenarr.Application.Mapping
                 Genres = audiobook.Genres,
                 Tags = audiobook.Tags?.ToArray(),
                 Description = audiobook.Description,
+                Added = audiobook.Added,
                 PublishYear = audiobook.PublishYear,
                 PublishedDate = audiobook.PublishedDate,
                 Series = audiobook.Series,

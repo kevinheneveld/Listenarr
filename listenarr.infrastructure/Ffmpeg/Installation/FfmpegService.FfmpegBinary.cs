@@ -42,41 +42,21 @@ namespace Listenarr.Infrastructure.Ffmpeg.Installation
         }
 
         /// <summary>
-        /// Ensure the ffmpeg binary is available in the bundled directory. The static archive
-        /// downloaded for ffprobe contains ffmpeg as well, so this first tries to promote a
-        /// binary left behind in the extracted tree by a previous install, then falls back to
-        /// the full download flow (which extracts both binaries).
+        /// Ensure the ffmpeg binary is available in the configured ffmpeg directory. Listenarr
+        /// packages ffprobe only and no longer downloads the static archive, so this returns a
+        /// binary already in that directory, or promotes one left in the tree an earlier
+        /// archive download extracted there. With neither, ffmpeg is unavailable.
         /// </summary>
         public async Task<string?> EnsureFfmpegInstalledAsync()
         {
-            if (File.Exists(_ffmpegPath))
+            if (File.Exists(_ffmpegPath) || await TryPromoteExtractedBinaryAsync(_ffmpegName, _ffmpegPath))
             {
                 return _ffmpegPath;
-            }
-
-            if (await TryPromoteExtractedBinaryAsync(_ffmpegName, _ffmpegPath))
-            {
-                return _ffmpegPath;
-            }
-
-            if (!_autoInstall)
-            {
-                _logger.LogInformation("Auto-install of ffmpeg is disabled via LISTENARR_AUTO_INSTALL_FFPROBE");
-                return null;
-            }
-
-            if (await GetFfprobePathAsync() == null)
-            {
-                await EnsureFfprobeInstalledAsync();
-                if (File.Exists(_ffmpegPath) || await TryPromoteExtractedBinaryAsync(_ffmpegName, _ffmpegPath))
-                {
-                    return File.Exists(_ffmpegPath) ? _ffmpegPath : null;
-                }
             }
 
             _logger.LogWarning(
-                "ffmpeg binary unavailable: ffprobe is installed but the extracted archive no longer contains ffmpeg. Delete {Path} and restart to re-download the archive.",
-                _ffprobePath);
+                "ffmpeg binary unavailable: place an ffmpeg build at {Path} to enable audio sampling.",
+                _ffmpegPath);
             return null;
         }
 
@@ -91,9 +71,9 @@ namespace Listenarr.Infrastructure.Ffmpeg.Installation
 
             try
             {
-                if (!Directory.Exists(_baseDir)) return false;
+                if (!Directory.Exists(_legacyDirectory)) return false;
 
-                var candidates = Directory.GetFiles(_baseDir, binaryName, SearchOption.AllDirectories)
+                var candidates = Directory.GetFiles(_legacyDirectory, binaryName, SearchOption.AllDirectories)
                     .Where(p => !string.Equals(Path.GetFullPath(p), Path.GetFullPath(destPath), StringComparison.OrdinalIgnoreCase))
                     .ToList();
 
@@ -105,11 +85,11 @@ namespace Listenarr.Infrastructure.Ffmpeg.Installation
                     .FirstOrDefault();
                 if (string.IsNullOrEmpty(chosen))
                 {
-                    _logger.LogInformation("No {Binary} binary found in extracted files under {BaseDir}", binaryName, _baseDir);
+                    _logger.LogInformation("No {Binary} binary found in extracted files under {BaseDir}", binaryName, _legacyDirectory);
                     return false;
                 }
 
-                Directory.CreateDirectory(Path.GetDirectoryName(destPath) ?? _baseDir);
+                Directory.CreateDirectory(Path.GetDirectoryName(destPath) ?? _legacyDirectory);
                 try
                 {
                     File.Move(chosen, destPath);

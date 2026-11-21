@@ -49,6 +49,8 @@ import type {
   AuthorCatalogResponse,
   AuthorLookupResponse,
   AuthorMonitoringStatusResponse,
+  MonitoredAuthor,
+  MonitoredSeries,
   MonitorAuthorResponse,
   AuthorMonitoringExclusion,
   MonitorSeriesResponse,
@@ -320,22 +322,7 @@ class ApiService {
   }
 
   // Search API
-  // Deprecated compatibility shim removed. Use `intelligentSearch`, `searchIndexers`, or `searchByApi`.
-
-  async intelligentSearch(
-    query: string,
-    category?: string,
-    signal?: AbortSignal,
-  ): Promise<SearchResult[]> {
-    const body: Record<string, unknown> = { mode: 'Simple', query }
-    if (category) body['category'] = category
-    const resp = await this.request<SearchResult[] | { results?: SearchResult[] } | null>(
-      '/search',
-      { method: 'POST', body: JSON.stringify(body), signal },
-    )
-    const results = Array.isArray(resp) ? resp : (resp?.results ?? [])
-    return results
-  }
+  // Deprecated compatibility shim removed. Use `searchIndexers` or `searchByApi`.
 
   async searchIndexers(
     query: string,
@@ -592,10 +579,21 @@ class ApiService {
     asin?: string
     region?: string
     language?: string
+    qualityProfileId?: number
   }): Promise<MonitorAuthorResponse> {
     return this.request<MonitorAuthorResponse>('/authors/monitoring', {
       method: 'POST',
       body: JSON.stringify(payload),
+    })
+  }
+
+  async updateAuthorMonitoringProfile(
+    id: number,
+    qualityProfileId: number,
+  ): Promise<MonitoredAuthor> {
+    return this.request<MonitoredAuthor>(`/authors/monitoring/${id}/quality-profile`, {
+      method: 'PUT',
+      body: JSON.stringify({ qualityProfileId }),
     })
   }
 
@@ -679,10 +677,21 @@ class ApiService {
     asin?: string
     region?: string
     language?: string
+    qualityProfileId?: number
   }): Promise<MonitorSeriesResponse> {
     return this.request<MonitorSeriesResponse>('/series/monitoring', {
       method: 'POST',
       body: JSON.stringify(payload),
+    })
+  }
+
+  async updateSeriesMonitoringProfile(
+    id: number,
+    qualityProfileId: number,
+  ): Promise<MonitoredSeries> {
+    return this.request<MonitoredSeries>(`/series/monitoring/${id}/quality-profile`, {
+      method: 'PUT',
+      body: JSON.stringify({ qualityProfileId }),
     })
   }
 
