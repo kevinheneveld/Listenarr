@@ -31,6 +31,10 @@ namespace Listenarr.Tests.Features.Api.Features.Library
         {
             // #717: destination mutations require the path inside an authorized root.
             await AddAuthorizedRootAsync(FileService.GetTempPath());
+            // Adds require a resolvable quality profile.
+            var profile = new QualityProfileBuilder().WithName("Standard").Build();
+            profile.IsDefault = true;
+            await _qualityProfileRepository.AddAsync(profile);
             var sourceFolder = FileService.GetTempDirectory(folder);
             var source = await _audiobookRepository.AddAsync(new AudiobookBuilder()
                 .WithTitle("Anthology Record")

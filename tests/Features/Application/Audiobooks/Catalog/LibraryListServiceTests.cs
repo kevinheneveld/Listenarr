@@ -76,6 +76,13 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Catalog
             fileRepository
                 .Setup(r => r.GetCountsByAudiobookIdAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new Dictionary<int, int>());
+            // Fork: the list also reports true on-disk size and the last import time.
+            fileRepository
+                .Setup(r => r.GetSizeSumsByAudiobookIdAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Dictionary<int, long>());
+            fileRepository
+                .Setup(r => r.GetMaxCreatedAtByAudiobookIdAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new Dictionary<int, DateTime>());
             var qualityProfileRepository = new Mock<IQualityProfileRepository>();
             qualityProfileRepository.Setup(r => r.GetAllAsync()).ReturnsAsync(new List<QualityProfile>());
             var downloadRepository = new Mock<IDownloadRepository>();

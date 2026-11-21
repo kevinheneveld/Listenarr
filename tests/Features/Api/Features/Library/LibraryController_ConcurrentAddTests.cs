@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using Listenarr.Application.Audiobooks;
+using Listenarr.Tests.Builders;
 using Listenarr.Tests.Common;
 
 namespace Listenarr.Tests.Features.Api.Features.Library
@@ -30,6 +31,10 @@ namespace Listenarr.Tests.Features.Api.Features.Library
         public async Task ConcurrentAdds_SameAsin_CreateExactlyOneRecord()
         {
             AudiobookAddLockManager.ResetForTesting();
+            // Adds require a resolvable quality profile.
+            var profile = new QualityProfileBuilder().WithName("Standard").Build();
+            profile.IsDefault = true;
+            await _qualityProfileRepository.AddAsync(profile);
             var controller = _provider.GetRequiredService<LibraryController>();
 
             const string asin = "B00CONCUR1";

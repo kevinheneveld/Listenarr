@@ -1100,7 +1100,6 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
         [Theory]
         [InlineData("missing-target-contract")]
         [InlineData("source-root-without-contract")]
-        [InlineData("negative-policy-revision")]
         public async Task EnqueueMoveAsync_VerifiedDeletionWithIncompleteStorageSnapshot_RejectsBeforePersisting(string gap)
         {
             var jobs = new List<MoveJob>();
@@ -1121,10 +1120,9 @@ namespace Listenarr.Tests.Features.Application.Audiobooks.Jobs
                     sourceRootFolderId: 3,
                     sourceStorageContractRevision: gap == "source-root-without-contract" ? null : 0,
                     targetRootFolderId: 4,
-                    targetPolicyRevision: gap == "negative-policy-revision" ? -1 : null,
                     targetStorageContractRevision: gap == "missing-target-contract" ? null : 2));
 
-            Assert.Contains("complete root-folder policy snapshot", rejected.Message);
+            Assert.Contains("complete root-folder storage snapshot", rejected.Message);
             Assert.Empty(jobs);
         }
 
