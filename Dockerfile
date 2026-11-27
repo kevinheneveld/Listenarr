@@ -60,18 +60,10 @@ ENV DOCKER_ENV=true
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY ["Directory.Build.props", "./"]
-COPY ["Directory.Packages.props", "./"]
-COPY ["listenarr.api/Listenarr.Api.csproj", "listenarr.api/"]
-COPY ["listenarr.domain/Listenarr.Domain.csproj", "listenarr.domain/"]
-COPY ["listenarr.application/Listenarr.Application.csproj", "listenarr.application/"]
-COPY ["listenarr.infrastructure/Listenarr.Infrastructure.csproj", "listenarr.infrastructure/"]
-RUN dotnet restore "listenarr.api/Listenarr.Api.csproj"
-COPY . .
-WORKDIR "/src/listenarr.api"
 # Ensure Node.js is available in the build image so MSBuild targets that run
 # the frontend (npm/vite) can execute during `dotnet publish`.
 # Use NodeSource to install Node 26 — the same Node.js major as CI and the Discord bot runtime.
+# Install it before COPY . . so a source-only change does not repeat the apt and NodeSource work.
 # NOTE: download-then-run, never `curl | bash` — a failed download feeds bash
 # empty input (exit 0) and apt then silently installs Ubuntu's npm-less
 # nodejs 18, exploding much later at `npm: not found`. Retry the download and
@@ -90,6 +82,15 @@ RUN apt-get update \
 	&& rm -f /tmp/nodesource-setup.sh \
 	&& apt-get clean \
 	&& rm -rf /var/lib/apt/lists/*
+COPY ["Directory.Build.props", "./"]
+COPY ["Directory.Packages.props", "./"]
+COPY ["listenarr.api/Listenarr.Api.csproj", "listenarr.api/"]
+COPY ["listenarr.domain/Listenarr.Domain.csproj", "listenarr.domain/"]
+COPY ["listenarr.application/Listenarr.Application.csproj", "listenarr.application/"]
+COPY ["listenarr.infrastructure/Listenarr.Infrastructure.csproj", "listenarr.infrastructure/"]
+RUN dotnet restore "listenarr.api/Listenarr.Api.csproj"
+COPY . .
+WORKDIR "/src/listenarr.api"
 RUN dotnet build "Listenarr.Api.csproj" -c Release -o /app/build \
 	&& dotnet publish "Listenarr.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 # Trim and set the mode of the packaged ffprobe here, so the final image's COPY carries only
@@ -106,7 +107,18 @@ RUN chmod +x /usr/local/bin/gosu
 
 RUN sh /tmp/listenarr-runtime/create-listenarr-user.sh
 
+# Install Node.js only for the Discord bot runtime. npm is used for the install
+# and then removed from the final filesystem; the bot only needs node.
+# The install runs in the bot's final directory from its package files alone, before the published
+# app is copied in: a source-only change invalidates the publish COPY below but leaves this (much
+# slower) install cached. The publish COPY then adds the bot's sources next to node_modules, which
+# stays in place, so nothing is copied twice.
+COPY ["tools/discord-bot/package.json", "tools/discord-bot/package-lock.json", "/app/tools/discord-bot/"]
+RUN sh /tmp/listenarr-runtime/install-discord-bot-runtime.sh
+
 COPY --from=build /app/publish .
+# The published app must still ship the bot the dependencies above were installed for.
+RUN test -f /app/tools/discord-bot/index.js && test -f /app/tools/discord-bot/package-lock.json
 
 # Bundled whisper.cpp CLI + model for audio verification (ADR-0001).
 # WhisperService resolves these paths via ToolsRootPath (/app/tools/whisper)
@@ -118,10 +130,6 @@ COPY --from=whisper-builder /whisper/models/ggml-silero-v5.1.2.bin /app/tools/wh
 COPY --from=whisper-builder /whisper/LICENSE /app/tools/whisper/LICENSE-whisper.txt
 COPY --from=whisper-builder /whisper/NOTICE-whisper.txt /app/tools/whisper/NOTICE-whisper.txt
 RUN chmod +x /app/tools/whisper/whisper-cli
-
-# Install Node.js only for the Discord bot runtime. npm is used for the install
-# and then removed from the final filesystem; the bot only needs node.
-RUN sh /tmp/listenarr-runtime/install-discord-bot-runtime.sh
 
 RUN sh /tmp/listenarr-runtime/finalize-app.sh
 

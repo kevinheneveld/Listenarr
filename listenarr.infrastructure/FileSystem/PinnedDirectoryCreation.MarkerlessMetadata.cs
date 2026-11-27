@@ -121,6 +121,27 @@ internal sealed partial class PinnedDirectoryCreation
                 File.GetCreationTimeUtc(_fileHandle));
         }
 
+        internal void PreserveUnixModeTo(PinnedFileEntry destination)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(destination);
+            destination.ThrowIfDisposed();
+            if (OperatingSystem.IsWindows()) return;
+
+            var copyMode = ResolveCopyUnixMode(File.GetUnixFileMode(_fileHandle));
+            if (File.GetUnixFileMode(destination._fileHandle) != copyMode)
+            {
+                File.SetUnixFileMode(destination._fileHandle, copyMode);
+            }
+        }
+
+        // This process creates and so owns the copy, while the source may belong
+        // to another user who granted it read access through the group or other
+        // bits. Keep those bits and add owner read, so the copy can still be
+        // reopened for verification, rollback and playback.
+        internal static UnixFileMode ResolveCopyUnixMode(UnixFileMode sourceMode) =>
+            sourceMode | System.IO.UnixFileMode.UserRead;
+
         internal void PreserveMarkerlessMetadataTo(PinnedFileEntry destination)
         {
             ThrowIfDisposed();
